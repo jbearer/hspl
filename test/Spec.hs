@@ -1,9 +1,6 @@
 import Test.Hspec
 
-import Control.Hspl
+import qualified AstTest as Ast
 
 main :: IO ()
-main = hspec $ do
-  describe "stub" $ do
-    it "should return true" $ do
-      stub `shouldBe` True
+main = hspec Ast.test

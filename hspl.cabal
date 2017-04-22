@@ -16,22 +16,41 @@ build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >=1.10
 
+flag ShowTerms
+  description:         Require constant terms to have a Show instance. This forces Unifiable to be a
+                       subclass of Show, which limits the set of types from which Terms can be
+                       created. However, it can be quite useful for debugging to be able to print
+                       Terms (and to have the Terms printed recursively when printing higher-level
+                       AST types).
+  default:             True
+  manual:              True
+
 library
   default-language:    Haskell2010
   hs-source-dirs:      src
-  build-depends:       base >= 4.3 && < 5
+  build-depends:       base >= 4.6 && < 5
+                     , containers
+                     , mtl
   ghc-options:         -Wall
-  exposed-modules:     Control.Hspl
+  if flag(ShowTerms)
+    cpp-options:       -DSHOW_TERMS
+  exposed-modules:     Control.Hspl.Internal.Ast
 
 test-suite hspl-test
   type:                exitcode-stdio-1.0
   default-language:    Haskell2010
   hs-source-dirs:      test
   main-is:             Spec.hs
-  build-depends:       base
+  build-depends:       base >= 4.6 && < 5
                      , hspl
+                     , HUnit
                      , hspec
+                     , should-not-typecheck
+                     , deepseq
+                     , call-stack
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  other-modules:       Util
+                     , AstTest
 
 source-repository head
   type:     git
