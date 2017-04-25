@@ -1,6 +1,8 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# OPTIONS_GHC -fdefer-type-errors #-}
 
 module AstTest where
@@ -10,91 +12,124 @@ import Test.ShouldNotTypecheck
 
 import GHC.Generics
 import Data.Typeable
-import Control.DeepSeq
 
 import Util
 import Control.Hspl.Internal.Ast
 
 foo = predicate "foo" ()
-ex1 = addClause (HornClause foo []) emptyProgram
+bar = predicate "bar" True
+baz = predicate "baz" (True, ())
+
+ex1 = addClause (HornClause foo [bar, baz]) emptyProgram
 
 predNamed x = predicate x ()
 
 data Tree a = Leaf a | Tree a (Tree a) (Tree a)
-  deriving (Show, Eq, Typeable, Generic, TermData)
+  deriving (Show, Eq, Typeable, Generic)
+
+deriving instance (TermData a, a ~ ResolveVariables a) => TermData (Tree a)
 
 data PseudoTree a = PLeaf a | PTree a (PseudoTree a) (PseudoTree a)
-  deriving ( Show, Eq, Typeable, Generic, TermData)
+  deriving ( Show, Eq, Typeable, Generic)
 
-data Unit = Unit
+deriving instance (TermData a, a ~ ResolveVariables a) => TermData (PseudoTree a)
+
+data U = U
   deriving (Show, Eq, Typeable, Generic, TermData)
 
-data PseudoUnit = PUnit
+data PseudoU = PU
   deriving (Show, Eq, Typeable, Generic, TermData)
-
--- For the "shouldNotTypecheck" tests
-instance NFData (Variable a) where
-  rnf (Variable s) = rnf s
-instance NFData TermRep where
-  -- We don't actually need to deep-seq the TermRep, because the type error should arise in the
-  -- Term if at all
-  rnf _ = ()
-instance NFData Term where
-  rnf (Term t ty) = rnf t `seq` rnf ty
-instance NFData Predicate where
-  rnf (Predicate s t) = rnf s `seq` rnf t
 
 test = describeModule "Control.Hspl.Internal.Ast" $ do
-  describe "the unifiable class" $ do
-    it "should convert HSPL primitives to terms" $ do
-      term True `shouldBe` tconst True
-      term 'a' `shouldBe` tconst 'a'
-      term (42 :: Int) `shouldBe` tconst (42 :: Int)
-      term (42 :: Integer) `shouldBe` tconst (42 :: Integer)
-    it "should deconstruct ADTs" $
-      term (Tree True (Leaf True) (Leaf False)) `shouldBe`
-        Term
-          (RightSum $
-            Product (Const True) (
-            Product (LeftSum $ Const True)
-                    (LeftSum $ Const False)))
-          (typeOf $ Leaf True)
-    it "should create variables of any TermData type" $ do
-      term (var "x" :: Variable Bool) `shouldBe`
-        Term (Var (Variable "x" :: Variable Bool)) (typeOf True)
-      term (var "x" :: Variable (Tree Bool)) `shouldBe`
-        Term (Var (Variable "x" :: Variable (Tree Bool))) (typeOf $ Leaf True)
-      term (var "x" :: Variable (Bool, String)) `shouldBe`
-        Term (Var (Variable "x" :: Variable (Bool, String))) (typeOf (True, "foo"))
+  describe "variables" $ do
+    it "should report the correct type" $ do
+      varType (Variable "x" :: Variable Bool) `shouldBe` typeOf True
+      varType (Variable "x" :: Variable (Bool, ())) `shouldBe` typeOf (True, ())
+      varType (Variable "x" :: Variable (Tree Bool)) `shouldBe` typeOf (Leaf True)
+    it "should compare based on name" $ do
+      (Variable "x" :: Variable Bool) `shouldEqual` (Variable "x" :: Variable Bool)
+      (Variable "x" :: Variable ()) `shouldNotEqual` (Variable "y" :: Variable ())
+  describe "terms" $ do
+    it "can be constructed from HSPL primitives" $ do
+      toTerm () `shouldBe` Const ()
+      toTerm True `shouldBe` Const True
+      toTerm 'a' `shouldBe` Const 'a'
+      toTerm (42 :: Int) `shouldBe` Const (42 :: Int)
+    it "can be constructed from ADTs" $
+      toTerm (Tree True (Leaf True) (Leaf False)) `shouldBe`
+        (MData $ RightSum $ MCon $ Product
+          (MSel $ SubTerm $ Const True)
+          (Product
+            (MSel $ SubTerm $ MData $ LeftSum $ MCon $ MSel $ SubTerm $ Const True)
+            (MSel $ SubTerm $ MData $ LeftSum $ MCon $ MSel $ SubTerm $ Const False)))
+    it "can be constructed from variables any TermData type" $ do
+      toTerm (Variable "x" :: Variable Bool) `shouldBe` Var (Variable "x" :: Variable Bool)
+      toTerm (Variable "x" :: Variable (Tree Bool)) `shouldBe`
+        Var (Variable "x" :: Variable (Tree Bool))
+      toTerm (Variable "x" :: Variable (Bool, String)) `shouldBe`
+        Var (Variable "x" :: Variable (Bool, String))
+    it "should permit embedded variables" $ do
+      toTerm (True, Variable "x" :: Variable Bool) `shouldBe`
+        (MData $ MCon $ Product (MSel $ SubTerm $ Const True) (MSel $ SubTerm $ Var (Variable "x" :: Variable Bool)))
+      toTerm (True, (Variable "x" :: Variable Bool, False)) `shouldBe`
+        (MData $ MCon $
+          Product
+            (MSel $ SubTerm $ Const True)
+            (MSel $ SubTerm $ MData $ MCon $
+              Product
+                (MSel $ SubTerm $ Var (Variable "x" :: Variable Bool))
+                (MSel $ SubTerm $ Const False)))
+    it "should reject ambiguously typed variables" $ do
+      -- This should work (with the type annotation)
+      toTerm (Variable "x" :: Variable Bool) `shouldBe` Var (Variable "x" :: Variable Bool)
+      -- But the same term without a type annotation should fail
+      shouldNotTypecheck (toTerm $ Variable "x")
+    when "containing no variables" $
+      it "should reify with the corresponding Haskell value" $ do
+        fromTerm (toTerm ()) `shouldBe` Just ()
+        fromTerm (toTerm True) `shouldBe` Just True
+        fromTerm (toTerm 'a') `shouldBe` Just 'a'
+        fromTerm (toTerm (42 :: Int)) `shouldBe` Just (42 :: Int)
+        fromTerm (toTerm (True, 'a')) `shouldBe` Just (True, 'a')
+        let tree = Tree True (Leaf True) (Leaf False)
+        fromTerm (toTerm tree) `shouldBe` Just tree
+    when "containing variables" $
+      it "fromTerm should return Nothing" $ do
+        fromTerm (toTerm (Variable "x" :: Variable ())) `shouldBe` (Nothing :: Maybe ())
+        fromTerm (toTerm (True, Variable "x" :: Variable Bool)) `shouldBe` (Nothing :: Maybe (Bool, Bool))
   describe "predicates" $ do
-    context "of the same type" $
+    it "should have type corresponding to the type of the argument" $ do
+      predType (predicate "foo" ()) `shouldBe` typeOf (toTerm ())
+      predType (predicate "foo" True) `shouldBe` typeOf (toTerm True)
+      predType (predicate "foo" (True, False)) `shouldBe` typeOf (toTerm (True, False))
+    context "of the same name and type" $
       it "should compare according to that type's comparison operator" $ do
-        predicate "foo" True `shouldEqual` predicate "foo" True
-        predicate "foo" (True, ()) `shouldEqual` predicate "foo" (True, ())
+        predicate "foo" True `shouldEqual` Predicate "foo" (toTerm True)
+        predicate "foo" (True, ()) `shouldEqual` Predicate "foo" (toTerm (True, ()))
         predicate "foo" True `shouldNotEqual` predicate "foo" False
+        predicate "foo" (True, ()) `shouldNotEqual` predicate "foo" (False, ())
+    context "of the same type, but with different names" $
+      it "should compare unequal" $ do
+        predicate "foo" True `shouldNotEqual` predicate "bar" True
+        predicate "foo" (True, ()) `shouldNotEqual` predicate "bar" (True, ())
     context "of different types" $
       it "should compare unequal" $ do
         predicate "foo" True `shouldNotEqual` predicate "foo" (True, False)
         predicate "foo" (Tree True (Leaf True) (Leaf False)) `shouldNotEqual`
           predicate "foo" (PTree True (PLeaf True) (PLeaf False))
-        predicate "foo" Unit `shouldNotEqual` predicate "foo" PUnit
-    it "should permit embedded variables" $ do
-      predicate "foo" (True, var "x" :: Variable Bool) `shouldBe`
-        Predicate "foo" (Term
-          (Product (Const True) (Var (Variable "x" :: Variable Bool)))
-          (typeOf (True, True)))
-      predicate "foo" (True, (var "x" :: Variable Bool, False)) `shouldBe`
-        Predicate "foo" (Term
-          (Product
-            (Const True)
-            (Product (Var (Variable "x" :: Variable Bool)) (Const False)))
-          (typeOf (True, (True, True))))
-    it "should reject ambiguously typed variables" $ do
-      -- This should work (with the type annotation)
-      predicate "foo" (var "x" :: Variable Bool) `shouldBe`
-        Predicate "foo" (Term (Var (Variable "x" :: Variable Bool)) (typeOf True))
-      -- But the same predicate without a type annotation should fail
-      shouldNotTypecheck (predicate "foo" $ var "x")
+        predicate "foo" U `shouldNotEqual` predicate "foo" PU
+  describe "clauses" $ do
+    it "should have type corresponding to the type of the positive literal" $ do
+      clauseType (HornClause foo []) `shouldBe` predType foo
+      clauseType (HornClause foo [predicate "P" ()]) `shouldBe` predType foo
+      clauseType (HornClause foo [predicate "P" (), predicate "Q" (True, 'a')])
+        `shouldBe` predType foo
+    it "should compare according to the literals" $ do
+      HornClause foo [] `shouldEqual` HornClause foo []
+      HornClause foo [bar, baz] `shouldEqual` HornClause foo [bar, baz]
+      HornClause foo [] `shouldNotEqual` HornClause foo [bar]
+      HornClause foo [bar, baz] `shouldNotEqual` HornClause bar [foo, baz]
+      HornClause (predicate "P" ()) [] `shouldNotEqual` HornClause (predicate "P" True) []
   describe "the program builder" $ do
     it "should add a clause to a new predicate" $ do
       let p = foo

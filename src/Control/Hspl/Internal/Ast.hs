@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -8,6 +9,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -26,34 +28,35 @@ types, including user-defined ADTs, to be cast as 'Term's.
 module Control.Hspl.Internal.Ast (
   -- * Type system
   -- $typeSystem
-    HSPLType
+  --
+  -- ** Mappings from Haskell types to HSPL types
+  --
+  -- $typeMappings
+    ResolveVariables
+  , GResolveVariables
+  -- ** Conversions from Haskell types to HSPL types
   , TermData (..)
   , GTermData (..)
   -- * AST
   , Variable (..)
-  , TermRep (..)
   , Term (..)
   , Predicate (..)
   , HornClause (..)
   , PredMap
   -- * Functions for building a program
-  , var
-  , term
-  , tconst
   , predicate
   , emptyProgram
   , addClause
   , addClauses
   -- * Functions for inspecting a program
   , varType
-  , termType
   , predType
   , clauseType
   , findClauses
+  , fromTerm
   ) where
 
 import           Control.Monad.State
-import           Data.List
 import qualified Data.Map       as M
 import           Data.Typeable
 import           GHC.Generics
@@ -67,19 +70,40 @@ the abstract representation of a variable in HSPL is a Haskell data type of type
 @a@ represents the HSPL type of the variable.
 -}
 
--- | The purpose of this type family is to provide a level of indirection between Haskell types and
--- HSPL types. @HSPLType a@ is the HSPL type of the Haskell type @a@. For most types, these are the
--- same. However, for HSPL variables, the HSPL type of the Haskell type @Variable a@ is @a@ (the
--- type contained by the variable). This family also provides instances for destructuring compound
--- types such as tuples, which allows the embedding of variables within tuples.
-type family HSPLType a where
-  HSPLType (Variable a) = HSPLType a
-  HSPLType [a] = [HSPLType a]
-  HSPLType (a, b) = (HSPLType a, HSPLType b)
-  HSPLType (a, b, c) = (HSPLType a, HSPLType b, HSPLType c)
-  HSPLType (a, b, c, d) = (HSPLType a, HSPLType b, HSPLType c, HSPLType d)
-  HSPLType (a, b, c, d, e) = (HSPLType a, HSPLType b, HSPLType c, HSPLType d, HSPLType e)
-  HSPLType a = a
+{- $typeMappings
+The purpose of these type families is to provide a level of indirection between Haskell types and
+HSPL types. For most types, these are the same. However, for HSPL variables, the HSPL type of the
+Haskell type @Variable a@ is @a@ (the type contained by the variable). These families also provide
+instances for destructuring compound types such as tuples, which allows the embedding of variables
+within tuples.
+-}
+
+-- | Map from Haskell types to HSPL types. This map sends types of the form @Variable a@ to @a@, and
+-- does so recursively for recursively defined data types. Otherwise, it sends @a@ to itself.
+type family ResolveVariables a where
+  ResolveVariables (Variable a) = ResolveVariables a
+  ResolveVariables (a, b) = (ResolveVariables a, ResolveVariables b)
+  ResolveVariables [a] = [ResolveVariables a]
+  ResolveVariables a = a
+
+-- | Generic version of 'ResolveVariables'. Sends a representation of a Haskell type to a
+-- representation of the corresponding HSPL type. This map should satisfy the property
+--
+-- prop> GResolveVariables (Rep a) = Rep (ResolveVariables a)
+--
+-- for all types @a@ with an instance for 'Generic'.
+type family GResolveVariables (f :: * -> *) :: * -> * where
+  GResolveVariables U1 = U1
+  GResolveVariables (K1 i c) = K1 i (ResolveVariables c)
+  GResolveVariables (M1 i c f) = M1 i c (GResolveVariables f)
+  GResolveVariables (f :+: g) = GResolveVariables f :+: GResolveVariables g
+  GResolveVariables (f :*: g) = GResolveVariables f :*: GResolveVariables g
+
+class (Generic a, a ~ ResolveVariables a, Rep a ~ GResolveVariables (Rep a)) => NoVariables a where {}
+instance (Generic a, a ~ ResolveVariables a, Rep a ~ GResolveVariables (Rep a)) => NoVariables a
+
+class (Generic a, Rep (ResolveVariables a) ~ GResolveVariables (Rep a)) => NotAVariable a where {}
+instance (Generic a, Rep (ResolveVariables a) ~ GResolveVariables (Rep a)) => NotAVariable a
 
 {- |
 The class of types which can be represented as a 'Term'. Instances of 'TermData' which do not use
@@ -132,104 +156,73 @@ Be very careful when doing so, as adding an ADT as a primitive prevents that typ
 destructured and pattern matched, and will also affect any more complicated types using the new
 primitive type.
 -}
-class ( Typeable (HSPLType a)
-      , Eq (HSPLType a)
-#ifdef SHOW_TERMS
-      , Show (HSPLType a)
-#endif
-      ) => TermData a where
+class (Generic (ResolveVariables a)) => TermData a where
+  toTerm :: a -> Term (Rep (ResolveVariables a))
 
-  -- | Convert a Haskell data type to HSPL's internal representation of a term.
-  toTerm :: a -> TermRep
-
-  -- | Default implementation of @toTerm@, which allows destructuring of ADTs.
-  default toTerm :: (Generic a, GTermData (Rep a)) => a -> TermRep
+  default toTerm :: (NotAVariable a, GTermData (Rep a)) => a -> Term (GResolveVariables (Rep a))
   toTerm = gToTerm . from
 
-#define HSPLPrimitive(t) \
-instance TermData t where \
-  toTerm = Const
-
--- Primitive types. We can add more of these later.
-HSPLPrimitive(())
-HSPLPrimitive(Char)
-HSPLPrimitive(Bool)
-HSPLPrimitive(Int)
-HSPLPrimitive(Integer)
-
--- Types with Generic instances.
-instance (TermData a, TermData b) => TermData (a, b)
-instance (TermData a, TermData b, TermData c) => TermData (a, b, c)
-instance (TermData a, TermData b, TermData c, TermData d) => TermData (a, b, c, d)
-instance (TermData a, TermData b, TermData c, TermData d, TermData e) => TermData (a, b, c, d, e)
-
-instance {-# OVERLAPPABLE #-} ( TermData a
-                              , Typeable a
-                              , Eq a
-#ifdef SHOW_TERMS
-                              , Show a
-#endif
-                              ) => TermData [a] where
-  toTerm = List . map Const
-
-instance {-# OVERLAPPING #-} ( TermData a
-                             , Typeable a
-                             , Eq a
-#ifdef SHOW_TERMS
-                             , Show a
-#endif
-                             ) => TermData [Variable a] where
-  toTerm = List . map Var
-
-instance ( TermData a
-         , Typeable a
-         , Eq a
-#ifdef SHOW_TERMS
-         , Show a
-#endif
-         ) => TermData (Variable a) where
+instance (Typeable a, NoVariables a) => TermData (Variable a) where
   toTerm = Var
 
--- | Generic class which allows the conversion of (almost) arbitrary types to 'TermRep's.
+instance TermData Bool where
+  toTerm = Const
+
+deriving instance Generic Char
+instance TermData Char where
+  toTerm = Const
+
+instance TermData () where
+  toTerm = Const
+
+deriving instance Generic Int
+instance TermData Int where
+  toTerm = Const
+
+instance TermData a => TermData [a]
+instance (TermData a, TermData b) => TermData (a, b)
+
+-- | Generic version of 'TermData'. Converts an instantiation of @Rep a@ to a 'Term' abstraction.
 class GTermData f where
-  gToTerm :: f a -> TermRep
+  gToTerm :: f a -> Term (GResolveVariables f)
 
 instance GTermData U1 where
-  gToTerm _ = Const ()
+  gToTerm U1 = Unit
 
-instance (GTermData f, GTermData g) => GTermData (f :*: g) where
-  gToTerm (a :*: b) = Product (gToTerm a) (gToTerm b)
+instance (TermData c) => GTermData (K1 i c) where
+  gToTerm (K1 c) = SubTerm $ toTerm c
+
+instance (GTermData f, Datatype c) => GTermData (D1 c f) where
+  gToTerm (M1 t) = MData $ gToTerm t
+
+instance (GTermData f, Constructor c) => GTermData (C1 c f) where
+  gToTerm (M1 t) = MCon $ gToTerm t
+
+instance (GTermData f, Selector c) => GTermData (S1 c f) where
+  gToTerm (M1 t) = MSel $ gToTerm t
 
 instance (GTermData f, GTermData g) => GTermData (f :+: g) where
-  gToTerm (L1 a) = LeftSum $ gToTerm a
-  gToTerm (R1 b) = RightSum $ gToTerm b
+  gToTerm (L1 t) = LeftSum $ gToTerm t
+  gToTerm (R1 t) = RightSum $ gToTerm t
 
-instance (GTermData f) => GTermData (M1 i c f) where
-  gToTerm (M1 a) = gToTerm a
-
-instance (TermData a) => GTermData (K1 i a) where
-  gToTerm (K1 a) = toTerm a
+instance (GTermData f, GTermData g) => GTermData (f :*: g) where
+  gToTerm (t1 :*: t2) = Product (gToTerm t1) (gToTerm t2)
 
 -- | A variable is a term which unifies with any other term of the same type. The only purpose of
 -- having a 'Variable' representation separate from 'Term' is to annotate variables with a phantom
 -- type corresponding to the HSPL type of the variable.
 data Variable a where
   Variable :: Typeable a => String -> Variable a
-deriving instance Typeable a => Typeable (Variable a)
+  deriving (Typeable)
 
-instance Eq (Variable a) where
-  Variable x == Variable y = x == y
+deriving instance Eq (Variable a)
 
 instance Show (Variable a) where
   show v@(Variable x) = x ++ " :: " ++ show (varType v)
 
 -- | Determine the HSPL type of a 'Variable'.
-varType :: forall a. Typeable a => Variable a -> TypeRep
-varType _ = typeOf (undefined :: a)
-
--- | Smart construct for 'Variable's.
-var :: Typeable a => String -> Variable a
-var = Variable
+varType :: forall a. Variable a -> TypeRep
+varType (Variable _) = typeOf (undefined :: a)
 
 {- |
 The abstract representation of a term. Terms correspond to elements in the domain of a model. In
@@ -265,98 +258,107 @@ Corresponding terms may have any of the following structures:
 
 > Var "y"
 -}
-data TermRep =
-            -- | A variable is a term which unifies with any other term.
-            forall a. Typeable a => Var (Variable a)
-            -- | A constant value of a Haskell data type.
-          | forall a. ( Typeable a
-                      , Eq a
+data Term (f :: * -> *) where
+  Unit :: Term U1
+  Const :: ( Typeable c
+           , Generic c
+           , Eq c
 #ifdef SHOW_TERMS
-                      , Show a
+           , Show c
 #endif
-                      ) => Const a
-            -- | A product type, such as a tuple of terms.
-          | Product TermRep TermRep
-            -- | A sum type, such as @Either@.
-          | LeftSum TermRep
-          | RightSum TermRep
-            -- | A destructurable list of terms.
-          | List [TermRep]
+           ) => c -> Term (Rep c)
+  SubTerm :: Generic c => Term (Rep c) -> Term (K1 i c)
+  MData :: Datatype c => Term f -> Term (D1 c f)
+  MCon :: Constructor c => Term f -> Term (C1 c f)
+  MSel :: Selector c => Term f -> Term (S1 c f)
+  Product :: Term f -> Term g -> Term (f :*: g)
+  LeftSum :: Term f -> Term (f :+: g)
+  RightSum :: Term g -> Term (f :+: g)
+  Var :: Typeable a => Variable a -> Term (Rep a)
+  deriving (Typeable)
 
-instance Eq TermRep where
-  Var x == Var y = case cast x of
-    Just x' -> x' == y
+instance Eq (Term f) where
+  Unit == Unit = True
+  Const c == Const c' = case cast c' of
+    Just c'' -> c == c''
     Nothing -> False
-
-  Const x == Const y = case cast x of
-    Just x' -> x' == y
+  SubTerm t == SubTerm t' = t == t'
+  MData t == MData t' = t == t'
+  MCon t == MCon t' = t == t'
+  MSel t == MSel t' = t == t'
+  Product t u == Product t' u' = t == t' && u == u'
+  LeftSum t == LeftSum t' = t == t'
+  RightSum t == RightSum t' = t == t'
+  Var x == Var x' = case cast x' of
+    Just x'' -> x == x''
     Nothing -> False
-
-  Product x y == Product x' y' = x == x' && y == y'
-
-  LeftSum x == LeftSum y = x == y
-  RightSum x == RightSum y = x == y
-
-  List xs == List ys = all (uncurry (==)) (xs `zip` ys)
-
   _ == _ = False
 
-instance Show TermRep where
-  show (Var x) = show x
+instance Show (Term f) where
+  show Unit = ""
 #ifdef SHOW_TERMS
-  show (Const x) = show x
+  show (Const c) = show c
 #else
-  show (Const _) = "Const"
+  show (Const _) = "<const>"
 #endif
-  show (Product x y) = "Tuple (" ++ show x ++ ", " ++ show y ++ ")"
-  show (LeftSum x) = "Left (" ++ show x ++ ")"
-  show (RightSum y) = "Right (" ++ show y ++ ")"
-  show (List xs) = "[" ++ intercalate ", " (map show xs) ++ "]"
+  show (SubTerm t) = show t
+  show (MData t) = show t
+  show (MCon t) = conName (undefined :: f ()) ++ " (" ++ show t ++ ")"
+  show (MSel t) = "{" ++ selName (undefined :: f ()) ++ " = " ++ show t ++ "}"
+  show (Product t1 t2) = "(" ++ show t1 ++ ", " ++ show t2 ++ ")"
+  show (LeftSum t) = "L1 (" ++ show t ++ ")"
+  show (RightSum t) = "R1 (" ++ show t ++ ")"
+  show (Var v) = show v
 
--- | A representation of a term and the HSPL type of the represented term.
-data Term = Term TermRep TypeRep
-
-instance Show Term where
-  show (Term t _) = show t
-
-instance Eq Term where
-  (Term t ty) == (Term t' ty') = ty == ty' && t == t'
-
--- | Smart constructor for building 'Term's out of Haskell constants.
-tconst :: ( Typeable a
-          , Eq a
-#ifdef SHOW_TERMS
-          , Show a
-#endif
-          ) => a -> Term
-tconst a = Term (Const a) (typeOf a)
-
--- | Smart constructor for bulding 'Term's out of 'TermData' instances.
-term :: forall a. (TermData a) => a -> Term
-term a = Term (toTerm a) (typeOf (undefined :: HSPLType a))
-
--- | Determine the HSPL type of a 'Term'.
-termType :: Term -> TypeRep
-termType (Term _ t) = t
+-- | Convert an HSPL 'Term' back into the Haskell value which it represents, if possible. If the
+-- 'Term' contains any 'Variable's, this will fail with 'Nothing'. Otherwise, it will return the
+-- Haskell value. This function satisfies the property that for all @t :: a@ such that @t@ contains
+-- no variables and @a@ has an instance for 'TermData',
+--
+-- prop> fromTerm $ toTerm t = Just t
+fromTerm :: Generic a => Term (Rep a) -> Maybe a
+fromTerm term = to <$> unTerm term
+  where unTerm :: Term f -> Maybe (f a)
+        unTerm Unit = Just U1
+        unTerm (Const c) = Just $ from c
+        unTerm (SubTerm t) = K1 <$> fromTerm t
+        unTerm (MData t) = M1 <$> unTerm t
+        unTerm (MCon t) = M1 <$> unTerm t
+        unTerm (MSel t) = M1 <$> unTerm t
+        unTerm (Product t1 t2) = do
+          ut1 <- unTerm t1
+          ut2 <- unTerm t2
+          return $ ut1 :*: ut2
+        unTerm (LeftSum t) = L1 <$> unTerm t
+        unTerm (RightSum t) = R1 <$> unTerm t
+        unTerm (Var _) = Nothing
 
 -- | A predicate is a truth-valued proposition about 0 or more terms. In this implementation, all
 -- predicates are 1-ary -- they each take a single term. This is sufficient because the generic
 -- nature of 'TermRep' means that the term could encode a product type such as a tuple, or (). Thus,
 -- 0-ary predicates have the form @Predicate "foo" (tconst ())@ and n-ary predicates look like
 -- @Predicate "bar" (term (True, 1, "hi"))@.
-data Predicate = Predicate String Term
-  deriving (Eq)
+data Predicate = forall f. Typeable f => Predicate String (Term f)
 
 instance Show Predicate where
   show (Predicate name args) = name ++ "(" ++ show args ++ ")"
 
--- | Smart constructor for building 'Predicate's out of Haskell types.
-predicate :: (TermData a) => String -> a -> Predicate
-predicate s a = Predicate s (term a)
+instance Eq Predicate where
+  Predicate p t == Predicate p' t' = case cast t' of
+    Just t'' -> p == p' && t == t''
+    Nothing -> False
 
--- | Determine the HSPL type of a 'Predicate'.
+-- | Smart constructor for building 'Predicate's out of Haskell types.
+predicate :: (TermData a, Typeable (Rep (ResolveVariables a))) => String -> a -> Predicate
+predicate s a = Predicate s (toTerm a)
+
+-- | Determine the HSPL type of a 'Predicate'. By definition, the type of a 'Predicate' is the type
+-- of the 'Term' to which it is applied. For portability reasons, the type of a 'Term' containing
+-- a value of a particular type is not a specified part of this module's interface. Therefore,
+-- the result of @predType@ should be treated as an opaque structure that can be compared but not
+-- inspected.
 predType :: Predicate -> TypeRep
-predType (Predicate _ t) = termType t
+predType (Predicate _ t) = typeOf t
 
 -- | A 'HornClause' is the logical disjunction of a single positive literal (a 'Predicate') and 0 or
 --   or more negated literals (a literal which is true if and only if the corresponding 'Predicate'
