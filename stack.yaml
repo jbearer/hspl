@@ -10,7 +10,6 @@ packages:
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps:
 - call-stack-0.1.0
-- should-not-typecheck-2.1.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}

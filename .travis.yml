@@ -24,6 +24,15 @@ matrix:
   include:
   # We grab the appropriate GHC and cabal-install versions from hvr's PPA. See:
   # https://github.com/hvr/multi-ghc-travis
+  - env: BUILD=cabal GHCVER=7.4.2 CABALVER=1.16 HAPPYVER=1.19.5 ALEXVER=3.1.7
+    compiler: ": #GHC 7.4.2"
+    addons: {apt: {packages: [cabal-install-1.16,ghc-7.4.2,happy-1.19.5,alex-3.1.7], sources: [hvr-ghc]}}
+  - env: BUILD=cabal GHCVER=7.6.3 CABALVER=1.16 HAPPYVER=1.19.5 ALEXVER=3.1.7
+    compiler: ": #GHC 7.6.3"
+    addons: {apt: {packages: [cabal-install-1.16,ghc-7.6.3,happy-1.19.5,alex-3.1.7], sources: [hvr-ghc]}}
+  - env: BUILD=cabal GHCVER=7.8.4 CABALVER=1.18 HAPPYVER=1.19.5 ALEXVER=3.1.7
+    compiler: ": #GHC 7.8.4"
+    addons: {apt: {packages: [cabal-install-1.18,ghc-7.8.4,happy-1.19.5,alex-3.1.7], sources: [hvr-ghc]}}
   - env: BUILD=cabal GHCVER=7.10.3 CABALVER=1.22 HAPPYVER=1.19.5 ALEXVER=3.1.7
     compiler: ": #GHC 7.10.3"
     addons: {apt: {packages: [cabal-install-1.22,ghc-7.10.3,happy-1.19.5,alex-3.1.7], sources: [hvr-ghc]}}
@@ -33,8 +42,12 @@ matrix:
 
   # The Stack builds. We can pass in arbitrary Stack arguments via the ARGS
   # variable, such as using --stack-yaml to point to a different file.
-  - env: BUILD=stack ARGS="" TESTARGS="--coverage"
+  - env: BUILD=stack ARGS="" TESTARGS="--coverage --haddock"
     compiler: ": #stack default"
+    addons: {apt: {packages: [libgmp-dev]}}
+
+  - env: BUILD=stack ARGS="--resolver lts-2"
+    compiler: ": #stack 7.8.4"
     addons: {apt: {packages: [libgmp-dev]}}
 
   - env: BUILD=stack ARGS="--resolver lts-3" TESTARGS=""
@@ -45,16 +58,16 @@ matrix:
     compiler: ": #stack 7.10.3"
     addons: {apt: {packages: [libgmp-dev]}}
 
-  - env: BUILD=stack ARGS="--resolver lts-7" TESTARGS=""
+  - env: BUILD=stack ARGS="--resolver lts-7" TESTARGS="--haddock"
     compiler: ": #stack 8.0.1"
     addons: {apt: {packages: [libgmp-dev]}}
 
-  - env: BUILD=stack ARGS="--resolver lts-8" TESTARGS=""
+  - env: BUILD=stack ARGS="--resolver lts-8" TESTARGS="--haddock"
     compiler: ": #stack 8.0.2"
     addons: {apt: {packages: [libgmp-dev]}}
 
   # Build on macOS in addition to Linux
-  - env: BUILD=stack ARGS="" TESTARGS=""
+  - env: BUILD=stack ARGS="" TESTARGS="--haddock"
     compiler: ": #stack default osx"
     os: osx
 
@@ -66,11 +79,11 @@ matrix:
     compiler: ": #stack 7.10.3 osx"
     os: osx
 
-  - env: BUILD=stack ARGS="--resolver lts-7" TESTARGS=""
+  - env: BUILD=stack ARGS="--resolver lts-7" TESTARGS="--haddock"
     compiler: ": #stack 8.0.1 osx"
     os: osx
 
-  - env: BUILD=stack ARGS="--resolver lts-8" TESTARGS=""
+  - env: BUILD=stack ARGS="--resolver lts-8" TESTARGS="--haddock"
     compiler: ": #stack 8.0.2 osx"
     os: osx
 
@@ -125,7 +138,7 @@ script:
   set -ex
   case "$BUILD" in
     stack)
-      stack --no-terminal $ARGS test $TESTARGS --bench --no-run-benchmarks --haddock --no-haddock-deps
+      stack --no-terminal $ARGS test $TESTARGS --bench --no-run-benchmarks --no-haddock-deps
       ;;
     cabal)
       cabal install --enable-tests --enable-benchmarks --force-reinstalls --ghc-options=-O0 --reorder-goals --max-backjumps=1 $CABALARGS $PACKAGES

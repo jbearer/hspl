@@ -1,19 +1,10 @@
-{-# LANGUAGE CPP #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# OPTIONS_GHC -fdefer-type-errors #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 module AstTest where
 
-import Test.Hspec
-import Test.ShouldNotTypecheck
+import Data.Data
 
-import GHC.Generics
-import Data.Typeable
-
-import Util
+import Testing
 import Control.Hspl.Internal.Ast
 
 foo = predicate "foo" ()
@@ -25,65 +16,111 @@ ex1 = addClause (HornClause foo [bar, baz]) emptyProgram
 predNamed x = predicate x ()
 
 data Tree a = Leaf a | Tree a (Tree a) (Tree a)
-  deriving (Show, Eq, Typeable, Generic)
-
-deriving instance (TermData a, a ~ ResolveVariables a) => TermData (Tree a)
+  deriving (Show, Eq, Typeable, Data)
 
 data PseudoTree a = PLeaf a | PTree a (PseudoTree a) (PseudoTree a)
-  deriving ( Show, Eq, Typeable, Generic)
-
-deriving instance (TermData a, a ~ ResolveVariables a) => TermData (PseudoTree a)
+  deriving (Show, Eq, Typeable, Data)
 
 data U = U
-  deriving (Show, Eq, Typeable, Generic, TermData)
+  deriving (Show, Eq, Typeable, Data)
 
 data PseudoU = PU
-  deriving (Show, Eq, Typeable, Generic, TermData)
+  deriving (Show, Eq, Typeable, Data)
 
 test = describeModule "Control.Hspl.Internal.Ast" $ do
   describe "variables" $ do
     it "should report the correct type" $ do
-      varType (Variable "x" :: Variable Bool) `shouldBe` typeOf True
-      varType (Variable "x" :: Variable (Bool, ())) `shouldBe` typeOf (True, ())
-      varType (Variable "x" :: Variable (Tree Bool)) `shouldBe` typeOf (Leaf True)
+      varType (Var "x" :: Var Bool) `shouldBe` typeOf True
+      varType (Var "x" :: Var (Bool, ())) `shouldBe` typeOf (True, ())
+      varType (Var "x" :: Var (Tree Bool)) `shouldBe` typeOf (Leaf True)
     it "should compare based on name" $ do
-      (Variable "x" :: Variable Bool) `shouldEqual` (Variable "x" :: Variable Bool)
-      (Variable "x" :: Variable ()) `shouldNotEqual` (Variable "y" :: Variable ())
+      (Var "x" :: Var Bool) `shouldEqual` (Var "x" :: Var Bool)
+      (Var "x" :: Var ()) `shouldNotEqual` (Var "y" :: Var ())
   describe "terms" $ do
     it "can be constructed from HSPL primitives" $ do
-      toTerm () `shouldBe` Const ()
-      toTerm True `shouldBe` Const True
-      toTerm 'a' `shouldBe` Const 'a'
-      toTerm (42 :: Int) `shouldBe` Const (42 :: Int)
-    it "can be constructed from ADTs" $
-      toTerm (Tree True (Leaf True) (Leaf False)) `shouldBe`
-        (MData $ RightSum $ MCon $ Product
-          (MSel $ SubTerm $ Const True)
-          (Product
-            (MSel $ SubTerm $ MData $ LeftSum $ MCon $ MSel $ SubTerm $ Const True)
-            (MSel $ SubTerm $ MData $ LeftSum $ MCon $ MSel $ SubTerm $ Const False)))
-    it "can be constructed from variables any TermData type" $ do
-      toTerm (Variable "x" :: Variable Bool) `shouldBe` Var (Variable "x" :: Variable Bool)
-      toTerm (Variable "x" :: Variable (Tree Bool)) `shouldBe`
-        Var (Variable "x" :: Variable (Tree Bool))
-      toTerm (Variable "x" :: Variable (Bool, String)) `shouldBe`
-        Var (Variable "x" :: Variable (Bool, String))
+      toTerm () `shouldBe` Constant ()
+      toTerm True `shouldBe` Constant True
+      toTerm 'a' `shouldBe` Constant 'a'
+      toTerm (42 :: Int) `shouldBe` Constant (42 :: Int)
+      toTerm (42 :: Integer) `shouldBe` Constant (42 :: Integer)
+    it "can be constructed from tuples" $ do
+      toTerm (True, 'a') `shouldBe` Product (Constant True) (Constant 'a')
+      toTerm (True, 'a', ()) `shouldBe` Product (Constant True) (Product (Constant 'a') (Constant ()))
+      toTerm ((), (), ()) `shouldBe`
+        Product (Constant ()) (
+        Product (Constant ())
+                (Constant ()))
+      toTerm ((), (), (), ()) `shouldBe`
+        Product (Constant ()) (
+        Product (Constant ()) (
+        Product (Constant ())
+                (Constant ())))
+      toTerm ((), (), (), (), ()) `shouldBe`
+        Product (Constant ()) (
+        Product (Constant ()) (
+        Product (Constant ()) (
+        Product (Constant ())
+                (Constant ()))))
+      toTerm ((), (), (), (), (), ()) `shouldBe`
+        Product (Constant ()) (
+        Product (Constant ()) (
+        Product (Constant ()) (
+        Product (Constant ()) (
+        Product (Constant ())
+                (Constant ())))))
+      toTerm ((), (), (), (), (), (), ()) `shouldBe`
+        Product (Constant ()) (
+        Product (Constant ()) (
+        Product (Constant ()) (
+        Product (Constant ()) (
+        Product (Constant ()) (
+        Product (Constant ())
+                (Constant ()))))))
+
+      -- Nested tuples have the same internal represetation as flat tuples, but a different type
+      toTerm (True, ('a', ())) `shouldBe` Product (Constant True) (Product (Constant 'a') (Constant ()))
+      toTerm (True, 'a', (), 'b') `shouldBe`
+        Product (Constant True) (
+        Product (Constant 'a') (
+        Product (Constant ())
+                (Constant 'b')))
+      toTerm (True, ('a', ((), 'b'))) `shouldBe`
+        Product (Constant True) (
+        Product (Constant 'a') (
+        Product (Constant ())
+                (Constant 'b')))
+      toTerm (True, ('a', (), 'b')) `shouldBe`
+        Product (Constant True) (
+        Product (Constant 'a') (
+        Product (Constant ())
+                (Constant 'b')))
+    it "can be constructed from lists" $ do
+      toTerm "foo" `shouldBe` List [Constant 'f', Constant 'o', Constant 'o']
+      toTerm ("foo", [True, False]) `shouldBe`
+        Product (List [Constant 'f', Constant 'o', Constant 'o']) (List [Constant True, Constant False])
+    it "should provide sufficient generality to represent ADTs" $ do
+      termType (Constructor (\(x, y, z) -> Tree x y z)
+                  (Product (Constant True)
+                           (Product (Constructor Leaf $ Constant True)
+                                    (Constructor Leaf $ Constant False)))) `shouldBe`
+        typeOf (Leaf True)
+      termType (Constructor Leaf (Constructor Leaf (Constant True))) `shouldBe`
+        typeOf (Leaf (Leaf True))
+    it "can be constructed from variables any type" $ do
+      toTerm (Var "x" :: Var Bool) `shouldBe` Variable (Var "x" :: Var Bool)
+      toTerm (Var "x" :: Var (Tree Bool)) `shouldBe` Variable (Var "x" :: Var (Tree Bool))
+      toTerm (Var "x" :: Var (Bool, String)) `shouldBe` Variable (Var "x" :: Var (Bool, String))
     it "should permit embedded variables" $ do
-      toTerm (True, Variable "x" :: Variable Bool) `shouldBe`
-        (MData $ MCon $ Product (MSel $ SubTerm $ Const True) (MSel $ SubTerm $ Var (Variable "x" :: Variable Bool)))
-      toTerm (True, (Variable "x" :: Variable Bool, False)) `shouldBe`
-        (MData $ MCon $
-          Product
-            (MSel $ SubTerm $ Const True)
-            (MSel $ SubTerm $ MData $ MCon $
-              Product
-                (MSel $ SubTerm $ Var (Variable "x" :: Variable Bool))
-                (MSel $ SubTerm $ Const False)))
-    it "should reject ambiguously typed variables" $ do
-      -- This should work (with the type annotation)
-      toTerm (Variable "x" :: Variable Bool) `shouldBe` Var (Variable "x" :: Variable Bool)
-      -- But the same term without a type annotation should fail
-      shouldNotTypecheck (toTerm $ Variable "x")
+      toTerm (True, Var "x" :: Var Bool) `shouldBe`
+        Product (Constant True) (Variable (Var "x" :: Var Bool))
+      toTerm (True, (Var "x" :: Var Bool, False)) `shouldBe`
+        Product (Constant True) (Product (Variable $ Var "x") (Constant False))
+    it "should have type corresponding to the enclosed value" $ do
+      termType (toTerm True) `shouldBe` typeOf True
+      termType (toTerm ('a', True, ())) `shouldBe` typeOf ('a', True, ())
+      termType (toTerm ('a', (True, ()))) `shouldBe` typeOf ('a', (True, ()))
+      termType (toTerm (Var "x" :: Var (Tree Bool))) `shouldBe` typeOf (Leaf True)
+      termType (Constructor Leaf $ Constant True) `shouldBe` typeOf (Leaf True)
     when "containing no variables" $
       it "should reify with the corresponding Haskell value" $ do
         fromTerm (toTerm ()) `shouldBe` Just ()
@@ -91,17 +128,35 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         fromTerm (toTerm 'a') `shouldBe` Just 'a'
         fromTerm (toTerm (42 :: Int)) `shouldBe` Just (42 :: Int)
         fromTerm (toTerm (True, 'a')) `shouldBe` Just (True, 'a')
-        let tree = Tree True (Leaf True) (Leaf False)
-        fromTerm (toTerm tree) `shouldBe` Just tree
+        fromTerm (toTerm "foo") `shouldBe` Just "foo"
+        fromTerm (Constructor (\(x, y, z) -> Tree x y z)
+                    (Product (Constant True)
+                             (Product (Constructor Leaf $ Constant True)
+                                      (Constructor Leaf $ Constant False)))) `shouldBe`
+          Just (Tree True (Leaf True) (Leaf False))
+        fromTerm (Constructor Leaf (Constructor Leaf (Constant True))) `shouldBe`
+          Just (Leaf (Leaf True))
+
+        -- Two tuples with the same AST can reify to different tuples depending on whether the type
+        -- is flat or nested.
+        fromTerm (toTerm (True, 'a', ())) `shouldBe` Just (True, 'a', ())
+        fromTerm (toTerm (True, ('a', ()))) `shouldBe` Just (True, ('a', ()))
+        fromTerm (toTerm (True, 'a', (), 'b')) `shouldBe` Just (True, 'a', (), 'b')
+        fromTerm (toTerm (True, ('a', ((), 'b')))) `shouldBe` Just (True, ('a', ((), 'b')))
+        fromTerm (toTerm (True, ('a', (), 'b'))) `shouldBe` Just (True, ('a', (), 'b'))
     when "containing variables" $
       it "fromTerm should return Nothing" $ do
-        fromTerm (toTerm (Variable "x" :: Variable ())) `shouldBe` (Nothing :: Maybe ())
-        fromTerm (toTerm (True, Variable "x" :: Variable Bool)) `shouldBe` (Nothing :: Maybe (Bool, Bool))
+        fromTerm (toTerm (Var "x" :: Var ())) `shouldBe` (Nothing :: Maybe ())
+        fromTerm (toTerm (True, Var "x" :: Var Bool)) `shouldBe` (Nothing :: Maybe (Bool, Bool))
+        fromTerm (Constructor (\(x, y, z) -> Tree x y z)
+                    (Product (Constant True)
+                             (Product (Constructor Leaf $ Constant True)
+                                      (Variable $ Var "x")))) `shouldBe` Nothing
   describe "predicates" $ do
     it "should have type corresponding to the type of the argument" $ do
-      predType (predicate "foo" ()) `shouldBe` typeOf (toTerm ())
-      predType (predicate "foo" True) `shouldBe` typeOf (toTerm True)
-      predType (predicate "foo" (True, False)) `shouldBe` typeOf (toTerm (True, False))
+      predType (predicate "foo" ()) `shouldBe` termType (toTerm ())
+      predType (predicate "foo" True) `shouldBe` termType (toTerm True)
+      predType (predicate "foo" (True, False)) `shouldBe` termType (toTerm (True, False))
     context "of the same name and type" $
       it "should compare according to that type's comparison operator" $ do
         predicate "foo" True `shouldEqual` Predicate "foo" (toTerm True)
@@ -115,9 +170,9 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
     context "of different types" $
       it "should compare unequal" $ do
         predicate "foo" True `shouldNotEqual` predicate "foo" (True, False)
-        predicate "foo" (Tree True (Leaf True) (Leaf False)) `shouldNotEqual`
-          predicate "foo" (PTree True (PLeaf True) (PLeaf False))
-        predicate "foo" U `shouldNotEqual` predicate "foo" PU
+        -- predicate "foo" (Tree True (Leaf True) (Leaf False)) `shouldNotEqual`
+        --   predicate "foo" (PTree True (PLeaf True) (PLeaf False))
+        -- predicate "foo" U `shouldNotEqual` predicate "foo" PU
   describe "clauses" $ do
     it "should have type corresponding to the type of the positive literal" $ do
       clauseType (HornClause foo []) `shouldBe` predType foo
