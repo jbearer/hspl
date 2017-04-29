@@ -174,9 +174,13 @@ variables, terms, predicates, and clauses.
 
 -- | A variable is a term which unifies with any other 'Term'.
 data Var a where
-  Var :: String -> Var a
-deriving instance Show (Var a)
+  Var :: Typeable a => String -> Var a
+  deriving (Typeable)
 deriving instance Eq (Var a)
+deriving instance Ord (Var a)
+
+instance Show (Var a) where
+  show (Var x) = x ++ " :: " ++ show (typeOf (undefined :: a))
 
 -- | Determine the HSPL type of a variable.
 varType :: forall a. Typeable a => Var a -> TypeRep

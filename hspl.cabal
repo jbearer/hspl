@@ -42,6 +42,7 @@ library
   if flag(Debug)
     cpp-options:       -DDEBUG
   exposed-modules:     Control.Hspl.Internal.Ast
+                     , Control.Hspl.Internal.Unification
 
 test-suite hspl-test
   type:                exitcode-stdio-1.0
@@ -53,10 +54,14 @@ test-suite hspl-test
                      , HUnit
                      , hspec
                      , call-stack
+                     , containers
+                     , should-not-typecheck
+                     , deepseq
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   cpp-options:         -DDEBUG
   other-modules:       Testing
                      , AstTest
+                     , UnificationTest
 
 source-repository head
   type:     git

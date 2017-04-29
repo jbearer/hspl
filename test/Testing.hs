@@ -13,6 +13,7 @@ module Testing (
   , shouldBe
   , shouldNotEqual
   , shouldNotBe
+  , pending
   ) where
 
 import Data.CallStack
