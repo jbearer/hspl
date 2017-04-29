@@ -164,7 +164,8 @@ instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f
 -- Lists
 instance TermData a => TermData [a] where
   type HSPLType [a] = [HSPLType a]
-  toTerm  = List . map toTerm
+  toTerm [] = Nil
+  toTerm (x:xs) = List (toTerm x) (toTerm xs)
 
 {- $ast
 HSPL's abstract syntax is an abstract representation of first-order predicate logic, comprised of
@@ -241,13 +242,21 @@ data Term a where
 #endif
               ) => a -> Term a
 
-  -- | A list of 'Term's.
+  -- | A cons cell.
   List :: ( Data a
           , Eq a
 #ifdef SHOW_TERMS
           , Show a
 #endif
-          ) => [Term a] -> Term [a]
+          ) => Term a -> Term [a] -> Term [a]
+
+  -- | An emtpy list (base case for the 'List' constructor)
+  Nil :: ( Data a
+         , Eq a
+#ifdef SHOW_TERMS
+         , Show a
+#endif
+         ) => Term [a]
 
   -- | A variable which can unify with any 'Term' of type @a@.
   Variable :: ( Data a
@@ -262,7 +271,8 @@ data Term a where
 instance Show (Term a) where
   show (Constructor f t) = "Constructor (" ++ show (constructor f) ++ ") (" ++ show t ++ ")"
   show (Product t ts) = "Product (" ++ show t ++ ") (" ++ show ts ++ ")"
-  show (List xs) = "List [" ++ intercalate ", " (map show xs) ++ "]"
+  show (List x xs) = "List (" ++ show x ++ ") (" ++ show xs ++ ")"
+  show Nil = "Nil"
 #ifdef SHOW_TERMS
   show (Constant c) = "Constant (" ++ show c ++ ")"
 #else
@@ -273,7 +283,9 @@ instance Show (Term a) where
 instance Show (Term a) where
   show (Constructor f t) = show (constructor f) ++ " (" ++ show t ++ ")"
   show (Product t ts) = show t ++ ", " ++ show ts
-  show (List xs) = "[" ++ intercalate ", " (map show xs) ++ "]"
+  show (List x Nil) = show x
+  show (List x xs) = show x ++ ", " ++ show xs
+  show Nil = "[]"
 #ifdef SHOW_TERMS
   show (Constant c) = show c
 #else
@@ -295,7 +307,8 @@ instance Eq (Term a) where
     ts'' <- cast ts'
     return $ t == t'' && ts == ts''
 
-  (==) (List xs) (List ys) = xs == ys
+  (==) (List x xs) (List y ys) = x == y && xs == ys
+  (==) Nil Nil = True
 
   (==) (Constant t) (Constant t') = t == t'
 
@@ -349,7 +362,11 @@ fromTerm (Product t ts) = do
   ut <- fromTerm t
   uts <- fromTerm ts
   return $ tcons ut uts
-fromTerm (List xs) = forM xs fromTerm
+fromTerm (List x xs) = do
+  ux <- fromTerm x
+  uxs <- fromTerm xs
+  return $ ux : uxs
+fromTerm Nil = Just []
 fromTerm (Constant c) = Just c
 fromTerm (Variable _) = Nothing
 

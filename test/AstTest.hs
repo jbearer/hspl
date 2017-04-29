@@ -95,9 +95,10 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         Product (Constant ())
                 (Constant 'b')))
     it "can be constructed from lists" $ do
-      toTerm "foo" `shouldBe` List [Constant 'f', Constant 'o', Constant 'o']
+      toTerm "foo" `shouldBe` List (Constant 'f') (List (Constant 'o') (List (Constant 'o') Nil))
       toTerm ("foo", [True, False]) `shouldBe`
-        Product (List [Constant 'f', Constant 'o', Constant 'o']) (List [Constant True, Constant False])
+        Product (List (Constant 'f') (List (Constant 'o') (List (Constant 'o') Nil)))
+                (List (Constant True) (List (Constant False) Nil))
     it "should provide sufficient generality to represent ADTs" $ do
       termType (Constructor (\(x, y, z) -> Tree x y z)
                   (Product (Constant True)
