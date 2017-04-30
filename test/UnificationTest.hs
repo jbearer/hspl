@@ -11,8 +11,9 @@ import Control.Hspl.Internal.Unification
 
 import           Control.DeepSeq        (NFData (..))
 import           Control.Exception.Base (evaluate)
+import           Control.Monad.State hiding (when)
 import           Data.Data
-import qualified Data.Map               as M
+import qualified Data.Map as M
 import           Data.Monoid
 import           Data.Typeable
 
@@ -37,6 +38,19 @@ instance NFData TypeRep where
 
 instance NFData Unifier where
   rnf (Unifier m) = rnf m
+
+renameWithContext :: Renamer -> Int -> Term a -> Term a
+renameWithContext renamer fresh t =
+  let u = evalStateT (renameTerm t) renamer
+  in evalState u fresh
+
+renamePredWithContext :: Renamer -> Int -> Predicate -> Predicate
+renamePredWithContext renamer fresh p =
+  let u = evalStateT (renamePredicate p) renamer
+  in evalState u fresh
+
+renameClauseWithContext :: Int -> HornClause -> HornClause
+renameClauseWithContext fresh c = evalState (renameClause c) fresh
 
 test = describeModule "Control.Hspl.Internal.Unification" $ do
   describe "a unifier" $ do
@@ -103,6 +117,12 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         let t = Constructor Just (toTerm (Var "y" :: Var Bool))
         queryVar (t // Var "x") (Var "x" :: Var (Maybe Bool)) `shouldBe` Partial t
   describe "term unification" $ do
+    when "both terms are variables" $
+      it "should keep user-defined variables over fresh variables where possible" $ do
+        mgu (toTerm (Var "x" :: Var Char)) (toTerm (Fresh 0 :: Var Char)) `shouldBe`
+          Just (toTerm (Var "x" :: Var Char) // Fresh 0)
+        mgu (toTerm (Fresh 0 :: Var Char)) (toTerm (Var "x" :: Var Char)) `shouldBe`
+          Just (toTerm (Var "x" :: Var Char) // Fresh 0)
     when "one term is a variable" $ do
       it "should unify with any term" $ do
         mgu (toTerm $ Var "x") (toTerm True) `shouldBe` Just (toTerm True // Var "x")
@@ -170,6 +190,98 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       evaluate $ mgu (toTerm True) (toTerm True)
       -- but not this
       shouldNotTypecheck $ mgu (toTerm True) (toTerm 'a')
+  describe "term renaming" $ do
+    let r = Renamer $ M.fromList [ (typeOf True, VarMap $ M.singleton (Var "x" :: Var Bool) (Fresh 0))
+                                 , (typeOf 'a', VarMap $ M.fromList [ (Var "x" :: Var Char, Fresh 1)
+                                                                    , (Var "y" :: Var Char, Fresh 2)
+                                                                    , (Var "z" :: Var Char, Fresh 3)
+                                                                    ])
+                                 ]
+    let rename = renameWithContext r 4
+    context "of a variable" $ do
+      it "should replace the variable if it appears in the renamer" $ do
+        rename (toTerm (Var "x" :: Var Bool)) `shouldBe` toTerm (Fresh 0 :: Var Bool)
+        rename (toTerm (Var "x" :: Var Char)) `shouldBe` toTerm (Fresh 1 :: Var Char)
+        rename (toTerm (Var "y" :: Var Char)) `shouldBe` toTerm (Fresh 2 :: Var Char)
+        rename (toTerm (Var "z" :: Var Char)) `shouldBe` toTerm (Fresh 3 :: Var Char)
+      it "should create a fresh variable if it is not in the renamer" $ do
+        rename (toTerm (Var "q" :: Var Char)) `shouldBe` toTerm (Fresh 4 :: Var Char)
+        rename (toTerm (Var "y" :: Var Bool)) `shouldBe` toTerm (Fresh 4 :: Var Bool)
+    context "of a constant" $
+      it "should return the original constant" $ do
+        rename (toTerm 'a') `shouldBe` toTerm 'a'
+        rename (toTerm True) `shouldBe` toTerm True
+    context "of a tuple" $ do
+      it "should recursively rename variables in each element" $ do
+        rename (toTerm (Var "x" :: Var Bool, Var "x" :: Var Char)) `shouldBe`
+          toTerm (Fresh 0 :: Var Bool, Fresh 1 :: Var Char)
+        rename (toTerm (Var "x" :: Var Bool, Var "q" :: Var Char)) `shouldBe`
+          toTerm (Fresh 0 :: Var Bool, Fresh 4 :: Var Char)
+        rename (toTerm (Var "x" :: Var Char, (Var "y" :: Var Char, Var "z" :: Var Char))) `shouldBe`
+          toTerm (Fresh 1 :: Var Char, (Fresh 2 :: Var Char, Fresh 3 :: Var Char))
+      it "should rename the same variable with the same replacement" $ do
+        rename (toTerm (Var "x" :: Var Bool, Var "x" :: Var Bool)) `shouldBe`
+          toTerm (Fresh 0 :: Var Bool, Fresh 0 :: Var Bool)
+        rename (toTerm (Var "q" :: Var Char, Var "q" :: Var Char)) `shouldBe`
+          toTerm (Fresh 4 :: Var Char, Fresh 4 :: Var Char)
+    context "of a list" $ do
+      it "should recursively rename variables in each element" $ do
+        rename (toTerm [Var "x" :: Var Char, Var "y" :: Var Char]) `shouldBe`
+          toTerm [Fresh 1 :: Var Char, Fresh 2 :: Var Char]
+        rename (toTerm [Var "x" :: Var Char, Var "q" :: Var Char]) `shouldBe`
+          toTerm [Fresh 1 :: Var Char, Fresh 4 :: Var Char]
+      it "should rename a variable in the tail of the list" $ do
+        let r = Renamer $ M.singleton (typeOf "foo") (VarMap $ M.singleton (Var "xs" :: Var String) (Fresh 0))
+        renameWithContext r 1 (List (toTerm 'a') (toTerm $ Var "xs")) `shouldBe`
+          List (toTerm 'a') (toTerm $ Fresh 0)
+      it "should rename the same variable with the same replacement" $ do
+        rename (toTerm [Var "x" :: Var Bool, Var "x" :: Var Bool]) `shouldBe`
+          toTerm [Fresh 0 :: Var Bool, Fresh 0 :: Var Bool]
+        rename (toTerm [Var "q" :: Var Char, Var "q" :: Var Char]) `shouldBe`
+          toTerm [Fresh 4 :: Var Char, Fresh 4 :: Var Char]
+    context "of an ADT constructor" $
+      it "should recursively rename variables in the argument" $ do
+        rename (Constructor Just (toTerm (Var "x" :: Var Char))) `shouldBe`
+          Constructor Just (toTerm (Fresh 1 :: Var Char))
+        rename (Constructor Just (toTerm (Var "x" :: Var Char, Var "q" :: Var Int))) `shouldBe`
+          Constructor Just (toTerm (Fresh 1 :: Var Char, Fresh 4 :: Var Int))
+  describe "predicate renaming" $ do
+    let r = Renamer $ M.singleton (typeOf True) (VarMap $ M.singleton (Var "x" :: Var Bool) (Fresh 0))
+    let rename = renamePredWithContext r 1
+    it "should rename variables in the argument if the renamer applies" $
+      rename (predicate "foo" (Var "x" :: Var Bool)) `shouldBe` predicate "foo" (Fresh 0 :: Var Bool)
+    it "should create fresh variables when the argument contains a variable not in the renamer" $
+      rename (predicate "foo" (Var "q" :: Var Bool)) `shouldBe` predicate "foo" (Fresh 1 ::Var Bool)
+  describe "clause renaming" $ do
+    let rename = renameClauseWithContext 0
+    it "should rename variables in the positive literal" $
+      rename (HornClause (predicate "foo" (Var "x" :: Var Bool)) []) `shouldBe`
+        HornClause (predicate "foo" (Fresh 0 :: Var Bool)) []
+    it "should rename variables in all negative literals" $ do
+      rename (HornClause ( predicate "foo" ())
+                         [ predicate "bar" (Var "x" :: Var Bool)
+                         , predicate "baz" (Var "x" :: Var Bool)]) `shouldBe`
+        HornClause ( predicate "foo" ())
+                   [ predicate "bar" (Fresh 0 :: Var Bool)
+                   , predicate "baz" (Fresh 0 :: Var Bool)]
+      rename (HornClause ( predicate "foo" ())
+                         [ predicate "bar" (Var "x" :: Var Bool)
+                         , predicate "baz" (Var "q" :: Var Char)]) `shouldBe`
+        HornClause ( predicate "foo" ())
+                   [ predicate "bar" (Fresh 0 :: Var Bool)
+                   , predicate "baz" (Fresh 1 :: Var Char)]
+    it "should apply renamings generated in the positive literal to the negative literals" $
+      rename (HornClause (predicate "foo" (Var "q" :: Var Char, Var "p" :: Var Char))
+                         [predicate "bar" (Var "p" :: Var Char)]) `shouldBe`
+        HornClause (predicate "foo" (Fresh 0 :: Var Char, Fresh 1 :: Var Char))
+                   [predicate "bar" (Fresh 1 :: Var Char)]
+    it "should apply renamings generated in a negative literal to all subsequent negative literals" $
+      rename (HornClause ( predicate "foo" ())
+                         [ predicate "bar" (Var "q" :: Var Char, Var "p" :: Var Char)
+                         , predicate "baz" (Var "p" :: Var Char)]) `shouldBe`
+        HornClause ( predicate "foo" ())
+                   [ predicate "bar" (Fresh 0 :: Var Char, Fresh 1 :: Var Char)
+                   , predicate "baz" (Fresh 1 :: Var Char)]
   describe "term unifier application" $ do
     context "to a variable" $ do
       it "should replace the variable if there is a corresponding substitution" $
@@ -240,3 +352,21 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       unifyClause (toTerm 'a' // Var "y") c `shouldBe`
         HornClause (predicate "foo" ()) [predicate "bar" (Var "x" :: Var Bool), predicate "baz" 'a']
       unifyClause (toTerm True // Var "z") c `shouldBe` c
+  describe "goal unification" $ do
+    let unify p c = evalState (unifyGoal p c) 0
+    it "should rename variables in the clause" $
+      unify (predicate "foo" ())
+            (HornClause (predicate "foo" ()) [predicate "bar" (Var "x" :: Var Bool)]) `shouldBe`
+        Just [predicate "bar" (Fresh 0 :: Var Bool)]
+    it "should apply the unifier to variables in the clause" $
+      unify (predicate "foo" 'a')
+            (HornClause (predicate "foo" (Var "x" :: Var Char))
+                        [predicate "bar" (Var "x" :: Var Char)]) `shouldBe`
+        Just [predicate "bar" 'a']
+    it "should not apply the unifier to renamed variables" $
+      unify (predicate "foo" (Var "x" :: Var Char))
+            (HornClause (predicate "foo" 'a')
+                        [predicate "bar" (Var "x" :: Var Char)]) `shouldBe`
+        Just [predicate "bar" (Fresh 0 :: Var Char)]
+    it "should fail when the goal does not unify with the clause" $
+      unify (predicate "foo" 'a') (HornClause (predicate "foo" 'b') []) `shouldBe` Nothing

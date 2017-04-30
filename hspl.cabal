@@ -57,6 +57,7 @@ test-suite hspl-test
                      , containers
                      , should-not-typecheck
                      , deepseq
+                     , mtl
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   cpp-options:         -DDEBUG
   other-modules:       Testing

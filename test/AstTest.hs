@@ -111,6 +111,9 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       toTerm (Var "x" :: Var Bool) `shouldBe` Variable (Var "x" :: Var Bool)
       toTerm (Var "x" :: Var (Tree Bool)) `shouldBe` Variable (Var "x" :: Var (Tree Bool))
       toTerm (Var "x" :: Var (Bool, String)) `shouldBe` Variable (Var "x" :: Var (Bool, String))
+      toTerm (Fresh 0 :: Var Bool) `shouldBe` Variable (Fresh 0 :: Var Bool)
+      toTerm (Fresh 0 :: Var (Tree Bool)) `shouldBe` Variable (Fresh 0 :: Var (Tree Bool))
+      toTerm (Fresh 0 :: Var (Bool, String)) `shouldBe` Variable (Fresh 0 :: Var (Bool, String))
     it "should permit embedded variables" $ do
       toTerm (True, Var "x" :: Var Bool) `shouldBe`
         Product (Constant True) (Variable (Var "x" :: Var Bool))

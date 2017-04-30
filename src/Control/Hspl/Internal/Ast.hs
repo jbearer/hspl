@@ -175,12 +175,15 @@ variables, terms, predicates, and clauses.
 -- | A variable is a term which unifies with any other 'Term'.
 data Var a where
   Var :: Typeable a => String -> Var a
+  -- | Internal constructor used to generate variables which are not equal to any user-defined ones.
+  Fresh :: Typeable a => Int -> Var a
   deriving (Typeable)
 deriving instance Eq (Var a)
 deriving instance Ord (Var a)
 
 instance Show (Var a) where
   show (Var x) = x ++ " :: " ++ show (typeOf (undefined :: a))
+  show (Fresh x) = "_" ++ show x ++ " :: " ++ show (typeOf (undefined :: a))
 
 -- | Determine the HSPL type of a variable.
 varType :: forall a. Typeable a => Var a -> TypeRep
