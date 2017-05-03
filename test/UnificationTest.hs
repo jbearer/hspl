@@ -49,8 +49,8 @@ renamePredWithContext renamer fresh p =
   let u = evalStateT (renamePredicate p) renamer
   in evalState u fresh
 
-renameClauseWithContext :: Int -> HornClause -> HornClause
-renameClauseWithContext fresh c = evalState (renameClause c) fresh
+doRenameClause :: HornClause -> HornClause
+doRenameClause c = runUnification $ renameClause c
 
 test = describeModule "Control.Hspl.Internal.Unification" $ do
   describe "a unifier" $ do
@@ -98,6 +98,16 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       evaluate $ toTerm True // (Var "x" :: Var Bool)
       -- But this should not
       shouldNotTypecheck $ toTerm True // (Var "x" :: Var Char)
+    it "is a subunifier of another if the other contains all of the substitutions of the first" $ do
+      'a' // Var "x" `shouldSatisfy` (`isSubunifierOf` ('a' // Var "x" <> True // Var "y"))
+      'a' // Var "x" <> True // Var "y" `shouldSatisfy`
+        (`isSubunifierOf` ('a' // Var "x" <> True // Var "y"))
+      'a' // Var "x" <> True // Var "y" `shouldSatisfy`
+        (`isSubunifierOf` ('a' // Var "x" <> 'b' // Var "x'" <> True // Var "y" <> () // Var "z"))
+    it "is not a subunifier of another which does not contain a substitution in the first" $
+      'a' // Var "x" <> 'b' // Var "y" `shouldSatisfy` not . (`isSubunifierOf` ('a' // Var "x"))
+    it "is not a subunifier of another which does not contain a submap of the first" $
+      'a' // Var "x" <> True // Var "y" `shouldSatisfy` not . (`isSubunifierOf` ('a' // Var "y"))
     when "querying variables" $ do
       it "should match variables by type first" $ do
         let u = (toTerm True // Var "x") <> (toTerm 'a' // Var "x")
@@ -253,7 +263,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
     it "should create fresh variables when the argument contains a variable not in the renamer" $
       rename (predicate "foo" (Var "q" :: Var Bool)) `shouldBe` predicate "foo" (Fresh 1 ::Var Bool)
   describe "clause renaming" $ do
-    let rename = renameClauseWithContext 0
+    let rename = doRenameClause
     it "should rename variables in the positive literal" $
       rename (HornClause (predicate "foo" (Var "x" :: Var Bool)) []) `shouldBe`
         HornClause (predicate "foo" (Fresh 0 :: Var Bool)) []
@@ -353,20 +363,24 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         HornClause (predicate "foo" ()) [predicate "bar" (Var "x" :: Var Bool), predicate "baz" 'a']
       unifyClause (toTerm True // Var "z") c `shouldBe` c
   describe "goal unification" $ do
-    let unify p c = evalState (unifyGoal p c) 0
+    let unify p c = runUnification (unifyGoal p c)
     it "should rename variables in the clause" $
       unify (predicate "foo" ())
             (HornClause (predicate "foo" ()) [predicate "bar" (Var "x" :: Var Bool)]) `shouldBe`
-        Just [predicate "bar" (Fresh 0 :: Var Bool)]
+        Just ([predicate "bar" (Fresh 0 :: Var Bool)], mempty)
+    it "should return any unifications made" $
+      unify (predicate "foo" ('a', Var "x" :: Var Bool))
+            (HornClause (predicate "foo" (Var "y" :: Var Char, True)) []) `shouldBe`
+        Just ([], toTerm 'a' // Fresh 0 <> toTerm True // Var "x")
     it "should apply the unifier to variables in the clause" $
       unify (predicate "foo" 'a')
             (HornClause (predicate "foo" (Var "x" :: Var Char))
                         [predicate "bar" (Var "x" :: Var Char)]) `shouldBe`
-        Just [predicate "bar" 'a']
+        Just ([predicate "bar" 'a'], toTerm 'a' // Fresh 0)
     it "should not apply the unifier to renamed variables" $
       unify (predicate "foo" (Var "x" :: Var Char))
             (HornClause (predicate "foo" 'a')
                         [predicate "bar" (Var "x" :: Var Char)]) `shouldBe`
-        Just [predicate "bar" (Fresh 0 :: Var Char)]
+        Just ([predicate "bar" (Fresh 0 :: Var Char)], toTerm 'a' // Var "x")
     it "should fail when the goal does not unify with the clause" $
       unify (predicate "foo" 'a') (HornClause (predicate "foo" 'b') []) `shouldBe` Nothing

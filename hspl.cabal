@@ -36,6 +36,7 @@ library
   build-depends:       base >= 4.0 && < 5
                      , containers
                      , mtl
+                     , logict
   ghc-options:         -Wall
   if flag(ShowTerms)
     cpp-options:       -DSHOW_TERMS
@@ -43,6 +44,7 @@ library
     cpp-options:       -DDEBUG
   exposed-modules:     Control.Hspl.Internal.Ast
                      , Control.Hspl.Internal.Unification
+                     , Control.Hspl.Internal.Solver
 
 test-suite hspl-test
   type:                exitcode-stdio-1.0
@@ -63,6 +65,7 @@ test-suite hspl-test
   other-modules:       Testing
                      , AstTest
                      , UnificationTest
+                     , SolverTest
 
 source-repository head
   type:     git

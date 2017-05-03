@@ -22,12 +22,14 @@ module Control.Hspl.Internal.Unification (
   -- ** Operations on unifiers
   , updateSubMap
   , compose
+  , netUnifier
   , (//)
   -- ** Querying a unifier
   , UnificationStatus (..)
   , findVar
   , findVarWithDefault
   , queryVar
+  , isSubunifierOf
   -- * Unification
   -- ** Auxiliary functions
   , freeIn
@@ -36,8 +38,8 @@ module Control.Hspl.Internal.Unification (
   , unifyPredicate
   , unifyGoal
   -- ** The unification monad
-  , UnificationT
   , Unification
+  , runUnification
   , unifyClause
   -- * Renaming
   , VarMap (..)
@@ -131,9 +133,20 @@ compose (Unifier u1) gu2@(Unifier u2) =
   let u1' = M.map (updateSubMap gu2) u1
   in Unifier $ M.union u1' u2
 
+-- | Convenience function for the composition of many 'Unifier's.
+netUnifier :: [Unifier] -> Unifier
+netUnifier = foldr (<>) mempty
+
 -- | A unifier representing the replacement of a variable by a term.
-(//) :: Typeable a => Term a -> Var a -> Unifier
-t // x = Unifier $ M.singleton (varType x) $ SubMap (M.singleton x t)
+(//) :: TermData a => a -> Var (HSPLType a) -> Unifier
+t // x = Unifier $ M.singleton (varType x) $ SubMap (M.singleton x (toTerm t))
+
+-- | @u1 `isSubunifierOf` u2@ if and only if every substitution in @u1@ is also in @u2@.
+isSubunifierOf :: Unifier -> Unifier -> Bool
+isSubunifierOf (Unifier u1) (Unifier u2) = all isSubSubmap $ M.toList u1
+  where isSubSubmap (ty, SubMap m1) = case M.lookup ty u2 >>= \(SubMap m2) -> cast m2 of
+                                        Just m2' -> m1 `M.isSubmapOf` m2'
+                                        Nothing -> False
 
 -- | Determine if the variable x is free in the term t. This is useful, for example, when performing
 -- the occurs check before computing a 'Unifier'.
@@ -218,13 +231,13 @@ unifyClause u (HornClause p n) = HornClause (unifyPredicate u p) (map (unifyPred
 -- with the positive literal of the clause, the 'mgu' is applied to each negative literal and the
 -- resulting disjunction is returned. Before unification, the 'HornClause' is renamed apart so that
 -- it does not share any free variables with the goal.
-unifyGoal :: Predicate -> HornClause -> Unification (Maybe [Predicate])
+unifyGoal :: Predicate -> HornClause -> Unification (Maybe ([Predicate], Unifier))
 unifyGoal (Predicate name arg) c@(HornClause (Predicate name' _) _) =
   assert (name == name') $ do
     HornClause (Predicate _ arg') negs <- renameClause c
     case cast arg' >>= mgu arg of
       Nothing -> return Nothing
-      Just u -> return $ Just $ map (unifyPredicate u) negs
+      Just u -> return $ Just (map (unifyPredicate u) negs, u)
 
 -- | The status of a variable in a given 'Unifier'. At any given time, a variable occupies a state
 -- represented by one of the constructors.
@@ -265,13 +278,15 @@ data Renamer = Renamer (M.Map TypeRep VarMap)
 -- | Monad encapsulating the state of a renaming operation.
 type Renamed = StateT Renamer Unification
 
--- | Monad transformer in which all unification operations take place. This type encapsulates the
--- state necessary to generate unique 'Fresh' variables. All unification in a single run of an
--- HSPL program should take place in the same 'UnificationT' monad.
-type UnificationT = StateT Int
+-- | Monad in which all unification operations take place. This type encapsulates the state
+-- necessary to generate unique 'Fresh' variables. All unifications in a single run of an HSPL
+-- program should take place in the same 'Unification' monad.
+type Unification = State Int
 
--- | Non-transformer 'Unification' monad.
-type Unification = UnificationT Identity
+-- | Evaluate a computation in the 'Unification' monad, starting from a state in which no 'Fresh'
+-- variables have been generated.
+runUnification :: Unification a -> a
+runUnification m = evalState m 0
 
 -- | Replace a variable with a new, unique name. If this variable appears in the current 'Renamer',
 -- it is replaced with the corresonding new name. Otherwise, a 'Fresh' variable with a unique ID is
