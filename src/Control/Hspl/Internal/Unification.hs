@@ -38,12 +38,15 @@ module Control.Hspl.Internal.Unification (
   , unifyPredicate
   , unifyGoal
   -- ** The unification monad
+  , UnificationT
   , Unification
   , runUnification
+  , runUnificationT
   , unifyClause
   -- * Renaming
   , VarMap (..)
   , Renamer (..)
+  , RenamedT
   , Renamed
   , renameVar
   , renameTerm
@@ -231,7 +234,7 @@ unifyClause u (HornClause p n) = HornClause (unifyPredicate u p) (map (unifyPred
 -- with the positive literal of the clause, the 'mgu' is applied to each negative literal and the
 -- resulting disjunction is returned. Before unification, the 'HornClause' is renamed apart so that
 -- it does not share any free variables with the goal.
-unifyGoal :: Predicate -> HornClause -> Unification (Maybe ([Predicate], Unifier))
+unifyGoal :: Monad m => Predicate -> HornClause -> UnificationT m (Maybe ([Predicate], Unifier))
 unifyGoal (Predicate name arg) c@(HornClause (Predicate name' _) _) =
   assert (name == name') $ do
     HornClause (Predicate _ arg') negs <- renameClause c
@@ -276,22 +279,33 @@ data Renamer = Renamer (M.Map TypeRep VarMap)
   deriving (Show, Eq)
 
 -- | Monad encapsulating the state of a renaming operation.
-type Renamed = StateT Renamer Unification
+type RenamedT m = StateT Renamer (UnificationT m)
+
+-- | Non-transformed version of the 'RenamedT' monad.
+type Renamed = RenamedT Identity
 
 -- | Monad in which all unification operations take place. This type encapsulates the state
 -- necessary to generate unique 'Fresh' variables. All unifications in a single run of an HSPL
--- program should take place in the same 'Unification' monad.
-type Unification = State Int
+-- program should take place in the same 'UnificationT' monad.
+type UnificationT = StateT Int
+
+-- | Non-transformer version of the 'UnificationT' monad.
+type Unification = UnificationT Identity
 
 -- | Evaluate a computation in the 'Unification' monad, starting from a state in which no 'Fresh'
 -- variables have been generated.
 runUnification :: Unification a -> a
 runUnification m = evalState m 0
 
+-- | Evaluate a computation in 'UnificationT' transformed monad, starting from a state in which no
+-- 'Fresh' variables have been generated. The result is a compuation in the underlying monad.
+runUnificationT :: Monad m => UnificationT m a -> m a
+runUnificationT m = evalStateT m 0
+
 -- | Replace a variable with a new, unique name. If this variable appears in the current 'Renamer',
 -- it is replaced with the corresonding new name. Otherwise, a 'Fresh' variable with a unique ID is
 -- generated and added to the 'Renamer'.
-renameVar :: Typeable a => Var a -> Renamed (Var a)
+renameVar :: (Typeable a, Monad m) => Var a -> RenamedT m (Var a)
 renameVar x = do
   fresh <- lift get
   Renamer m <- get
@@ -310,8 +324,8 @@ renameVar x = do
         Just x' -> return x'
 
 -- | Rename all of the variables in a term.
-renameTerm :: Term a -> Renamed (Term a)
-renameTerm (Variable x) = fmap Variable $ renameVar x
+renameTerm :: Monad m => Term a -> RenamedT m (Term a)
+renameTerm (Variable x) = liftM Variable $ renameVar x
 renameTerm (Constant c) = return $ Constant c
 renameTerm (Product t ts) = do
   rt <- renameTerm t
@@ -322,14 +336,14 @@ renameTerm (List t ts) = do
   rts <- renameTerm ts
   return $ List rt rts
 renameTerm Nil = return Nil
-renameTerm (Constructor f t) = fmap (Constructor f) $ renameTerm t
+renameTerm (Constructor f t) = liftM (Constructor f) $ renameTerm t
 
 -- | Rename all of the variables in a predicate.
-renamePredicate :: Predicate -> Renamed Predicate
-renamePredicate (Predicate name arg) = fmap (Predicate name) $ renameTerm arg
+renamePredicate :: Monad m => Predicate -> RenamedT m Predicate
+renamePredicate (Predicate name arg) = liftM (Predicate name) $ renameTerm arg
 
 -- | Rename all of the variables in a clause.
-renameClause :: HornClause -> Unification HornClause
+renameClause :: Monad m => HornClause -> UnificationT m HornClause
 renameClause (HornClause p n) = evalStateT rename (Renamer M.empty)
   where rename = do rp <- renamePredicate p
                     rn <- forM n renamePredicate
