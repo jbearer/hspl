@@ -38,12 +38,16 @@ library
                      , mtl
                      , logict
                      , ansi-terminal
+                     , tuple
+                     , OneTuple
   ghc-options:         -Wall
   if flag(ShowTerms)
     cpp-options:       -DSHOW_TERMS
   if flag(Debug)
     cpp-options:       -DDEBUG
-  exposed-modules:     Control.Hspl.Internal.Ast
+  exposed-modules:     Control.Hspl
+                     , Control.Hspl.Examples
+                     , Control.Hspl.Internal.Ast
                      , Control.Hspl.Internal.Unification
                      , Control.Hspl.Internal.Solver
                      , Control.Hspl.Internal.Debugger
@@ -65,6 +69,7 @@ test-suite hspl-test
                      , directory
                      , filepath
                      , time
+                     , tuple
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   cpp-options:         -DDEBUG
   other-modules:       Testing
@@ -72,6 +77,7 @@ test-suite hspl-test
                      , UnificationTest
                      , SolverTest
                      , DebuggerTest
+                     , HsplTest
 
 source-repository head
   type:     git
