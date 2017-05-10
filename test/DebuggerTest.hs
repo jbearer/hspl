@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeFamilies #-} -- For equational constraints
+
 module DebuggerTest where
 
 import Testing
@@ -10,7 +12,7 @@ import Data.Time.Clock
 import System.Directory
 import System.FilePath
 
-runTest :: Program -> Goal -> [String] -> [String] -> IO ()
+runTest :: Program -> Predicate -> [String] -> [String] -> IO ()
 runTest p g commands expectedOutput = do
   tmp <- getTemporaryDirectory
 
@@ -43,17 +45,32 @@ expectExit = expectTrace "Exit"
 expectFail :: TermData a => Int -> String -> a -> String
 expectFail = expectTrace "Fail"
 
+expectUnknownPred :: TermData a => Int -> String -> a -> String
+expectUnknownPred d pred arg = "(" ++ show d ++ ") Error: Unknown predicate \"" ++
+                                pred ++ " :: " ++ show (predType $ predicate pred arg) ++ "\""
+
+expectCanUnifyCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
+                        Int -> a -> b -> String
+expectCanUnifyCall d t1 t2 = "(" ++ show d ++ ") Call: " ++ show (CanUnify (toTerm t1) (toTerm t2))
+
+expectCanUnifyExit :: (TermData a) => Int -> a -> String
+expectCanUnifyExit d t = "(" ++ show d ++ ") Exit: " ++ show (CanUnify (toTerm t) (toTerm t))
+
+expectCanUnifyFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
+                        Int -> a -> b -> String
+expectCanUnifyFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ show (CanUnify (toTerm t1) (toTerm t2))
+
 deepProgram = addClauses [ HornClause (predicate "foo" (Var "x" :: Var Char))
-                                      [predicate "bar" (Var "x" :: Var Char)]
+                                      [PredGoal $ predicate "bar" (Var "x" :: Var Char)]
                          , HornClause (predicate "bar" (Var "x" :: Var Char))
-                                      [predicate "baz" (Var "x" :: Var Char)]
+                                      [PredGoal $ predicate "baz" (Var "x" :: Var Char)]
                          , HornClause (predicate "baz" 'a') []
                          ] emptyProgram
 
 wideProgram = addClauses [ HornClause ( predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char))
-                                      [ predicate "foo" (Var "x" :: Var Char)
-                                      , predicate "bar" (Var "y" :: Var Char)
-                                      , predicate "baz" (Var "z" :: Var Char)
+                                      [ PredGoal $ predicate "foo" (Var "x" :: Var Char)
+                                      , PredGoal $ predicate "bar" (Var "y" :: Var Char)
+                                      , PredGoal $ predicate "baz" (Var "z" :: Var Char)
                                       ]
                          , HornClause ( predicate "foo" 'a') []
                          , HornClause ( predicate "bar" 'b') []
@@ -61,11 +78,15 @@ wideProgram = addClauses [ HornClause ( predicate "p" (Var "x" :: Var Char, Var 
                          ] emptyProgram
 
 backtrackingProgram = addClauses [ HornClause (predicate "foo" (Var "x" :: Var Char))
-                                              [predicate "bar" (Var "x" :: Var Char)]
+                                              [PredGoal $ predicate "bar" (Var "x" :: Var Char)]
                                  , HornClause (predicate "foo" (Var "x" :: Var Char))
-                                              [predicate "baz" 'a']
+                                              [PredGoal $ predicate "baz" 'a']
                                  , HornClause ( predicate "baz" 'b') []
                                  ] emptyProgram
+
+canUnifyProgram = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var String))
+                                          [ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")]
+                             ] emptyProgram
 
 test = describeModule "Control.Hspl.Internal.Debugger" $ do
   describe "the step command" $ do
@@ -91,9 +112,23 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     let backtrackingTrace = [ expectCall 1 "foo" (Var "x" :: Var Char)
                             , expectCall 2 "baz" 'a'
                             , expectFail 2 "baz" 'a'
+                            , expectFail 1 "foo" (Var "x" :: Var Char)
                             , expectRedo 1 "foo" (Var "x" :: Var Char)
                             , expectCall 2 "bar" (Var "x" :: Var Char)
-                            , expectFail 2 "bar" (Var "x" :: Var Char)
+                            , expectUnknownPred 2 "bar" (Var "x" :: Var Char)
+                            , expectFail 1 "foo" (Var "x" :: Var Char)
+                            ]
+    let canUnifyGoal = predicate "isFoo" (Var "x" :: Var String)
+    let canUnifyTrace = [ expectCall 1 "isFoo" (Var "x" :: Var String)
+                        , expectCanUnifyCall 2 (Var "x" :: Var String) "foo"
+                        , expectCanUnifyExit 2 "foo"
+                        , expectExit 1 "isFoo" "foo"
+                        ]
+    let canUnifyFailGoal = predicate "isFoo" "bar"
+    let canUnifyFailTrace = [ expectCall 1 "isFoo" "bar"
+                            , expectCanUnifyCall 2 "bar" "foo"
+                            , expectCanUnifyFail 2 "bar" "foo"
+                            , expectFail 1 "isFoo" "bar"
                             ]
     let run p g t c = runTest p g (map (const c) [1..length t]) t
 
@@ -101,10 +136,14 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run deepProgram deepGoal deepTrace "step"
       run wideProgram wideGoal wideTrace "step"
       run backtrackingProgram backtrackingGoal backtrackingTrace "step"
+      run canUnifyProgram canUnifyGoal canUnifyTrace "step"
+      run canUnifyProgram canUnifyFailGoal canUnifyFailTrace "step"
     it "should have a one-character alias" $ do
       run deepProgram deepGoal deepTrace "s"
       run wideProgram wideGoal wideTrace "s"
       run backtrackingProgram backtrackingGoal backtrackingTrace "s"
+      run canUnifyProgram canUnifyGoal canUnifyTrace "s"
+      run canUnifyProgram canUnifyFailGoal canUnifyFailTrace "s"
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do
@@ -156,7 +195,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
         ["step", "finish", "finish"]
         [ expectCall 1 "foo" (Var "x" :: Var Char)
         , expectCall 2 "baz" 'a'
-        , expectRedo 1 "foo" (Var "x" :: Var Char)
+        , expectFail 1 "foo" (Var "x" :: Var Char)
         ]
     it "should have a one-character alias" $
         runTest wideProgram (predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char))

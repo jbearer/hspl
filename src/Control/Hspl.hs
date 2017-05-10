@@ -31,10 +31,14 @@ module Control.Hspl (
   , def
   , (|-)
   , ($$)
+  -- ** Special predicates
+  -- | Some predicates have special semantics. These can appear as goals on the right-hand side of
+  -- '|-', but they can never be the object of a 'def' statement on the left-hand side.
+  , (|=|)
   -- * Running HSPL programs
   , ProofResult
-  , (?)
-  , (!?)
+  , runHspl
+  , runHspl1
   , searchProof
   , getUnifier
   , getAllUnifiers
@@ -69,10 +73,9 @@ import Data.Tuple.Curry
 import Data.Tuple.OneTuple
 
 import qualified Control.Hspl.Internal.Ast as Ast
-import           Control.Hspl.Internal.Ast (Var (Var), Term, TermData(..))
+import           Control.Hspl.Internal.Ast (Var (Var), Term, TermData(..), Goal(..))
 import qualified Control.Hspl.Internal.Solver as Solver
-import           Control.Hspl.Internal.Solver ( Goal
-                                              , ProofResult
+import           Control.Hspl.Internal.Solver ( ProofResult
                                               , searchProof
                                               , getUnifier
                                               , getAllUnifiers
@@ -96,7 +99,7 @@ type ClauseBuilder = Writer [Goal]
 -- | Predicate application. @pred $$ term@ is a goal that succeeds if the predicate @pred@ applied
 -- to @term@ is true.
 ($$) :: TermData a => String -> a -> ClauseBuilder ()
-name $$ arg = tell [Ast.predicate name arg]
+name $$ arg = tell [PredGoal $ Ast.predicate name arg]
 
 -- | Define a new predicate. The predicate has a name and an argument, which is pattern matched
 -- whenever a goal with a matching name is encountered. The definition may be empty, in which case
@@ -128,24 +131,26 @@ p |- gs =
       goals = execWriter gs
   in tell [Ast.HornClause goal goals]
 
+-- | Unify two terms. The predicate succeeds if and only if unification succeeds.
+(|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
+t1 |=| t2 = tell [Ast.CanUnify (toTerm t1) (toTerm t2)]
+
 -- | Construct an HSPL program.
 hspl :: HsplBuilder a -> Hspl
 hspl builder = Ast.addClauses (execWriter builder) Ast.emptyProgram
 
 -- | Query an HSPL program for a given goal. The 'ProofResult's returned can be inspected using
 -- functions like `getAllSolutions`, `searchProof`, etc.
-infixr 0 ?
-(?) :: Hspl -> ClauseBuilder a -> [ProofResult]
-program ? g =
-  let [goal] = execWriter g
+runHspl :: TermData a => Hspl -> String -> a -> [ProofResult]
+runHspl program predicate arg =
+  let goal = Ast.predicate predicate arg
   in Solver.runHspl program goal
 
 -- | Query an HSPL program for a given goal. If a proof is found, stop immediately instead of
 -- backtracking to look for additional solutions. If no proof is found, return 'Nothing'.
-infixr 0 !?
-(!?) :: Hspl -> ClauseBuilder a -> Maybe ProofResult
-program !? g =
-  let [goal] = execWriter g
+runHspl1 :: TermData a => Hspl -> String -> a -> Maybe ProofResult
+runHspl1 program predicate arg =
+  let goal = Ast.predicate predicate arg
       results = Solver.runHsplN 1 program goal
   in case results of
     [] -> Nothing

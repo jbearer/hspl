@@ -37,6 +37,7 @@ module Control.Hspl.Internal.Unification (
   , unifyTerm
   , unifyPredicate
   , unifyGoal
+  , unify
   -- ** The unification monad
   , UnificationT
   , Unification
@@ -51,6 +52,7 @@ module Control.Hspl.Internal.Unification (
   , renameVar
   , renameTerm
   , renamePredicate
+  , renameGoal
   , renameClause
   ) where
 
@@ -226,21 +228,26 @@ unifyTerm _ Nil = Nil
 unifyPredicate :: Unifier -> Predicate -> Predicate
 unifyPredicate u (Predicate name term) = Predicate name (unifyTerm u term)
 
+-- | Apply a 'Unifier' to a 'Goal'.
+unifyGoal :: Unifier -> Goal -> Goal
+unifyGoal u (PredGoal p) = PredGoal $ unifyPredicate u p
+unifyGoal u (CanUnify t1 t2) = CanUnify (unifyTerm u t1) (unifyTerm u t2)
+
 -- | Apply a 'Unifier' to all 'Predicate's in a 'HornClause'.
 unifyClause :: Unifier -> HornClause -> HornClause
-unifyClause u (HornClause p n) = HornClause (unifyPredicate u p) (map (unifyPredicate u) n)
+unifyClause u (HornClause p n) = HornClause (unifyPredicate u p) (map (unifyGoal u) n)
 
--- | Unify a goal with a 'HornClause' with a matching positive literal. Assuming the goal unifies
--- with the positive literal of the clause, the 'mgu' is applied to each negative literal and the
--- resulting disjunction is returned. Before unification, the 'HornClause' is renamed apart so that
--- it does not share any free variables with the goal.
-unifyGoal :: Monad m => Predicate -> HornClause -> UnificationT m (Maybe ([Predicate], Unifier))
-unifyGoal (Predicate name arg) c@(HornClause (Predicate name' _) _) =
+-- | Unify a 'Predicate' with a 'HornClause' with a matching positive literal. Assuming the
+-- predicate unifies with the positive literal of the clause, the 'mgu' is applied to each negative
+-- literal and the resulting disjunction is returned. Before unification, the 'HornClause' is
+-- renamed apart so that it does not share any free variables with the goal.
+unify :: Monad m => Predicate -> HornClause -> UnificationT m (Maybe ([Goal], Unifier))
+unify (Predicate name arg) c@(HornClause (Predicate name' _) _) =
   assert (name == name') $ do
     HornClause (Predicate _ arg') negs <- renameClause c
     case cast arg' >>= mgu arg of
       Nothing -> return Nothing
-      Just u -> return $ Just (map (unifyPredicate u) negs, u)
+      Just u -> return $ Just (map (unifyGoal u) negs, u)
 
 -- | The status of a variable in a given 'Unifier'. At any given time, a variable occupies a state
 -- represented by one of the constructors.
@@ -342,9 +349,17 @@ renameTerm (Constructor f t) = liftM (Constructor f) $ renameTerm t
 renamePredicate :: Monad m => Predicate -> RenamedT m Predicate
 renamePredicate (Predicate name arg) = liftM (Predicate name) $ renameTerm arg
 
+-- | Rename all of the variables in a goal.
+renameGoal :: Monad m => Goal -> RenamedT m Goal
+renameGoal (PredGoal p) = liftM PredGoal $ renamePredicate p
+renameGoal (CanUnify t1 t2) = do
+  t1' <- renameTerm t1
+  t2' <- renameTerm t2
+  return $ CanUnify t1' t2'
+
 -- | Rename all of the variables in a clause.
 renameClause :: Monad m => HornClause -> UnificationT m HornClause
 renameClause (HornClause p n) = evalStateT rename (Renamer M.empty)
   where rename = do rp <- renamePredicate p
-                    rn <- forM n renamePredicate
+                    rn <- forM n renameGoal
                     return $ HornClause rp rn

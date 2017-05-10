@@ -23,22 +23,22 @@ data Arities = A1 Char
 test = describeModule "Control.Hspl" $ do
   describe "predicate application" $
     it "should convert a String and a TermData to a Goal" $ do
-      execWriter ("foo" $$ 'a') `shouldBe` [Ast.predicate "foo" 'a']
+      execWriter ("foo" $$ 'a') `shouldBe` [Ast.PredGoal $ Ast.predicate "foo" 'a']
       execWriter ("foo" $$ (Var "x" :: Var String)) `shouldBe`
-        [Ast.predicate "foo" (Var "x" :: Var String)]
+        [Ast.PredGoal $ Ast.predicate "foo" (Var "x" :: Var String)]
       execWriter ("foo" $$ ('a', Var "x" :: Var Char)) `shouldBe`
-        [Ast.predicate "foo" ('a', Var "x" :: Var Char)]
+        [Ast.PredGoal $ Ast.predicate "foo" ('a', Var "x" :: Var Char)]
   describe "clause building" $ do
     it "should build a clause from a positive literal and a ClauseBuilder" $ do
       execWriter (def "foo" (Var "x" :: Var String) |- "bar" $$ (Var "x" :: Var String)) `shouldBe`
         [Ast.HornClause (Ast.predicate "foo" (Var "x" :: Var String))
-                        [Ast.predicate "bar" (Var "x" :: Var String)]]
+                        [Ast.PredGoal $ Ast.predicate "bar" (Var "x" :: Var String)]]
       execWriter (def "foo" (Var "x" :: Var String) |- do
                     "bar" $$ (Var "x" :: Var String)
                     "baz" $$ 'b') `shouldBe`
         [Ast.HornClause ( Ast.predicate "foo" (Var "x" :: Var String))
-                        [ Ast.predicate "bar" (Var "x" :: Var String)
-                        , Ast.predicate "baz" 'b'
+                        [ Ast.PredGoal $ Ast.predicate "bar" (Var "x" :: Var String)
+                        , Ast.PredGoal $ Ast.predicate "baz" 'b'
                         ]]
     it "should build unit clauses" $
       execWriter (def "foo" 'a') `shouldBe` [Ast.HornClause (Ast.predicate "foo" 'a') []]
@@ -51,7 +51,7 @@ test = describeModule "Control.Hspl" $ do
         Ast.addClauses [ Ast.HornClause (Ast.predicate "foo" 'a') []
                        , Ast.HornClause (Ast.predicate "bar" 'b') []
                        , Ast.HornClause (Ast.predicate "bar" (Var "x" :: Var Char))
-                                        [Ast.predicate "foo" (Var "x" :: Var Char)]
+                                        [Ast.PredGoal $ Ast.predicate "foo" (Var "x" :: Var Char)]
                        ] Ast.emptyProgram
   describe "program execution" $ do
     let program = hspl $ do
@@ -59,14 +59,14 @@ test = describeModule "Control.Hspl" $ do
                           def "human" "hypatia"
                           def "human" "fred"
     it "should obtain all solutions when requested" $
-      (program ? "mortal" $$ string "x") `shouldBe`
+      runHspl program "mortal" (string "x") `shouldBe`
         Solver.runHspl program (Ast.predicate "mortal" (Var "x" :: Var String))
     it "should retrieve only the first solution when requested" $
-      (program !? "mortal" $$ string "x") `shouldBe`
+      runHspl1 program "mortal" (string "x") `shouldBe`
         Just (head $ Solver.runHsplN 1 program (Ast.predicate "mortal" (Var "x" :: Var String)))
     it "should handle failure gracefully" $ do
-      (program ? "mortal" $$ "bob") `shouldBe` []
-      (program !? "mortal" $$ "bob") `shouldBe` Nothing
+      runHspl program "mortal" "bob" `shouldBe` []
+      runHspl1 program "mortal" "bob" `shouldBe` Nothing
 
   describe "typed variable constructors" $ do
     it "should contruct variables of various primitive types" $ do
@@ -138,3 +138,13 @@ test = describeModule "Control.Hspl" $ do
                    (Ast.toTerm 'a') (Ast.List
                    (Ast.toTerm 'b')
                    Ast.Nil)))
+
+  describe "the |=| predicate" $
+    it "should create a CanUnify goal from TermData" $ do
+      execWriter ('a' |=| 'b') `shouldBe` [Ast.CanUnify (Ast.toTerm 'a') (Ast.toTerm 'b')]
+      execWriter ('a' |=| char "x") `shouldBe`
+        [Ast.CanUnify (Ast.toTerm 'a') (Ast.toTerm (Var "x" :: Var Char))]
+      execWriter (char "x" |=| 'a') `shouldBe`
+        [Ast.CanUnify (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm 'a')]
+      execWriter (char "x" |=| char "y") `shouldBe`
+        [Ast.CanUnify (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm (Var "y" :: Var Char))]

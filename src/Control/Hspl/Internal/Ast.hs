@@ -33,6 +33,7 @@ module Control.Hspl.Internal.Ast (
   , Var (..)
   , Term (..)
   , Predicate (..)
+  , Goal (..)
   , HornClause (..)
   , Program
   -- * Functions for building a program
@@ -381,11 +382,13 @@ fromTerm (Variable _) = Nothing
 termType :: forall a. Typeable a => Term a -> TypeRep
 termType _ = typeOf (undefined :: a)
 
--- | A predicate is a truth-valued proposition about 0 or more terms. In this implementation, all
--- predicates are 1-ary -- they each take a single term. This is sufficient because the generic
--- nature of 'Term' means that the term could encode a product type such as a tuple, or (). Thus,
--- 0-ary predicates have the form @Predicate "foo" (Constant ())@ and n-ary predicates look like
--- @Predicate "bar" (Product ('a') (Product ...))@.
+-- | A predicate is a truth-valued proposition about 0 or more terms. The positive literal in a
+-- 'HornClause' is a predicate.
+--
+-- In this implementation, all predicates are 1-ary -- they each take a single term. This is
+-- sufficient because the generic nature of 'Term' means that the term could encode a product type
+-- such as a tuple, or (). Thus, 0-ary predicates have the form @Predicate "foo" (Constant ())@ and
+-- n-ary predicates look like @Predicate "bar" (Product ('a') (Product ...))@.
 data Predicate = forall f. Typeable f => Predicate String (Term f)
 
 instance Show Predicate where
@@ -405,10 +408,28 @@ predicate s a = Predicate s (toTerm a)
 predType :: Predicate -> TypeRep
 predType (Predicate _ t) = termType t
 
+-- | A 'Goal' is a proposition which can appear as a negative literal in a 'HornClause'.
+data Goal =
+            -- | A goal which succeeds if the 'Predicate' is true.
+            PredGoal Predicate
+            -- | A goal which succeeds if the two 'Term's can be unified.
+          | forall t. Typeable t => CanUnify (Term t) (Term t)
+
+instance Show Goal where
+  show (PredGoal p) = show p
+  show (CanUnify t1 t2) = show t1 ++ " |=| " ++ show t2
+
+instance Eq Goal where
+  (==) (PredGoal p) (PredGoal p') = p == p'
+  (==) (CanUnify t1 t2) (CanUnify t1' t2') = case cast (t1', t2') of
+    Just t' -> (t1, t2) == t'
+    Nothing -> False
+  (==) _ _ = False
+
 -- | A 'HornClause' is the logical disjunction of a single positive literal (a 'Predicate') and 0 or
---   or more negated literals (a literal which is true if and only if the corresponding 'Predicate'
---   is false).
-data HornClause = HornClause Predicate [Predicate]
+-- or more negated literals. In this implementation, the negative literals are 'Goal's, the
+-- conjunction of which implies the the positive literal.
+data HornClause = HornClause Predicate [Goal]
   deriving (Show, Eq)
 
 -- | Determine the HSPL type of a 'HornClause', which is defined to be the type of the positive

@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeFamilies #-} -- For equational constraints
+
 module SolverTest where
 
 import Testing
@@ -15,12 +17,12 @@ member1 = HornClause (predicate "member" ( Var "x" :: Var Int
 member2 = HornClause (predicate "member" ( Var "x" :: Var Int
                                          , List (toTerm (Var "_" :: Var Int))
                                                 (toTerm (Var "xs" :: Var [Int]))))
-                     [predicate "member" (Var "x" :: Var Int, Var "xs" :: Var [Int])]
+                     [PredGoal $ predicate "member" (Var "x" :: Var Int, Var "xs" :: Var [Int])]
 memberProgram = addClauses [member1, member2] emptyProgram
 
 -- All humans are mortal
 mortal = HornClause (predicate "mortal" (Var "x" :: Var String))
-                    [predicate "human" (Var "x" :: Var String)]
+                    [PredGoal $ predicate "human" (Var "x" :: Var String)]
 -- Hypatia is human
 human1 = HornClause (predicate "human" "hypatia") []
 -- So is Fred
@@ -31,8 +33,8 @@ syllogism = addClauses [mortal, human1, human2] emptyProgram
 example0 = addClause (HornClause (predicate "foo" ('a', 'b')) []) emptyProgram
 
 example1 = addClauses [ HornClause ( predicate "foo" (Var "x" :: Var Char, Var "y" :: Var Char))
-                                   [ predicate "bar" (Var "x" :: Var Char)
-                                   , predicate "baz" (Var "y" :: Var Char)
+                                   [ PredGoal $ predicate "bar" (Var "x" :: Var Char)
+                                   , PredGoal $ predicate "baz" (Var "y" :: Var Char)
                                    ]
                       , HornClause ( predicate "bar" 'a' ) []
                       , HornClause ( predicate "baz" 'b' ) []
@@ -42,15 +44,61 @@ noUnification = addClauses [HornClause (predicate "foo" (Var "x" :: Var Char)) [
 
 partialUnification = addClauses [HornClause (predicate "foo" (Var "x" :: Var Char, 'b')) []] emptyProgram
 
+canUnify = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var String))
+                                   [ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")]
+                      ] emptyProgram
+
 test = describeModule "Control.Hspl.Internal.Solver" $ do
+  describe "provePredicateWith" $ do
+    let runTest prog p c = observeAllSolver $ provePredicateWith (solverCont prog) prog p c
+    it "should prove an axiom" $
+      runTest example0
+        (predicate "foo" ('a', 'b'))
+        (HornClause (predicate "foo" ('a', 'b')) []) `shouldBe`
+        [(Axiom $ PredGoal $ predicate "foo" ('a', 'b'), mempty)]
+    it "should prove a result that follows from subgoals" $ do
+      let (proofs, us) = unzip $ runTest example1
+            (predicate "foo" (Var "x" :: Var Char, Var "y" :: Var Char))
+            (HornClause ( predicate "foo" (Var "x" :: Var Char, Var "y" :: Var Char))
+                        [ PredGoal $ predicate "bar" (Var "x" :: Var Char)
+                        , PredGoal $ predicate "baz" (Var "y" :: Var Char)
+                        ])
+      proofs `shouldBe`
+        [Proof ( PredGoal $ predicate "foo" ('a', 'b'))
+               [ Axiom $ PredGoal $ predicate "bar" 'a'
+               , Axiom $ PredGoal $ predicate "baz" 'b']]
+      length us `shouldBe` 1
+      head us `shouldSatisfy` (('a' // Var "x" <> 'b' // Var "y") `isSubunifierOf`)
+    it "should unify the goal with the clause" $ do
+      let (proofs, _) = unzip $ runTest example1
+            (predicate "foo" ('a', 'b'))
+            (HornClause ( predicate "foo" (Var "x" :: Var Char, Var "y" :: Var Char))
+                        [ PredGoal $ predicate "bar" (Var "x" :: Var Char)
+                        , PredGoal $ predicate "baz" (Var "y" :: Var Char)
+                        ])
+      proofs `shouldBe`
+        [Proof ( PredGoal $ predicate "foo" ('a', 'b'))
+               [ Axiom $ PredGoal $ predicate "bar" 'a'
+               , Axiom $ PredGoal $ predicate "baz" 'b']]
+      runTest example1 (predicate "bar" 'b') (HornClause (predicate "bar" 'a') []) `shouldBe` []
+  describe "proveUnifiableWith" $ do
+    let runTest prog t1 t2 = observeAllSolver $
+          proveUnifiableWith (solverCont prog) prog (toTerm t1) (toTerm t2)
+    it "should unify terms when possible" $ do
+      let (proofs, us) = unzip $ runTest canUnify (Var "x" :: Var String) "foo"
+      proofs `shouldBe` [Axiom $ CanUnify (toTerm "foo") (toTerm "foo")]
+      length us `shouldBe` 1
+      head us `shouldSatisfy` ("foo" // Var "x" `isSubunifierOf`)
+    it "should fail when terms cannot be unified" $
+      runTest canUnify "bar" "foo" `shouldBe` []
   describe "a proof search" $ do
     it "should traverse every branch of the proof" $ do
       let p = predicate "p" ()
       let q = predicate "q" ()
       let r = predicate "r" ()
-      let wideProof = (Proof p [Axiom p, Axiom  q, Axiom r], mempty)
-      let deepProof = (Proof p [Proof q [Axiom r]], mempty)
-      searchProof (Axiom p, mempty) p `shouldBe` [p]
+      let wideProof = (Proof (PredGoal p) [Axiom $ PredGoal p, Axiom $ PredGoal q, Axiom $ PredGoal r], mempty)
+      let deepProof = (Proof (PredGoal p) [Proof (PredGoal q) [Axiom $ PredGoal r]], mempty)
+      searchProof (Axiom $ PredGoal p, mempty) p `shouldBe` [p]
       searchProof wideProof p `shouldBe` [p, p]
       searchProof wideProof q `shouldBe` [q]
       searchProof wideProof r `shouldBe` [r]
@@ -58,51 +106,54 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       searchProof deepProof q `shouldBe` [q]
       searchProof deepProof r `shouldBe` [r]
     it "should find subgoals which unify with the query" $
-      searchProof (Proof (predicate "p" (Var "x" :: Var Char, 'b'))
-                         [Axiom $ predicate "p" ('a', Var "x" :: Var Char)], mempty)
+      searchProof (Proof (PredGoal $ predicate "p" (Var "x" :: Var Char, 'b'))
+                         [Axiom . PredGoal $ predicate "p" ('a', Var "x" :: Var Char)], mempty)
                   (predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char)) `shouldBePermutationOf`
         [predicate "p" (Var "x" :: Var Char, 'b'), predicate "p" ('a', Var "x" :: Var Char)]
   describe "the \"get solutions\" feature" $ do
     it "should return the theorem at the root of a proof tree" $ do
-      getSolution (Proof (predicate "p" ()) [ Proof (predicate "q" () ) [Axiom $ predicate "r" ()]
-                                            , Axiom (predicate "s" ())
-                                            ], mempty) `shouldBe`
+      getSolution (Proof ( PredGoal $ predicate "p" ())
+                         [ Proof (PredGoal $ predicate "q" () ) [Axiom $ PredGoal $ predicate "r" ()]
+                         , Axiom (PredGoal $ predicate "s" ())
+                         ], mempty) `shouldBe`
         predicate "p" ()
-      getSolution (Axiom $ predicate "p" (), mempty) `shouldBe` predicate "p" ()
+      getSolution (Axiom $ PredGoal $ predicate "p" (), mempty) `shouldBe` predicate "p" ()
     it "should get all solutions from a forest of proof tress" $
-      getAllSolutions [ (Axiom $ predicate "p" (), mempty)
-                      , (Axiom $ predicate "q" (), mempty)] `shouldBe`
+      getAllSolutions [ (Axiom $ PredGoal $ predicate "p" (), mempty)
+                      , (Axiom $ PredGoal $ predicate "q" (), mempty)] `shouldBe`
         [predicate "p" (), predicate "q" ()]
   describe "the \"get unifiers\" feature" $ do
     it "should return the unifier from a solution" $ do
       let u = toTerm 'a' // Var "x" <> toTerm True // Var "y"
-      getUnifier (Axiom $ predicate "foo" (), u) `shouldBe` u
+      getUnifier (Axiom $ PredGoal $ predicate "foo" (), u) `shouldBe` u
     it "should return all unifiers from a solution forest" $ do
       let u1 = toTerm 'a' // Var "x"
       let u2 = toTerm True // Var "y"
-      getAllUnifiers [(Axiom $ predicate "foo" (), u1), (Axiom $ predicate "bar" (), u2)] `shouldBe`
+      getAllUnifiers [ (Axiom $ PredGoal $ predicate "foo" (), u1)
+                     , (Axiom $ PredGoal $ predicate "bar" (), u2)] `shouldBe`
         [u1, u2]
   describe "the HSPL solver" $ do
     it "should return all proofs of the query" $ do
       let (proofs, _) = unzip $ runHspl syllogism (predicate "mortal" "hypatia")
-      proofs `shouldBe` [Proof (predicate "mortal" "hypatia") [Axiom (predicate "human" "hypatia")]]
+      proofs `shouldBe` [Proof (PredGoal $ predicate "mortal" "hypatia")
+                               [Axiom $ PredGoal $ predicate "human" "hypatia"]]
       let (proofs2, _) = unzip $ runHspl syllogism (predicate "mortal" (Var "x" :: Var String))
       proofs2 `shouldBePermutationOf`
-        [ Proof (predicate "mortal" "hypatia") [Axiom (predicate "human" "hypatia")]
-        , Proof (predicate "mortal" "fred") [Axiom (predicate "human" "fred")]
+        [ Proof (PredGoal $ predicate "mortal" "hypatia") [Axiom (PredGoal $ predicate "human" "hypatia")]
+        , Proof (PredGoal $ predicate "mortal" "fred") [Axiom (PredGoal $ predicate "human" "fred")]
         ]
     it "should return the requested number of proofs" $ do
       let (proofs, _) = unzip $ runHsplN 1 syllogism $ predicate "mortal" (Var "x" :: Var String)
       proofs `shouldBeSubsetOf`
-        [ Proof (predicate "mortal" "hypatia") [Axiom (predicate "human" "hypatia")]
-        , Proof (predicate "mortal" "fred") [Axiom (predicate "human" "fred")]
+        [ Proof (PredGoal $ predicate "mortal" "hypatia") [Axiom $ PredGoal $ predicate "human" "hypatia"]
+        , Proof (PredGoal $ predicate "mortal" "fred") [Axiom $ PredGoal $ predicate "human" "fred"]
         ]
       length proofs `shouldBe` 1
     it "should handle a proof with multiple subgoals" $ do
       let (proofs, _) = unzip $ runHspl example1 (predicate "foo" (Var "x" :: Var Char, Var "y" :: Var Char))
-      proofs `shouldBe` [Proof ( predicate "foo" ('a', 'b'))
-                               [ Axiom $ predicate "bar" 'a'
-                               , Axiom $ predicate "baz" 'b']
+      proofs `shouldBe` [Proof ( PredGoal $ predicate "foo" ('a', 'b'))
+                               [ Axiom $ PredGoal $ predicate "bar" 'a'
+                               , Axiom $ PredGoal $ predicate "baz" 'b']
                         ]
     it "should indicate when variables have been substituted" $ do
       let (_, us) = unzip $ runHspl memberProgram (predicate "member" (Var "x" :: Var Int, [1 :: Int]))
@@ -119,3 +170,12 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       let (_, us) = unzip $ runHspl example0 (predicate "foo" (Var "x" :: Var Char, Var "y" :: Var Char))
       length us `shouldBe` 1
       head us `shouldSatisfy` (('a' // Var "x" <> 'b' // Var "y") `isSubunifierOf`)
+    it "should prove a successful CanUnify" $ do
+      let fooProof = Proof (PredGoal $ predicate "isFoo" "foo")
+                           [Axiom $ CanUnify (toTerm "foo") (toTerm "foo")]
+      let (proofs, _) = unzip $ runHspl canUnify (predicate "isFoo" "foo")
+      proofs `shouldBe` [fooProof]
+      let (proofs', _) = unzip $ runHspl canUnify (predicate "isFoo" (Var "x" :: Var String))
+      proofs' `shouldBe` [fooProof]
+    it "should fail an unsuccessful CanUnify" $
+      runHspl canUnify (predicate "isFoo" "bar") `shouldBe` []

@@ -49,6 +49,11 @@ renamePredWithContext renamer fresh p =
   let u = evalStateT (renamePredicate p) renamer
   in evalState u fresh
 
+renameGoalWithContext :: Renamer -> Int -> Goal -> Goal
+renameGoalWithContext renamer fresh p =
+  let u = evalStateT (renameGoal p) renamer
+  in evalState u fresh
+
 doRenameClause :: HornClause -> HornClause
 doRenameClause c = runUnification $ renameClause c
 
@@ -262,6 +267,19 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       rename (predicate "foo" (Var "x" :: Var Bool)) `shouldBe` predicate "foo" (Fresh 0 :: Var Bool)
     it "should create fresh variables when the argument contains a variable not in the renamer" $
       rename (predicate "foo" (Var "q" :: Var Bool)) `shouldBe` predicate "foo" (Fresh 1 ::Var Bool)
+  describe "goal renaming" $ do
+    let rename = renameGoalWithContext (Renamer M.empty) 0
+    context "of predicate goals" $
+      it "should rename variables in the predicate" $
+        rename (PredGoal $ predicate "foo" (Var "x" :: Var Bool)) `shouldBe`
+          PredGoal (predicate "foo" (Fresh 0 :: Var Bool))
+    context "of CanUnify goals" $ do
+      it "should rename variables in each term" $
+        rename (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+          CanUnify (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 1 :: Var Char))
+      it "should rename variables in both terms the same" $
+        rename (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+          CanUnify (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
   describe "clause renaming" $ do
     let rename = doRenameClause
     it "should rename variables in the positive literal" $
@@ -269,29 +287,29 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         HornClause (predicate "foo" (Fresh 0 :: Var Bool)) []
     it "should rename variables in all negative literals" $ do
       rename (HornClause ( predicate "foo" ())
-                         [ predicate "bar" (Var "x" :: Var Bool)
-                         , predicate "baz" (Var "x" :: Var Bool)]) `shouldBe`
+                         [ PredGoal $ predicate "bar" (Var "x" :: Var Bool)
+                         , PredGoal $ predicate "baz" (Var "x" :: Var Bool)]) `shouldBe`
         HornClause ( predicate "foo" ())
-                   [ predicate "bar" (Fresh 0 :: Var Bool)
-                   , predicate "baz" (Fresh 0 :: Var Bool)]
+                   [ PredGoal $ predicate "bar" (Fresh 0 :: Var Bool)
+                   , PredGoal $ predicate "baz" (Fresh 0 :: Var Bool)]
       rename (HornClause ( predicate "foo" ())
-                         [ predicate "bar" (Var "x" :: Var Bool)
-                         , predicate "baz" (Var "q" :: Var Char)]) `shouldBe`
+                         [ PredGoal $ predicate "bar" (Var "x" :: Var Bool)
+                         , PredGoal $ predicate "baz" (Var "q" :: Var Char)]) `shouldBe`
         HornClause ( predicate "foo" ())
-                   [ predicate "bar" (Fresh 0 :: Var Bool)
-                   , predicate "baz" (Fresh 1 :: Var Char)]
+                   [ PredGoal $ predicate "bar" (Fresh 0 :: Var Bool)
+                   , PredGoal $ predicate "baz" (Fresh 1 :: Var Char)]
     it "should apply renamings generated in the positive literal to the negative literals" $
       rename (HornClause (predicate "foo" (Var "q" :: Var Char, Var "p" :: Var Char))
-                         [predicate "bar" (Var "p" :: Var Char)]) `shouldBe`
+                         [PredGoal $ predicate "bar" (Var "p" :: Var Char)]) `shouldBe`
         HornClause (predicate "foo" (Fresh 0 :: Var Char, Fresh 1 :: Var Char))
-                   [predicate "bar" (Fresh 1 :: Var Char)]
+                   [PredGoal $ predicate "bar" (Fresh 1 :: Var Char)]
     it "should apply renamings generated in a negative literal to all subsequent negative literals" $
       rename (HornClause ( predicate "foo" ())
-                         [ predicate "bar" (Var "q" :: Var Char, Var "p" :: Var Char)
-                         , predicate "baz" (Var "p" :: Var Char)]) `shouldBe`
+                         [ PredGoal $ predicate "bar" (Var "q" :: Var Char, Var "p" :: Var Char)
+                         , PredGoal $ predicate "baz" (Var "p" :: Var Char)]) `shouldBe`
         HornClause ( predicate "foo" ())
-                   [ predicate "bar" (Fresh 0 :: Var Char, Fresh 1 :: Var Char)
-                   , predicate "baz" (Fresh 1 :: Var Char)]
+                   [ PredGoal $ predicate "bar" (Fresh 0 :: Var Char, Fresh 1 :: Var Char)
+                   , PredGoal $ predicate "baz" (Fresh 1 :: Var Char)]
   describe "term unifier application" $ do
     context "to a variable" $ do
       it "should replace the variable if there is a corresponding substitution" $
@@ -336,6 +354,22 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       unifyPredicate mempty p `shouldBe` p
       unifyPredicate (toTerm 'a' // Var "y") p `shouldBe` p
       unifyPredicate (toTerm True // Var "x") p `shouldBe` p
+  describe "goal unifier application" $ do
+    context "to a predicate goal" $
+      it "should unify the predicate" $
+        unifyGoal (toTerm 'a' // Var "x") (PredGoal $ predicate "foo" (Var "x" :: Var Char)) `shouldBe`
+          PredGoal (predicate "foo" 'a')
+    context "to a CanUnify goal" $ do
+      it "should unify both terms" $
+        unifyGoal (toTerm 'a' // Var "x" <> toTerm 'b' // Var "y")
+          (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+          CanUnify (toTerm 'a') (toTerm 'b')
+      it "should leave either term unchanged when the unifier does not apply" $ do
+        let u = toTerm 'a' // Var "x"
+        unifyGoal u (CanUnify (toTerm (Var "y" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+          CanUnify (toTerm (Var "y" :: Var Char)) (toTerm 'a')
+        unifyGoal u (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+          CanUnify (toTerm 'a') (toTerm (Var "y" :: Var Char))
   describe "clause unifier application" $ do
     it "should unify the positive literal when the unifier applies" $
       unifyClause (toTerm 'a' // Var "x")
@@ -344,9 +378,11 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
     it "should unify the negative literals when the unifier applies" $
       unifyClause (toTerm 'a' // Var "x" <> toTerm True // Var "y")
                   (HornClause (predicate "foo" ())
-                              [ predicate "bar" (Var "x" :: Var Char)
-                              , predicate "baz" (Var "y" :: Var Bool)]) `shouldBe`
-        HornClause (predicate "foo" ()) [predicate "bar" 'a', predicate "baz" True]
+                              [ PredGoal $ predicate "bar" (Var "x" :: Var Char)
+                              , CanUnify (toTerm (Var "y" :: Var Bool)) (toTerm False)]) `shouldBe`
+        HornClause ( predicate "foo" ())
+                   [ PredGoal $ predicate "bar" 'a'
+                   , CanUnify (toTerm True) (toTerm False)]
     it "should leave the positive literal unchanged when the unifier does not apply" $ do
       let c = HornClause (predicate "foo" (Var "x" :: Var Char)) []
       unifyClause mempty c `shouldBe` c
@@ -354,33 +390,47 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       unifyClause (toTerm True // Var "x") c `shouldBe` c
     it "should leave any of the negative literals unchanged when the unifier does not apply" $ do
       let c = HornClause ( predicate "foo" ())
-                         [ predicate "bar" (Var "x" :: Var Bool)
-                         , predicate "baz" (Var "y" :: Var Char)]
+                         [ PredGoal $ predicate "bar" (Var "x" :: Var Bool)
+                         , PredGoal $ predicate "baz" (Var "y" :: Var Char)
+                         , CanUnify (toTerm True) (toTerm (Var "q" :: Var Bool))]
       unifyClause mempty c `shouldBe` c
       unifyClause (toTerm True // Var "x") c `shouldBe`
-        HornClause (predicate "foo" ()) [predicate "bar" True, predicate "baz" (Var "y" :: Var Char)]
+        HornClause ( predicate "foo" ())
+                   [ PredGoal $ predicate "bar" True
+                   , PredGoal $ predicate "baz" (Var "y" :: Var Char)
+                   , CanUnify (toTerm True) (toTerm (Var "q" :: Var Bool))]
       unifyClause (toTerm 'a' // Var "y") c `shouldBe`
-        HornClause (predicate "foo" ()) [predicate "bar" (Var "x" :: Var Bool), predicate "baz" 'a']
+        HornClause ( predicate "foo" ())
+                   [ PredGoal $ predicate "bar" (Var "x" :: Var Bool)
+                   , PredGoal $ predicate "baz" 'a'
+                   , CanUnify (toTerm True) (toTerm (Var "q" :: Var Bool))]
       unifyClause (toTerm True // Var "z") c `shouldBe` c
-  describe "goal unification" $ do
-    let unify p c = runUnification (unifyGoal p c)
+  describe "full unification" $ do
+    let runTest p c = runUnification (unify p c)
     it "should rename variables in the clause" $
-      unify (predicate "foo" ())
-            (HornClause (predicate "foo" ()) [predicate "bar" (Var "x" :: Var Bool)]) `shouldBe`
-        Just ([predicate "bar" (Fresh 0 :: Var Bool)], mempty)
+      runTest (predicate "foo" ())
+            (HornClause ( predicate "foo" ())
+                        [ PredGoal $ predicate "bar" (Var "x" :: Var Bool)
+                        , CanUnify (toTerm 'a') (toTerm (Var "y" :: Var Char))]) `shouldBe`
+        Just ([ PredGoal $ predicate "bar" (Fresh 0 :: Var Bool)
+              , CanUnify (toTerm 'a') (toTerm (Fresh 1 :: Var Char))], mempty)
     it "should return any unifications made" $
-      unify (predicate "foo" ('a', Var "x" :: Var Bool))
+      runTest (predicate "foo" ('a', Var "x" :: Var Bool))
             (HornClause (predicate "foo" (Var "y" :: Var Char, True)) []) `shouldBe`
         Just ([], toTerm 'a' // Fresh 0 <> toTerm True // Var "x")
     it "should apply the unifier to variables in the clause" $
-      unify (predicate "foo" 'a')
-            (HornClause (predicate "foo" (Var "x" :: Var Char))
-                        [predicate "bar" (Var "x" :: Var Char)]) `shouldBe`
-        Just ([predicate "bar" 'a'], toTerm 'a' // Fresh 0)
+      runTest (predicate "foo" 'a')
+            (HornClause ( predicate "foo" (Var "x" :: Var Char))
+                        [ PredGoal $ predicate "bar" (Var "x" :: Var Char)
+                        , CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))]) `shouldBe`
+        Just ([ PredGoal $ predicate "bar" 'a'
+              , CanUnify (toTerm 'a') (toTerm 'a')], toTerm 'a' // Fresh 0)
     it "should not apply the unifier to renamed variables" $
-      unify (predicate "foo" (Var "x" :: Var Char))
-            (HornClause (predicate "foo" 'a')
-                        [predicate "bar" (Var "x" :: Var Char)]) `shouldBe`
-        Just ([predicate "bar" (Fresh 0 :: Var Char)], toTerm 'a' // Var "x")
+      runTest (predicate "foo" (Var "x" :: Var Char))
+            (HornClause ( predicate "foo" 'a')
+                        [ PredGoal $ predicate "bar" (Var "x" :: Var Char)
+                        , CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))]) `shouldBe`
+        Just ([ PredGoal $ predicate "bar" (Fresh 0 :: Var Char)
+              , CanUnify (toTerm 'a') (toTerm (Fresh 0 :: Var Char))], toTerm 'a' // Var "x")
     it "should fail when the goal does not unify with the clause" $
-      unify (predicate "foo" 'a') (HornClause (predicate "foo" 'b') []) `shouldBe` Nothing
+      runTest (predicate "foo" 'a') (HornClause (predicate "foo" 'b') []) `shouldBe` Nothing

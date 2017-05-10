@@ -11,7 +11,7 @@ foo = predicate "foo" ()
 bar = predicate "bar" True
 baz = predicate "baz" (True, ())
 
-ex1 = addClause (HornClause foo [bar, baz]) emptyProgram
+ex1 = addClause (HornClause foo [PredGoal bar, PredGoal baz]) emptyProgram
 
 predNamed x = predicate x ()
 
@@ -172,22 +172,33 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         predicate "foo" True `shouldNotEqual` predicate "bar" True
         predicate "foo" (True, ()) `shouldNotEqual` predicate "bar" (True, ())
     context "of different types" $
-      it "should compare unequal" $ do
+      it "should compare unequal" $
         predicate "foo" True `shouldNotEqual` predicate "foo" (True, False)
-        -- predicate "foo" (Tree True (Leaf True) (Leaf False)) `shouldNotEqual`
-        --   predicate "foo" (PTree True (PLeaf True) (PLeaf False))
-        -- predicate "foo" U `shouldNotEqual` predicate "foo" PU
+  describe "CanUnify goals" $ do
+    context "of the same type" $
+      it "should compare according to the arguments" $ do
+        CanUnify (toTerm 'a') (toTerm 'b') `shouldEqual` CanUnify (toTerm 'a') (toTerm 'b')
+        CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldEqual`
+          CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'b')
+        CanUnify (toTerm 'a') (toTerm 'b') `shouldNotEqual` CanUnify (toTerm 'a') (toTerm 'a')
+        CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldNotEqual`
+          CanUnify (toTerm (Var "y" :: Var Char)) (toTerm 'b')
+    context "of different types" $
+      it "should compare unequal" $ do
+        CanUnify (toTerm 'a') (toTerm 'b') `shouldNotEqual` CanUnify (toTerm True) (toTerm False)
+        CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
+          CanUnify (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))
   describe "clauses" $ do
     it "should have type corresponding to the type of the positive literal" $ do
       clauseType (HornClause foo []) `shouldBe` predType foo
-      clauseType (HornClause foo [predicate "P" ()]) `shouldBe` predType foo
-      clauseType (HornClause foo [predicate "P" (), predicate "Q" (True, 'a')])
+      clauseType (HornClause foo [PredGoal $ predicate "P" ()]) `shouldBe` predType foo
+      clauseType (HornClause foo [PredGoal $ predicate "P" (), PredGoal $ predicate "Q" (True, 'a')])
         `shouldBe` predType foo
     it "should compare according to the literals" $ do
       HornClause foo [] `shouldEqual` HornClause foo []
-      HornClause foo [bar, baz] `shouldEqual` HornClause foo [bar, baz]
-      HornClause foo [] `shouldNotEqual` HornClause foo [bar]
-      HornClause foo [bar, baz] `shouldNotEqual` HornClause bar [foo, baz]
+      HornClause foo [PredGoal bar, PredGoal baz] `shouldEqual` HornClause foo [PredGoal bar, PredGoal baz]
+      HornClause foo [] `shouldNotEqual` HornClause foo [PredGoal bar]
+      HornClause foo [PredGoal bar, PredGoal baz] `shouldNotEqual` HornClause bar [PredGoal foo, PredGoal baz]
       HornClause (predicate "P" ()) [] `shouldNotEqual` HornClause (predicate "P" True) []
   describe "the program builder" $ do
     it "should add a clause to a new predicate" $ do
@@ -197,7 +208,7 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       findClauses p m `shouldBe` [c]
     it "should add additional clauses to existing predicates" $ do
       let p = foo
-      let c = HornClause p [predicate "bar" ()]
+      let c = HornClause p [CanUnify (toTerm 'a') (toTerm 'b')]
       let cs = findClauses p ex1
       cs `shouldNotBe` [] -- Otherwise this test is broken
       let m = addClause c ex1

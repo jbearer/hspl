@@ -17,7 +17,7 @@ import Control.Hspl
 -- | A classic example of modus ponens: all humans are mortal, and Hypatia is human. Therefore,
 -- Hypatia is mortal.
 --
--- >>> getAllSolutions $ syllogism ? "mortal" $$ (string "x")
+-- >>> getAllSolutions $ runHspl syllogism "mortal" (string "x")
 -- [mortal("hypatia")]
 syllogism :: Hspl
 syllogism = hspl $ do
@@ -31,19 +31,18 @@ data Widget = Gibber Int
 
 -- | A somewhat contrived example showcasing the usage of ADT constructors in HSPL pattern matching.
 --
--- >>> getAllSolutions $ adts ? "goodWidget" $$ (Wuzzle |$| string "x")
+-- >>> getAllSolutions $ runHspl adts "goodWidget" (Wuzzle |$| string "x")
 -- [goodWidget(Wuzzle "foo")]
 --
--- >>> getAllSolutions $ adts ? "goodWidget" $$ (Gibber |$| int "x")
+-- >>> getAllSolutions $ runHspl adts "goodWidget" (Gibber |$| int "x")
 -- []
 adts :: Hspl
-adts = hspl $ do
-  def "goodName" "foo"
-  def "goodWidget" (Wuzzle |$| string "x") |- "goodName" $$ string "x"
+adts = hspl $
+  def "goodWidget" (Wuzzle |$| string "x") |- auto "x" |=| "foo"
 
 -- | A simple example illustrating the use of lists in HSPL.
 --
--- >>> getAllSolutions $ lists ? "member" $$ (int "x", [1, 2, 3] :: [Int])
+-- >>> getAllSolutions $ runHspl lists "member" (int "x", [1, 2, 3] :: [Int])
 -- [member(3, 1, 2, 3),member(2, 1, 2, 3),member(1, 1, 2, 3)]
 lists :: Hspl
 lists = hspl $ do

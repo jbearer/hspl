@@ -1,4 +1,5 @@
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE RankNTypes #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -15,8 +16,7 @@ exact information and level of detail that the client is interested in.
 -}
 module Control.Hspl.Internal.Solver (
   -- * Proofs
-    Goal
-  , Proof (..)
+    Proof (..)
   , ProofResult
   , searchProof
   , getUnifier
@@ -37,8 +37,9 @@ module Control.Hspl.Internal.Solver (
   -- ** The proof-generating algorithm
   -- $prover
   , SolverCont (..)
-  , getMatchingClause
-  , getSubGoals
+  , solverCont
+  , provePredicateWith
+  , proveUnifiableWith
   , proveWith
   , prove
   ) where
@@ -51,14 +52,10 @@ import Data.Typeable
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Unification
 
--- | The statement that the solver is trying to prove. The solver will prove many goals in the
--- course of a single proof, as each goal in turn follows from some number of subgoals.
-type Goal = Predicate
-
--- | A resolution proof is a tree where each node is a goal (a 'Predicate'). The root of the tree is
--- the statement to be proven. Each node follows logically from its children. A leaf, since it has
--- no children, stands on its own as a true statement -- in other words, leaves represent axioms.
-data Proof = Axiom Predicate | Proof Predicate [Proof]
+-- | A resolution proof is a tree where each node is a 'Goal'. The root of the tree is the statement
+-- to be proven. Each node follows logically from its children. A leaf, since it has no children,
+-- stands on its own as a true statement -- in other words, leaves represent axioms.
+data Proof = Axiom Goal | Proof Goal [Proof]
   deriving (Show, Eq)
 
 -- | The output of the solver. This is meant to be treated as an opaque data type which can be
@@ -66,11 +63,13 @@ data Proof = Axiom Predicate | Proof Predicate [Proof]
 type ProofResult = (Proof, Unifier)
 
 -- | Return the list of all goals or subgoals in the given result which unify with a particular goal.
-searchProof :: ProofResult -> Goal -> [Goal]
+searchProof :: ProofResult -> Predicate -> [Predicate]
 searchProof (proof, _) = searchProof' proof
   where searchProof' pr g = case pr of
-                              Proof p ps -> [p | match p g] ++ recurse ps g
-                              Axiom p -> [p | match p g]
+                              Proof (PredGoal p) ps -> [p | match p g] ++ recurse ps g
+                              Proof _ ps -> recurse ps g
+                              Axiom (PredGoal p) -> [p | match p g]
+                              Axiom _ -> []
         recurse ps g' = concatMap (\p' -> searchProof' p' g') ps
         match (Predicate name arg) (Predicate name' arg')
           | name == name' = isJust $ cast arg >>= mgu arg'
@@ -91,12 +90,15 @@ getAllUnifiers = map getUnifier
 
 -- | Get the theorem which follows from a 'Proof'. This will always be the predicate at the root of a
 -- proof tree.
-getSolution :: ProofResult -> Goal
-getSolution (Proof p _, _) = p
-getSolution (Axiom p, _) = p
+getSolution :: ProofResult -> Predicate
+getSolution (proof, _) = case proof of
+  Proof p _ -> getSol p
+  Axiom p -> getSol p
+  where getSol (PredGoal p) = p
+        getSol _ = error "Top-level goal must be a predicate."
 
 -- | Get the set of theorems which were proven by each 'Proof' tree in a forest.
-getAllSolutions :: [ProofResult] -> [Goal]
+getAllSolutions :: [ProofResult] -> [Predicate]
 getAllSolutions = map getSolution
 
 -- | Attempt to prove the given predicate from the clauses in the given 'Program'. This function
@@ -104,12 +106,12 @@ getAllSolutions = map getSolution
 -- result is @[]@. Otherwise, the contents of the resulting list represent various alternative ways
 -- of proving the theorem. If there are variables in the goal, they may unify with different values
 -- in each alternative proof.
-runHspl :: Program -> Goal -> [ProofResult]
-runHspl p g = observeAllSolver $ prove p g
+runHspl :: Program -> Predicate -> [ProofResult]
+runHspl p g = observeAllSolver $ prove p (PredGoal g)
 
 -- | Like 'runHspl', but return at most the given number of proofs.
-runHsplN :: Int -> Program -> Goal -> [ProofResult]
-runHsplN n p g = observeManySolver n $ prove p g
+runHsplN :: Int -> Program -> Predicate -> [ProofResult]
+runHsplN n p g = observeManySolver n $ prove p (PredGoal g)
 
 -- | The monad which defines the backtracking control flow of the solver.
 type SolverT m = LogicT (UnificationT m)
@@ -139,104 +141,102 @@ solverLift :: Monad m => m a -> SolverT m a
 solverLift = lift . lift
 
 {- $prover
-The basic algorithm is fairly simple. We maintain a set of goals which need to be proven.
-Initially, this set consists only of the client's input goal. While the set is not empty, we
-remove a goal and find all clauses in the program whose positive literal is the same predicate
-(name and type) as the current goal. For each such alternative, we attempt to unify the goal
-with the positive literal. If unification succeeds, we apply the unifier to each of the
-negative literals of the clause and add these literals to the set of goals. If unification
-fails or if there are no matching clauses, the goal fails and we backtrack until we reach a
-choice point, at which we try the next alternative goal. If a goal fails and all choice-points
-have been exhaustively tried, then the whole proof fails. If a goal succeeds and there are
-untried choice-points, we backtrack and generate additional proofs if possible.
+The basic algorithm is fairly simple. We maintain a set of goals which need to be proven. Initially,
+this set consists only of the client's input goal. While the set is not empty, we remove a goal and
+find all clauses in the program whose positive literal is the same predicate (name and type) as the
+current goal. For each such alternative, we attempt to unify the goal with the positive literal. If
+unification succeeds, we apply the unifier to each of the negative literals of the clause and add
+these literals to the set of goals. If unification fails or if there are no matching clauses, the
+goal fails and we backtrack until we reach a choice point, at which we try the next alternative
+goal. If a goal fails and all choice-points have been exhaustively tried, then the whole proof
+fails. If a goal succeeds and there are untried choice-points, we backtrack and generate additional
+proofs if possible.
 
-There is an additional layer of complexity here. We do not proceed from one step of the
-algorithm to the next directly. Instead, at each intermediate step, we invoke one of the
-continuation functions defined in 'SolverCont'. With the right choice of continuations (see
-'prove') we can move from one step to the next seamlessly, running the basic algorithm with no
-overhead. However, these continuations make it possible to hook additional behavior into
-crucial events in the algorithm, which make possible things like the interactive debugger in
-"Control.Hspl.Internal.Debugger".
+Non-predicate goals have different semantics. For 'CanUnify' goals, instead of looking for matching
+clauses and adding new subgoals, we simply try to find a unifier for the relevant terms and succeed
+or fail accordingly.
+
+There is an additional layer of complexity here. We do not proceed from one step of the algorithm to
+the next directly. Instead, at each intermediate step, we invoke one of the continuation functions
+defined in 'SolverCont'. With the right choice of continuations (see 'solverCont') we can move from
+one step to the next seamlessly, running the basic algorithm with no overhead. However, these
+continuations make it possible to hook additional behavior into crucial events in the algorithm,
+which make possible things like the interactive debugger in "Control.Hspl.Internal.Debugger".
 -}
 
 -- | Unified structure containing all of the continuations which may be invoked by the prover
 -- algorithm.
 data SolverCont (m :: * -> *) =
   SolverCont {
-               -- | Continuation to be invoked when a new goal or subgoal is encountered. This
-               -- function should return a computation which generates proofs of the goal. To run
-               -- the zero-overhead version of the algorithm, use 'prove'.
-               beginGoal :: Program -> Goal -> SolverT m ProofResult
-               -- | Continuation to be invoked when trying the first clause whose positive literal
-               -- matches the current goal. This function should return a computation which yields
-               -- the clause to be tried. Usually, this can just be 'return'.
-             , firstAlternative :: HornClause -> SolverT m HornClause
-               -- | Continuation to be invoked when trying additional matching clauses. The zero-
-               -- overhead version is 'return'.
-             , nextAlternative :: HornClause -> SolverT m HornClause
-               -- | Continuation to be invoked when a goal fails because there are not matching
+               -- | Continuation to be invoked when attempting to prove a predicate using the first
+               -- alternative (the first 'HornClause' with a matching positive literal). The
+               -- resulting computation in the 'SolverT' monad should either fail with 'mzero' or
+               -- produce a proof of the predicate. The zero-overhead version of this continuation
+               -- is 'provePredicateWith'.
+               tryPredicate :: Predicate -> HornClause -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove a predicate using subsequent
+               -- alternatives. This continuation should have the same semantics as 'tryPredicate',
+               -- modulo effects in the underlying monad. The zero-overhead version of this
+               -- continuation is 'provePredicateWith'.
+             , retryPredicate :: Predicate -> HornClause -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove that two terms can be
+               -- unified. THe resulting computation in the 'SolverT' monad should either fail with
+               -- 'mzero' or produce a unifier and a trivial proof of the unified terms. The zero-
+               -- overhead version of this continuation is 'proveUnifiableWith'.
+             , tryUnifiable :: forall a. Typeable a => Term a -> Term a -> SolverT m ProofResult
+               -- | Continuation to be invoked when a goal fails because there are no matching
                -- clauses. This computation should result in 'mzero', but may perform effects in the
                -- underlying monad first.
-             , failUnknownPred :: SolverT m HornClause
-               -- | Continuation to be invoked when a goal fails because it did not unify with the
-               -- current alternative. This computation should result in 'mzero', but may perform
-               -- effects in the underlying monad first.
-             , failUnification :: SolverT m ([Goal], Unifier)
-               -- | Continuation to be invoked when a goal succeeds. This function should return a
-               -- computation which yields the generated proof. Usually, this can just be 'return'.
-             , exit :: ProofResult -> SolverT m ProofResult
+             , errorUnknownPred :: Predicate -> SolverT m ProofResult
              }
+
+-- | Continuations which, when passed to 'proveWith', will allow statements in the given program to
+-- be proven with no additional behavior and no interprative overhead.
+solverCont :: Program -> SolverCont Identity
+solverCont p = SolverCont { tryPredicate = provePredicateWith (solverCont p) p
+                          , retryPredicate = provePredicateWith (solverCont p) p
+                          , tryUnifiable = proveUnifiableWith (solverCont p) p
+                          , errorUnknownPred = const mzero
+                          }
 
 -- | Run the minimal, zero-overhead version of the algorithm by supplying the appropriate
 -- continuations to 'proveWith'.
 prove :: Program -> Goal -> Solver ProofResult
-prove = proveWith SolverCont { beginGoal = prove
-                             , firstAlternative = return
-                             , nextAlternative = return
-                             , failUnknownPred = mzero
-                             , failUnification = mzero
-                             , exit = return
-                             }
+prove p = proveWith (solverCont p) p
 
+-- | Produce a proof of the predicate from the given 'HornClause'. The clause's positive literal
+-- should match with the predicate; that is, it should have the same name and type. If the positive
+-- literal also unifies with the predicate, then the unifier is applied to each negative literal,
+-- and each unified negative literal is proven as a subgoal using the given continuations.
+provePredicateWith :: Monad m =>
+                      SolverCont m -> Program -> Predicate -> HornClause -> SolverT m ProofResult
+provePredicateWith cont program p c = do
+  (gs, u) <- getSubGoals p c
+  case gs of
+    [] -> return (Axiom $ unifyGoal u (PredGoal p), u)
+    _ -> do subs <- forM gs (proveWith cont program)
+            let (subProofs, subUs) = unzip subs
+            let netU = netUnifier $ u : subUs
+            return (Proof (unifyGoal netU (PredGoal p)) subProofs, netU)
+  where getSubGoals p' c' = do mgs <- lift $ unify p' c'
+                               case mgs of
+                                 Just gs -> return gs
+                                 Nothing -> mzero
 
--- | Nondeterminstically choose a clause with a literal which clashes with the given goal. In other
--- words, select a clause whose positive literal is an application of the same predicate as the
--- goal. This function outputs a disjunction of clauses in the 'Solver' monad, and so subsequent
--- computations will backtrack over all matching clauses.
---
--- If there are no matching clauses, this function will invoke the 'failUnknownPred' continuation
--- in the given 'SolverCont'. Otherwise, it will invoke 'firstAlternative' for the first matching
--- clause and 'nextAlternative' for each additional match.
-getMatchingClause :: Monad m => SolverCont m -> Program -> Goal -> SolverT m HornClause
-getMatchingClause cont p g = case findClauses g p of
-  [] -> failUnknownPred cont
-  c:cs -> firstAlternative cont c `mplus` msum (map (nextAlternative cont) cs)
-
--- | Attempt to unify the goal with the positive literal of the given clause and return the
--- resulting subgoals. The subgoals are the negative literals of the clause after applying the
--- unifier.
---
--- If unification succeeds, this function simply returns the resulting subgoals. Otherwise, it will
--- invoke the 'failUnification' continuation in the given 'SolverCont'.
-getSubGoals :: Monad m => SolverCont m -> Goal -> HornClause -> SolverT m ([Goal], Unifier)
-getSubGoals cont g c = do
-  mgs <- lift $ unifyGoal g c
-  case mgs of
-    Just gs -> return gs
-    Nothing -> failUnification cont
+-- | Check if the given terms can unify. If so, produce the unifier and a trivial proof of their
+-- unifiability. Use the given continuations when proving subgoals
+proveUnifiableWith :: (Typeable a, Monad m) =>
+                        SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
+proveUnifiableWith _ _ t1 t2 = case mgu t1 t2 of
+  Just u -> return (Axiom $ unifyGoal u $ CanUnify t1 t2, u)
+  Nothing -> mzero
 
 -- | Produce a proof of the goal from the clauses in the program. This function will either fail,
 -- or backtrack over all possible proofs. It will invoke the appropriate continuations in the given
 -- 'SolverCont' whenever a relevant event occurs during the course of the proof.
 proveWith :: Monad m => SolverCont m -> Program -> Goal -> SolverT m ProofResult
-proveWith cont p g = do
-  c <- getMatchingClause cont p g
-  (gs, u) <- getSubGoals cont g c
-  case gs of
-    [] -> do let unifiedGoal = unifyPredicate u g
-             exit cont (Axiom unifiedGoal, u)
-    _ -> do subs <- forM gs (beginGoal cont p)
-            let (subProofs, subUs) = unzip subs
-            let netU = netUnifier $ u : subUs
-            let unifiedGoal = unifyPredicate netU g
-            exit cont (Proof unifiedGoal subProofs, netU)
+proveWith cont program g = case g of
+  PredGoal p -> case findClauses p program of
+    [] -> errorUnknownPred cont p
+    c:cs -> tryPredicate cont p c `mplus` msum (map (retryPredicate cont p) cs)
+  CanUnify t1 t2 -> tryUnifiable cont t1 t2
