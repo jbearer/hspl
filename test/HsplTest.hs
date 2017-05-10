@@ -23,31 +23,31 @@ data Arities = A1 Char
 test = describeModule "Control.Hspl" $ do
   describe "predicate application" $
     it "should convert a String and a TermData to a Goal" $ do
-      execWriter ("foo" $$ 'a') `shouldBe` [Ast.PredGoal $ Ast.predicate "foo" 'a']
-      execWriter ("foo" $$ (Var "x" :: Var String)) `shouldBe`
+      execWriter ("foo"? 'a') `shouldBe` [Ast.PredGoal $ Ast.predicate "foo" 'a']
+      execWriter ("foo"? (Var "x" :: Var String)) `shouldBe`
         [Ast.PredGoal $ Ast.predicate "foo" (Var "x" :: Var String)]
-      execWriter ("foo" $$ ('a', Var "x" :: Var Char)) `shouldBe`
+      execWriter ("foo"? ('a', Var "x" :: Var Char)) `shouldBe`
         [Ast.PredGoal $ Ast.predicate "foo" ('a', Var "x" :: Var Char)]
   describe "clause building" $ do
     it "should build a clause from a positive literal and a ClauseBuilder" $ do
-      execWriter (def "foo" (Var "x" :: Var String) |- "bar" $$ (Var "x" :: Var String)) `shouldBe`
+      execWriter (def "foo"? (Var "x" :: Var String) |- "bar"? (Var "x" :: Var String)) `shouldBe`
         [Ast.HornClause (Ast.predicate "foo" (Var "x" :: Var String))
                         [Ast.PredGoal $ Ast.predicate "bar" (Var "x" :: Var String)]]
-      execWriter (def "foo" (Var "x" :: Var String) |- do
-                    "bar" $$ (Var "x" :: Var String)
-                    "baz" $$ 'b') `shouldBe`
+      execWriter (def "foo"? (Var "x" :: Var String) |- do
+                    "bar"? (Var "x" :: Var String)
+                    "baz"? 'b') `shouldBe`
         [Ast.HornClause ( Ast.predicate "foo" (Var "x" :: Var String))
                         [ Ast.PredGoal $ Ast.predicate "bar" (Var "x" :: Var String)
                         , Ast.PredGoal $ Ast.predicate "baz" 'b'
                         ]]
     it "should build unit clauses" $
-      execWriter (def "foo" 'a') `shouldBe` [Ast.HornClause (Ast.predicate "foo" 'a') []]
+      execWriter (def "foo"? 'a') `shouldBe` [Ast.HornClause (Ast.predicate "foo" 'a') []]
   describe "program building" $
     it "should convert a sequence of clause builders to an HSPL program" $
       hspl (do
-        def "foo" 'a'
-        def "bar" 'b'
-        def "bar" (Var "x" :: Var Char) |- "foo" $$ (Var "x" :: Var Char)) `shouldBe`
+        def "foo"? 'a'
+        def "bar"? 'b'
+        def "bar"? (Var "x" :: Var Char) |- "foo"? (Var "x" :: Var Char)) `shouldBe`
         Ast.addClauses [ Ast.HornClause (Ast.predicate "foo" 'a') []
                        , Ast.HornClause (Ast.predicate "bar" 'b') []
                        , Ast.HornClause (Ast.predicate "bar" (Var "x" :: Var Char))
@@ -55,18 +55,18 @@ test = describeModule "Control.Hspl" $ do
                        ] Ast.emptyProgram
   describe "program execution" $ do
     let program = hspl $ do
-                          def "mortal" (string "x") |- "human" $$ string "x"
-                          def "human" "hypatia"
-                          def "human" "fred"
+                          def "mortal"? string "x" |- "human"? string "x"
+                          def "human"? "hypatia"
+                          def "human"? "fred"
     it "should obtain all solutions when requested" $
-      runHspl program "mortal" (string "x") `shouldBe`
+      runHspl program ("mortal"? string "x") `shouldBe`
         Solver.runHspl program (Ast.predicate "mortal" (Var "x" :: Var String))
     it "should retrieve only the first solution when requested" $
-      runHspl1 program "mortal" (string "x") `shouldBe`
+      runHspl1 program ("mortal"? string "x") `shouldBe`
         Just (head $ Solver.runHsplN 1 program (Ast.predicate "mortal" (Var "x" :: Var String)))
     it "should handle failure gracefully" $ do
-      runHspl program "mortal" "bob" `shouldBe` []
-      runHspl1 program "mortal" "bob" `shouldBe` Nothing
+      runHspl program ("mortal"? "bob") `shouldBe` []
+      runHspl1 program ("mortal"? "bob") `shouldBe` Nothing
 
   describe "typed variable constructors" $ do
     it "should contruct variables of various primitive types" $ do
@@ -90,25 +90,25 @@ test = describeModule "Control.Hspl" $ do
 
   describe "ADT term construction" $ do
     it "should work with constructors of all arities" $ do
-      A1 |$| 'a' `shouldBe` Ast.Constructor A1 (Ast.toTerm 'a')
-      A2 |$| ('a', 'b') `shouldBe` Ast.Constructor (uncurry A2) (Ast.toTerm ('a', 'b'))
-      A3 |$| ('a', 'b', 'c') `shouldBe`
+      A1 $$ 'a' `shouldBe` Ast.Constructor A1 (Ast.toTerm 'a')
+      A2 $$ ('a', 'b') `shouldBe` Ast.Constructor (uncurry A2) (Ast.toTerm ('a', 'b'))
+      A3 $$ ('a', 'b', 'c') `shouldBe`
         Ast.Constructor (uncurryN A3) (Ast.toTerm ('a', 'b', 'c'))
-      A4 |$| ('a', 'b', 'c', 'd') `shouldBe`
+      A4 $$ ('a', 'b', 'c', 'd') `shouldBe`
         Ast.Constructor (uncurryN A4) (Ast.toTerm ('a', 'b', 'c', 'd'))
-      A5 |$| ('a', 'b', 'c', 'd', 'e') `shouldBe`
+      A5 $$ ('a', 'b', 'c', 'd', 'e') `shouldBe`
         Ast.Constructor (uncurryN A5) (Ast.toTerm ('a', 'b', 'c', 'd', 'e'))
-      A6 |$| ('a', 'b', 'c', 'd', 'e', 'f') `shouldBe`
+      A6 $$ ('a', 'b', 'c', 'd', 'e', 'f') `shouldBe`
         Ast.Constructor (uncurryN A6) (Ast.toTerm ('a', 'b', 'c', 'd', 'e', 'f'))
-      A7 |$| ('a', 'b', 'c', 'd', 'e', 'f', 'g') `shouldBe`
+      A7 $$ ('a', 'b', 'c', 'd', 'e', 'f', 'g') `shouldBe`
         Ast.Constructor (uncurryN A7) (Ast.toTerm ('a', 'b', 'c', 'd', 'e', 'f', 'g'))
     it "should work with variable arguments" $ do
-      A1 |$| char "x" `shouldBe` Ast.Constructor A1 (Ast.toTerm (Var "x" :: Var Char))
-      A2 |$| ('a', char "x") `shouldBe`
+      A1 $$ char "x" `shouldBe` Ast.Constructor A1 (Ast.toTerm (Var "x" :: Var Char))
+      A2 $$ ('a', char "x") `shouldBe`
         Ast.Constructor (uncurry A2) (Ast.toTerm ('a', Var "x" :: Var Char))
     it "should produce terms which can be reified" $ do
-      Ast.fromTerm (A3 |$| ('a', 'b', 'c')) `shouldBe` Just (A3 'a' 'b' 'c')
-      Ast.fromTerm (A4 |$| ('a', 'b' ,'c', 'd')) `shouldBe` Just (A4 'a' 'b' 'c' 'd')
+      Ast.fromTerm (A3 $$ ('a', 'b', 'c')) `shouldBe` Just (A3 'a' 'b' 'c')
+      Ast.fromTerm (A4 $$ ('a', 'b' ,'c', 'd')) `shouldBe` Just (A4 'a' 'b' 'c' 'd')
 
   describe "list term construction" $ do
     context "via cons" $ do

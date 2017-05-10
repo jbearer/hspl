@@ -1,6 +1,8 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 #if __GLASGOW_HASKELL__ < 710
 {-# LANGUAGE OverlappingInstances #-}
 #endif
@@ -24,13 +26,15 @@ module Control.Hspl (
   , Term
   , Goal
   , Clause
+  , PredDef
   -- * Building HSPL programs
   , HsplBuilder
   , ClauseBuilder
   , hspl
+  -- ** Defining predicates
   , def
   , (|-)
-  , ($$)
+  , (?)
   -- ** Special predicates
   -- | Some predicates have special semantics. These can appear as goals on the right-hand side of
   -- '|-', but they can never be the object of a 'def' statement on the left-hand side.
@@ -65,7 +69,7 @@ module Control.Hspl (
   , (<++>)
   -- ** ADTs
   -- $adts
-  , (|$|)
+  , ($$)
   ) where
 
 import Control.Monad.Writer
@@ -97,10 +101,20 @@ type HsplBuilder = Writer [Clause]
 -- | A monad for appending 'Goal's to the definition of a 'Clause'.
 type ClauseBuilder = Writer [Goal]
 
--- | Predicate application. @pred $$ term@ is a goal that succeeds if the predicate @pred@ applied
--- to @term@ is true.
-($$) :: TermData a => String -> a -> ClauseBuilder ()
-name $$ arg = tell [PredGoal $ Ast.predicate name arg]
+class PredApp a b c | a b -> c where
+  -- | Predicate application. @pred? term@ is a goal that succeeds if the predicate @pred@ applied
+  -- to @term@ is true.
+  (?) :: a -> b -> c
+
+instance TermData a => PredApp String a (ClauseBuilder ()) where
+  name? arg = tell [PredGoal $ Ast.predicate name arg]
+
+instance TermData a => PredApp PredDef a (HsplBuilder ()) where
+  name? arg = tell [Ast.HornClause (Ast.predicate (unDef name) arg) []]
+
+-- | The type of a predicate declaration with a particular name. 'PredDef's are created using 'def'
+-- and are suitable only for defining a predicate with '(?)' and '(|-)'.
+newtype PredDef = Def { unDef :: String }
 
 -- | Define a new predicate. The predicate has a name and an argument, which is pattern matched
 -- whenever a goal with a matching name is encountered. The definition may be empty, in which case
@@ -115,14 +129,14 @@ name $$ arg = tell [PredGoal $ Ast.predicate name arg]
 -- Example:
 --
 -- @
---  def "mortal" (Var "x" :: Var Int) |- do
---    "human" $$ (Var "x" :: Var Int)
+--  def "mortal"? int "x" |- do
+--    "human"? int "x"
 -- @
 --
 -- This defines a predicate @mortal(X)@, which is true if @human(X)@ is true; in other words,
 -- this definition defines the relationship @human(X) => mortal(X)@.
-def :: TermData a => String -> a -> HsplBuilder ()
-def name arg = tell [Ast.HornClause (Ast.predicate name arg) []]
+def :: String -> PredDef
+def = Def
 
 -- | Indicates the beginning of the definition of a predicate.
 infixr 0 |-
@@ -147,20 +161,19 @@ hspl builder = Ast.addClauses (execWriter builder) Ast.emptyProgram
 
 -- | Query an HSPL program for a given goal. The 'ProofResult's returned can be inspected using
 -- functions like `getAllSolutions`, `searchProof`, etc.
-runHspl :: TermData a => Hspl -> String -> a -> [ProofResult]
-runHspl program predicate arg =
-  let goal = Ast.predicate predicate arg
-  in Solver.runHspl program goal
+runHspl :: Hspl -> ClauseBuilder a -> [ProofResult]
+runHspl program gs = case execWriter gs of
+  [PredGoal goal] -> Solver.runHspl program goal
+  _ -> error "Please specify exactly one predicate to prove."
 
 -- | Query an HSPL program for a given goal. If a proof is found, stop immediately instead of
 -- backtracking to look for additional solutions. If no proof is found, return 'Nothing'.
-runHspl1 :: TermData a => Hspl -> String -> a -> Maybe ProofResult
-runHspl1 program predicate arg =
-  let goal = Ast.predicate predicate arg
-      results = Solver.runHsplN 1 program goal
-  in case results of
+runHspl1 :: TermData a => Hspl -> ClauseBuilder a -> Maybe ProofResult
+runHspl1 program gs = case execWriter gs of
+  [PredGoal goal] -> case Solver.runHsplN 1 program goal of
     [] -> Nothing
-    _ -> Just $ head results
+    (res:_) -> Just res
+  _ -> error "Please specify exactly one predicate to prove."
 
 {- $types
 HSPL implements a type system which prevents unification of terms with different types. The HSPL
@@ -259,7 +272,7 @@ instance {-# OVERLAPPING #-} ToTuple (a1, a2, a3, a4, a5, a6, a7) where
   toTuple = id
 
 {- $adts
-Algebraic data types can be used as HSPL terms via the '|$|' constructor. See
+Algebraic data types can be used as HSPL terms via the '$$' constructor. See
 'Control.Hspl.Examples.adts' for an example.
 -}
 
@@ -270,14 +283,14 @@ Algebraic data types can be used as HSPL terms via the '|$|' constructor. See
 --  data Tree a = Leaf a | Node a (Tree a) (Tree a)
 --    deriving (Show, Eq, Typeable, Data)
 --
---  t = Node |$| ('a', char "left", char "right")
+--  t = Node $$ ('a', char "left", char "right")
 -- @
 --
 -- Here @t@ is a term representating a @Tree Char@ whose root is @'a'@ and whose left and right
 -- subtrees are represented by the variables @"left"@ and @"right"@. Note the classes which must be
 -- derived in order to use ADTs with HSPL: 'Eq', 'Typeable', and 'Data', as well as 'Show' if the
 -- @ShowTerms@ flag is enabled. Deriving these classes requires the extension @DeriveDataTypeable@.
-(|$|) :: ( TermData a
+($$) :: ( TermData a
          , ToTuple (HSPLType a)
          , Curry (Tuple (HSPLType a) -> r) f
          , Eq r
@@ -287,7 +300,7 @@ Algebraic data types can be used as HSPL terms via the '|$|' constructor. See
 #endif
          ) =>
      f -> a -> Term r
-f |$| x = Ast.Constructor (uncurryN f . toTuple) (toTerm x)
+f $$ x = Ast.Constructor (uncurryN f . toTuple) (toTerm x)
 
 {- $lists
 Lists can also be used as HSPL terms. Lists consisting entirely of constants or of variables can be
