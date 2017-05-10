@@ -22,7 +22,6 @@ module Control.Hspl.Internal.Unification (
   -- ** Operations on unifiers
   , updateSubMap
   , compose
-  , netUnifier
   , (//)
   -- ** Querying a unifier
   , UnificationStatus (..)
@@ -138,10 +137,6 @@ compose (Unifier u1) gu2@(Unifier u2) =
   let u1' = M.map (updateSubMap gu2) u1
   in Unifier $ M.union u1' u2
 
--- | Convenience function for the composition of many 'Unifier's.
-netUnifier :: [Unifier] -> Unifier
-netUnifier = foldr (<>) mempty
-
 -- | A unifier representing the replacement of a variable by a term.
 (//) :: TermData a => a -> Var (HSPLType a) -> Unifier
 t // x = Unifier $ M.singleton (varType x) $ SubMap (M.singleton x (toTerm t))
@@ -232,6 +227,7 @@ unifyPredicate u (Predicate name term) = Predicate name (unifyTerm u term)
 unifyGoal :: Unifier -> Goal -> Goal
 unifyGoal u (PredGoal p) = PredGoal $ unifyPredicate u p
 unifyGoal u (CanUnify t1 t2) = CanUnify (unifyTerm u t1) (unifyTerm u t2)
+unifyGoal u (Identical t1 t2) = Identical (unifyTerm u t1) (unifyTerm u t2)
 
 -- | Apply a 'Unifier' to all 'Predicate's in a 'HornClause'.
 unifyClause :: Unifier -> HornClause -> HornClause
@@ -356,6 +352,10 @@ renameGoal (CanUnify t1 t2) = do
   t1' <- renameTerm t1
   t2' <- renameTerm t2
   return $ CanUnify t1' t2'
+renameGoal (Identical t1 t2) = do
+  t1' <- renameTerm t1
+  t2' <- renameTerm t2
+  return $ Identical t1' t2'
 
 -- | Rename all of the variables in a clause.
 renameClause :: Monad m => HornClause -> UnificationT m HornClause

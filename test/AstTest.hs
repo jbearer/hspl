@@ -188,6 +188,20 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         CanUnify (toTerm 'a') (toTerm 'b') `shouldNotEqual` CanUnify (toTerm True) (toTerm False)
         CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
           CanUnify (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))
+  describe "Identical goals" $ do
+    context "of the same type" $
+      it "should compare according to the arguments" $ do
+        Identical (toTerm 'a') (toTerm 'b') `shouldEqual` Identical (toTerm 'a') (toTerm 'b')
+        Identical (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldEqual`
+          Identical (toTerm (Var "x" :: Var Char)) (toTerm 'b')
+        Identical (toTerm 'a') (toTerm 'b') `shouldNotEqual` Identical (toTerm 'a') (toTerm 'a')
+        Identical (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldNotEqual`
+          Identical (toTerm (Var "y" :: Var Char)) (toTerm 'b')
+    context "of different types" $
+      it "should compare unequal" $ do
+        Identical (toTerm 'a') (toTerm 'b') `shouldNotEqual` Identical (toTerm True) (toTerm False)
+        Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
+          Identical (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))
   describe "clauses" $ do
     it "should have type corresponding to the type of the positive literal" $ do
       clauseType (HornClause foo []) `shouldBe` predType foo

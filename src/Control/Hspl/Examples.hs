@@ -48,3 +48,18 @@ lists :: Hspl
 lists = hspl $ do
   def "member" (int "x", int "x" <:> int |*| "xs")
   def "member" (int "y", int "x" <:> int |*| "xs") |- "member" $$ (int "y", int |*| "xs")
+
+-- | Example illustrating the difference between '(|=|)' and '(|==|)'.
+--
+-- >>> getAllSolutions $ runHspl equals "isFoo" (string "x")
+-- []
+--
+-- >>> getAllSolutions $ runHspl equals "isFoo" "foo"
+-- [isFoo("foo")]
+--
+-- >>> getAllSolutions $ runHspl equals "couldBeFoo" (string "x")
+-- [couldBeFoo("foo")]
+equals :: Hspl
+equals = hspl $ do
+  def "isFoo" (string "x") |- auto "x" |==| "foo"
+  def "couldBeFoo" (string "x") |- auto "x" |=| "foo"

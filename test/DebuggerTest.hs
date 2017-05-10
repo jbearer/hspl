@@ -60,6 +60,17 @@ expectCanUnifyFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
                         Int -> a -> b -> String
 expectCanUnifyFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ show (CanUnify (toTerm t1) (toTerm t2))
 
+expectIdenticalCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
+                        Int -> a -> b -> String
+expectIdenticalCall d t1 t2 = "(" ++ show d ++ ") Call: " ++ show (Identical (toTerm t1) (toTerm t2))
+
+expectIdenticalExit :: (TermData a) => Int -> a -> String
+expectIdenticalExit d t = "(" ++ show d ++ ") Exit: " ++ show (Identical (toTerm t) (toTerm t))
+
+expectIdenticalFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
+                        Int -> a -> b -> String
+expectIdenticalFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ show (Identical (toTerm t1) (toTerm t2))
+
 deepProgram = addClauses [ HornClause (predicate "foo" (Var "x" :: Var Char))
                                       [PredGoal $ predicate "bar" (Var "x" :: Var Char)]
                          , HornClause (predicate "bar" (Var "x" :: Var Char))
@@ -87,6 +98,10 @@ backtrackingProgram = addClauses [ HornClause (predicate "foo" (Var "x" :: Var C
 canUnifyProgram = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var String))
                                           [ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")]
                              ] emptyProgram
+
+identicalProgram = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var String))
+                                           [ Identical (toTerm (Var "x" :: Var String)) (toTerm "foo")]
+                              ] emptyProgram
 
 test = describeModule "Control.Hspl.Internal.Debugger" $ do
   describe "the step command" $ do
@@ -130,6 +145,18 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                             , expectCanUnifyFail 2 "bar" "foo"
                             , expectFail 1 "isFoo" "bar"
                             ]
+    let identicalGoal = predicate "isFoo" "foo"
+    let identicalTrace = [ expectCall 1 "isFoo" "foo"
+                         , expectIdenticalCall 2 "foo" "foo"
+                         , expectIdenticalExit 2 "foo"
+                         , expectExit 1 "isFoo" "foo"
+                         ]
+    let identicalFailGoal = predicate "isFoo" (Var "x" :: Var String)
+    let identicalFailTrace = [ expectCall 1 "isFoo" (Var "x" :: Var String)
+                             , expectIdenticalCall 2 (Var "x" :: Var String) "foo"
+                             , expectIdenticalFail 2 (Var "x" :: Var String) "foo"
+                             , expectFail 1 "isFoo" (Var "x" :: Var String)
+                             ]
     let run p g t c = runTest p g (map (const c) [1..length t]) t
 
     it "should prompt after every step of computation" $ do
@@ -138,12 +165,16 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run backtrackingProgram backtrackingGoal backtrackingTrace "step"
       run canUnifyProgram canUnifyGoal canUnifyTrace "step"
       run canUnifyProgram canUnifyFailGoal canUnifyFailTrace "step"
+      run identicalProgram identicalGoal identicalTrace "step"
+      run identicalProgram identicalFailGoal identicalFailTrace "step"
     it "should have a one-character alias" $ do
       run deepProgram deepGoal deepTrace "s"
       run wideProgram wideGoal wideTrace "s"
       run backtrackingProgram backtrackingGoal backtrackingTrace "s"
       run canUnifyProgram canUnifyGoal canUnifyTrace "s"
       run canUnifyProgram canUnifyFailGoal canUnifyFailTrace "s"
+      run identicalProgram identicalGoal identicalTrace "s"
+      run identicalProgram identicalFailGoal identicalFailTrace "s"
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do

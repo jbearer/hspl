@@ -40,6 +40,7 @@ module Control.Hspl.Internal.Solver (
   , solverCont
   , provePredicateWith
   , proveUnifiableWith
+  , proveIdenticalWith
   , proveWith
   , prove
   ) where
@@ -47,6 +48,7 @@ module Control.Hspl.Internal.Solver (
 import Control.Monad.Identity
 import Control.Monad.Logic
 import Data.Maybe
+import Data.Monoid
 import Data.Typeable
 
 import Control.Hspl.Internal.Ast
@@ -180,10 +182,16 @@ data SolverCont (m :: * -> *) =
                -- continuation is 'provePredicateWith'.
              , retryPredicate :: Predicate -> HornClause -> SolverT m ProofResult
                -- | Continuation to be invoked when attempting to prove that two terms can be
-               -- unified. THe resulting computation in the 'SolverT' monad should either fail with
+               -- unified. The resulting computation in the 'SolverT' monad should either fail with
                -- 'mzero' or produce a unifier and a trivial proof of the unified terms. The zero-
                -- overhead version of this continuation is 'proveUnifiableWith'.
              , tryUnifiable :: forall a. Typeable a => Term a -> Term a -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to proge that two terms are identical
+               -- after applying the current unifier. No new unifications are created. The resulting
+               -- computation in the 'SolverT' monad should either fail with 'mzero' or produce a
+               -- trivial proof of the equality of the terms. The zero-overhead version of this
+               -- continuation is 'proveIdenticalWith'.
+             , tryIdentical :: forall a. Typeable a => Term a -> Term a -> SolverT m ProofResult
                -- | Continuation to be invoked when a goal fails because there are no matching
                -- clauses. This computation should result in 'mzero', but may perform effects in the
                -- underlying monad first.
@@ -196,6 +204,7 @@ solverCont :: Program -> SolverCont Identity
 solverCont p = SolverCont { tryPredicate = provePredicateWith (solverCont p) p
                           , retryPredicate = provePredicateWith (solverCont p) p
                           , tryUnifiable = proveUnifiableWith (solverCont p) p
+                          , tryIdentical = proveIdenticalWith (solverCont p) p
                           , errorUnknownPred = const mzero
                           }
 
@@ -214,22 +223,33 @@ provePredicateWith cont program p c = do
   (gs, u) <- getSubGoals p c
   case gs of
     [] -> return (Axiom $ unifyGoal u (PredGoal p), u)
-    _ -> do subs <- forM gs (proveWith cont program)
-            let (subProofs, subUs) = unzip subs
-            let netU = netUnifier $ u : subUs
+    _ -> do (subProofs, netU) <- proveSubGoals mempty gs
             return (Proof (unifyGoal netU (PredGoal p)) subProofs, netU)
   where getSubGoals p' c' = do mgs <- lift $ unify p' c'
                                case mgs of
                                  Just gs -> return gs
                                  Nothing -> mzero
+        proveSubGoals u [] = return ([], u)
+        proveSubGoals u (g:gs) = do let g' = unifyGoal u g
+                                    (proof, u') <- proveWith cont program g'
+                                    (proofs, u'') <- proveSubGoals (u <> u') gs
+                                    return (proof:proofs, u'')
 
 -- | Check if the given terms can unify. If so, produce the unifier and a trivial proof of their
--- unifiability. Use the given continuations when proving subgoals
+-- unifiability. Use the given continuations when proving subgoals.
 proveUnifiableWith :: (Typeable a, Monad m) =>
-                        SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
+                      SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
 proveUnifiableWith _ _ t1 t2 = case mgu t1 t2 of
   Just u -> return (Axiom $ unifyGoal u $ CanUnify t1 t2, u)
   Nothing -> mzero
+
+-- | Check if the given terms are identical (i.e. they have already been unified). If so, produce a
+-- trivial proof of their equality. Use the given continuations when proving subgoals.
+proveIdenticalWith :: (Typeable a, Monad m) =>
+                      SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
+proveIdenticalWith _ _ t1 t2 = if t1 == t2
+  then return (Axiom $ Identical t1 t2, mempty)
+  else mzero
 
 -- | Produce a proof of the goal from the clauses in the program. This function will either fail,
 -- or backtrack over all possible proofs. It will invoke the appropriate continuations in the given
@@ -240,3 +260,4 @@ proveWith cont program g = case g of
     [] -> errorUnknownPred cont p
     c:cs -> tryPredicate cont p c `mplus` msum (map (retryPredicate cont p) cs)
   CanUnify t1 t2 -> tryUnifiable cont t1 t2
+  Identical t1 t2 -> tryIdentical cont t1 t2

@@ -144,6 +144,7 @@ debugCont :: Program -> [Goal] -> SolverCont (StateT DebugState IO)
 debugCont program stack = SolverCont { tryPredicate = debugFirstAlternative program stack
                                      , retryPredicate = debugNextAlternative program stack
                                      , tryUnifiable = debugUnifiable program stack
+                                     , tryIdentical = debugIdentical program stack
                                      , errorUnknownPred = debugErrorUnknownPred stack
                                      }
 
@@ -226,6 +227,15 @@ debugUnifiable program s t1 t2 = do
   ifte (proveUnifiableWith (debugCont program stack) program t1 t2)
     (\result -> ifTarget stack (prompt stack Exit (show $ getTheorem result)) >> return result)
     (ifTarget stack (prompt stack Fail $ show (CanUnify t1 t2)) >> mzero)
+
+-- | Continaution hook for proving an 'Identical' goal.
+debugIdentical :: Typeable a => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
+debugIdentical program s t1 t2 = do
+  let stack = Identical t1 t2 : s
+  ifTarget stack $ prompt stack Call $ show (head stack)
+  ifte (proveIdenticalWith (debugCont program stack) program t1 t2)
+    (\result -> ifTarget stack (prompt stack Exit (show $ getTheorem result)) >> return result)
+    (ifTarget stack (prompt stack Fail $ show (Identical t1 t2)) >> mzero)
 
 -- | Continuation hook invoked when a goal with no matching clauses is encountered.
 debugErrorUnknownPred :: [Goal] -> Predicate -> Debugger a

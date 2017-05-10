@@ -35,6 +35,7 @@ module Control.Hspl (
   -- | Some predicates have special semantics. These can appear as goals on the right-hand side of
   -- '|-', but they can never be the object of a 'def' statement on the left-hand side.
   , (|=|)
+  , (|==|)
   -- * Running HSPL programs
   , ProofResult
   , runHspl
@@ -134,6 +135,11 @@ p |- gs =
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
 (|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
 t1 |=| t2 = tell [Ast.CanUnify (toTerm t1) (toTerm t2)]
+
+-- | Test if two terms are unified. This predicate succeeds if and only if the two terms are
+-- identical under the current unfier. No new bindings are created.
+(|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
+t1 |==| t2 = tell [Ast.Identical (toTerm t1) (toTerm t2)]
 
 -- | Construct an HSPL program.
 hspl :: HsplBuilder a -> Hspl

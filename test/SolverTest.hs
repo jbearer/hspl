@@ -48,6 +48,22 @@ canUnify = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var String))
                                    [ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")]
                       ] emptyProgram
 
+identical = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var String))
+                                    [ Identical (toTerm (Var "x" :: Var String)) (toTerm "foo")]
+                       ] emptyProgram
+
+-- This program illustrates a potential bug in a naive impementation. There should be no solutions
+-- to foo(X). The unifier ['a'/X] which results from proving bar(X) should be applied to the next
+-- subgoal, giving baz('a'), which clearly has no solutions. A naive implementation fails to apply
+-- the intermediate unifier to the second subgoal, giving the erronious solution foo('b').
+unifierTrap = addClauses [ HornClause ( predicate "foo" (Var "x" :: Var Char))
+                                      [ PredGoal $ predicate "bar" (Var "x" :: Var Char)
+                                      , PredGoal $ predicate "baz" (Var "x" :: Var Char)
+                                      ]
+                         , HornClause ( predicate "bar" 'a') []
+                         , HornClause ( predicate "baz" 'b') []
+                         ] emptyProgram
+
 test = describeModule "Control.Hspl.Internal.Solver" $ do
   describe "provePredicateWith" $ do
     let runTest prog p c = observeAllSolver $ provePredicateWith (solverCont prog) prog p c
@@ -69,6 +85,13 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
                , Axiom $ PredGoal $ predicate "baz" 'b']]
       length us `shouldBe` 1
       head us `shouldSatisfy` (('a' // Var "x" <> 'b' // Var "y") `isSubunifierOf`)
+    it "should successively apply the unifier to subgoals" $
+      runTest unifierTrap
+        (predicate "foo" (Var "x" :: Var Char))
+        (HornClause ( predicate "foo" (Var "x" :: Var Char))
+                    [ PredGoal $ predicate "bar" (Var "x" :: Var Char)
+                    , PredGoal $ predicate "baz" (Var "x" :: Var Char)
+                    ]) `shouldBe` []
     it "should unify the goal with the clause" $ do
       let (proofs, _) = unzip $ runTest example1
             (predicate "foo" ('a', 'b'))
@@ -91,6 +114,16 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       head us `shouldSatisfy` ("foo" // Var "x" `isSubunifierOf`)
     it "should fail when terms cannot be unified" $
       runTest canUnify "bar" "foo" `shouldBe` []
+  describe "proveIdenticalWith" $ do
+    let runTest prog t1 t2 = observeAllSolver $
+          proveIdenticalWith (solverCont prog) prog (toTerm t1) (toTerm t2)
+    it "should fail if the terms are not equal" $
+      runTest identical "foo" "bar" `shouldBe` []
+    it "should fail if the terms are not yet unified" $
+      runTest identical (Var "x" :: Var String) "foo" `shouldBe` []
+    it "should succeed, but not create new bindings, if the terms are identical" $
+      runTest identical "foo" "foo" `shouldBe`
+        [(Axiom $ Identical (toTerm "foo") (toTerm "foo"), mempty)]
   describe "a proof search" $ do
     it "should traverse every branch of the proof" $ do
       let p = predicate "p" ()

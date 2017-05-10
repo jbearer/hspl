@@ -280,6 +280,13 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       it "should rename variables in both terms the same" $
         rename (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
           CanUnify (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
+    context "of Identical goals" $ do
+      it "should rename variables in each term" $
+        rename (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+          Identical (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 1 :: Var Char))
+      it "should rename variables in both terms the same" $
+        rename (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+          Identical (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
   describe "clause renaming" $ do
     let rename = doRenameClause
     it "should rename variables in the positive literal" $
@@ -370,6 +377,17 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           CanUnify (toTerm (Var "y" :: Var Char)) (toTerm 'a')
         unifyGoal u (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
           CanUnify (toTerm 'a') (toTerm (Var "y" :: Var Char))
+    context "to an Identical goal" $ do
+      it "should unify both terms" $
+        unifyGoal (toTerm 'a' // Var "x" <> toTerm 'b' // Var "y")
+          (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+          Identical (toTerm 'a') (toTerm 'b')
+      it "should leave either term unchanged when the unifier does not apply" $ do
+        let u = toTerm 'a' // Var "x"
+        unifyGoal u (Identical (toTerm (Var "y" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+          Identical (toTerm (Var "y" :: Var Char)) (toTerm 'a')
+        unifyGoal u (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+          Identical (toTerm 'a') (toTerm (Var "y" :: Var Char))
   describe "clause unifier application" $ do
     it "should unify the positive literal when the unifier applies" $
       unifyClause (toTerm 'a' // Var "x")

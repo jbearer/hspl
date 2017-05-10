@@ -414,14 +414,21 @@ data Goal =
             PredGoal Predicate
             -- | A goal which succeeds if the two 'Term's can be unified.
           | forall t. Typeable t => CanUnify (Term t) (Term t)
+            -- | A goal which succeeds if the two 'Term's are identical under the current
+            -- 'Control.Hspl.Internal.Unification.Unifier'.
+          | forall t. Typeable t => Identical (Term t) (Term t)
 
 instance Show Goal where
   show (PredGoal p) = show p
   show (CanUnify t1 t2) = show t1 ++ " |=| " ++ show t2
+  show (Identical t1 t2) = show t1 ++ " |==| " ++ show t2
 
 instance Eq Goal where
   (==) (PredGoal p) (PredGoal p') = p == p'
   (==) (CanUnify t1 t2) (CanUnify t1' t2') = case cast (t1', t2') of
+    Just t' -> (t1, t2) == t'
+    Nothing -> False
+  (==) (Identical t1 t2) (Identical t1' t2') = case cast (t1', t2') of
     Just t' -> (t1, t2) == t'
     Nothing -> False
   (==) _ _ = False

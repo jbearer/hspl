@@ -148,3 +148,13 @@ test = describeModule "Control.Hspl" $ do
         [Ast.CanUnify (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm 'a')]
       execWriter (char "x" |=| char "y") `shouldBe`
         [Ast.CanUnify (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm (Var "y" :: Var Char))]
+
+  describe "the |==| predicate" $
+    it "should create an Identical goal from TermData" $ do
+      execWriter ('a' |==| 'b') `shouldBe` [Ast.Identical (Ast.toTerm 'a') (Ast.toTerm 'b')]
+      execWriter ('a' |==| char "x") `shouldBe`
+        [Ast.Identical (Ast.toTerm 'a') (Ast.toTerm (Var "x" :: Var Char))]
+      execWriter (char "x" |==| 'a') `shouldBe`
+        [Ast.Identical (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm 'a')]
+      execWriter (char "x" |==| char "y") `shouldBe`
+        [Ast.Identical (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm (Var "y" :: Var Char))]
