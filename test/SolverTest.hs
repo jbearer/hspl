@@ -124,6 +124,13 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should succeed, but not create new bindings, if the terms are identical" $
       runTest identical "foo" "foo" `shouldBe`
         [(Axiom $ Identical (toTerm "foo") (toTerm "foo"), mempty)]
+  describe "proveNotWith" $ do
+    let runTest prog g = observeAllSolver $ proveNotWith (solverCont prog) prog g
+    it "should fail if the inner goal succeeds" $
+      runTest example0 (PredGoal $ predicate "foo" ('a', 'b')) `shouldBe` []
+    it "should succeed if the inner goal fails" $
+      runTest example0 (PredGoal $ predicate "foo" ('b', 'a')) `shouldBe`
+        [(Axiom $ Not $ PredGoal $ predicate "foo" ('b', 'a'), mempty)]
   describe "a proof search" $ do
     it "should traverse every branch of the proof" $ do
       let p = predicate "p" ()

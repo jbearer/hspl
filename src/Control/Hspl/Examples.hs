@@ -45,15 +45,20 @@ adts = hspl $
 -- >>> getAllSolutions $ runHspl lists $ "member"? (int "x", [1, 2, 3] :: [Int])
 -- [member(3, 1, 2, 3),member(2, 1, 2, 3),member(1, 1, 2, 3)]
 --
--- >>> getAllSolutions $ runHspl lists $ "member"? (int "x", [1, 1] :: [Int])
+-- >>> getAllSolutions $ runHspl lists "member" (int "x", [1, 1] :: [Int])
 -- [member(1, 1, 1),member(1, 1, 1)]
 --
--- >>> getAllSolutions $ runHspl lists $ "distinct"? (int "x", [1, 1] :: [Int])
+-- >>> getAllSolutions $ runHspl lists "distinct" (int "x", [1, 1] :: [Int])
 -- [member(1, 1, 1)]
 lists :: Hspl
 lists = hspl $ do
   def "member"? (int "x", int "x" <:> int |*| "xs")
   def "member"? (int "y", int "x" <:> int |*| "xs") |- "member"? (int "y", int |*| "xs")
+
+  def "distinct"? (int "x", int "x" <:> int |*| "xs")
+  def "distinct"? (int "y", int "x" <:> int |*| "xs") |- do
+    int "y" |\=| int "x"
+    "distinct"? (int "y", int |*| "xs")
 
 -- | Example illustrating the difference between '(|=|)' and '(|==|)'.
 --

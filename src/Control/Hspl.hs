@@ -34,12 +34,15 @@ module Control.Hspl (
   -- ** Defining predicates
   , def
   , (|-)
-  , (?)
+  , PredApp (..)
   -- ** Special predicates
   -- | Some predicates have special semantics. These can appear as goals on the right-hand side of
   -- '|-', but they can never be the object of a 'def' statement on the left-hand side.
   , (|=|)
+  , (|\=|)
   , (|==|)
+  , (|\==|)
+  , lnot
   -- * Running HSPL programs
   , ProofResult
   , runHspl
@@ -101,6 +104,7 @@ type HsplBuilder = Writer [Clause]
 -- | A monad for appending 'Goal's to the definition of a 'Clause'.
 type ClauseBuilder = Writer [Goal]
 
+-- | Overloaded functions for constructing predicates in various contexts.
 class PredApp a b c | a b -> c where
   -- | Predicate application. @pred? term@ is a goal that succeeds if the predicate @pred@ applied
   -- to @term@ is true.
@@ -150,10 +154,27 @@ p |- gs =
 (|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
 t1 |=| t2 = tell [Ast.CanUnify (toTerm t1) (toTerm t2)]
 
+-- | Negation of '(|=|)'. The predicate @t1 |\=| t2@ succeeds if and only if @t1 |=| t2@ fails. No
+-- new bindings are created.
+(|\=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
+t1 |\=| t2 = lnot $ t1 |=| t2
+
 -- | Test if two terms are unified. This predicate succeeds if and only if the two terms are
 -- identical under the current unfier. No new bindings are created.
 (|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
 t1 |==| t2 = tell [Ast.Identical (toTerm t1) (toTerm t2)]
+
+-- | Negation of '(|==|)'. The predicate @t1 |\==| t2@ succeeds if and only if @t1 |==| t2@ fails.
+-- No new bindings are created.
+(|\==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
+t1 |\==| t2 = lnot $ t1 |==| t2
+
+-- | Logical negation. @lnot p@ is a predicate which is true if and only if the predicate @p@ is
+-- false. @lnot@ does not create any new bindings.
+lnot :: ClauseBuilder a -> ClauseBuilder ()
+lnot p = case execWriter p of
+  [g] -> tell [Not g]
+  _ -> error "lnot must be applied to exactly one predicate."
 
 -- | Construct an HSPL program.
 hspl :: HsplBuilder a -> Hspl

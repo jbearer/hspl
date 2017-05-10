@@ -417,11 +417,14 @@ data Goal =
             -- | A goal which succeeds if the two 'Term's are identical under the current
             -- 'Control.Hspl.Internal.Unification.Unifier'.
           | forall t. Typeable t => Identical (Term t) (Term t)
+            -- | A goal which succeeds only if the inner 'Goal' fails.
+          | Not Goal
 
 instance Show Goal where
   show (PredGoal p) = show p
   show (CanUnify t1 t2) = show t1 ++ " |=| " ++ show t2
   show (Identical t1 t2) = show t1 ++ " |==| " ++ show t2
+  show (Not g) = "lnot (" ++ show g ++ ")"
 
 instance Eq Goal where
   (==) (PredGoal p) (PredGoal p') = p == p'
@@ -431,6 +434,7 @@ instance Eq Goal where
   (==) (Identical t1 t2) (Identical t1' t2') = case cast (t1', t2') of
     Just t' -> (t1, t2) == t'
     Nothing -> False
+  (==) (Not g) (Not g') = g == g'
   (==) _ _ = False
 
 -- | A 'HornClause' is the logical disjunction of a single positive literal (a 'Predicate') and 0 or

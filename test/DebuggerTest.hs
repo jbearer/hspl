@@ -71,6 +71,15 @@ expectIdenticalFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
                         Int -> a -> b -> String
 expectIdenticalFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ show (Identical (toTerm t1) (toTerm t2))
 
+expectNotCall :: Int -> Goal -> String
+expectNotCall d g = "(" ++ show d ++ ") Call: " ++ show (Not g)
+
+expectNotExit :: Int -> Goal -> String
+expectNotExit d g = "(" ++ show d ++ ") Exit: " ++ show (Not g)
+
+expectNotFail :: Int -> Goal -> String
+expectNotFail d g = "(" ++ show d ++ ") Fail: " ++ show (Not g)
+
 deepProgram = addClauses [ HornClause (predicate "foo" (Var "x" :: Var Char))
                                       [PredGoal $ predicate "bar" (Var "x" :: Var Char)]
                          , HornClause (predicate "bar" (Var "x" :: Var Char))
@@ -102,6 +111,10 @@ canUnifyProgram = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var St
 identicalProgram = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var String))
                                            [ Identical (toTerm (Var "x" :: Var String)) (toTerm "foo")]
                               ] emptyProgram
+
+notProgram = addClauses [ HornClause ( predicate "isNotFoo" (Var "x" :: Var String))
+                                     [ Not $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")]
+                        ] emptyProgram
 
 test = describeModule "Control.Hspl.Internal.Debugger" $ do
   describe "the step command" $ do
@@ -157,6 +170,22 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                              , expectIdenticalFail 2 (Var "x" :: Var String) "foo"
                              , expectFail 1 "isFoo" (Var "x" :: Var String)
                              ]
+    let notGoal = predicate "isNotFoo" "bar"
+    let notTrace = [ expectCall 1 "isNotFoo" "bar"
+                   , expectNotCall 2 $ CanUnify (toTerm "bar") (toTerm "foo")
+                   , expectCanUnifyCall 3 "bar" "foo"
+                   , expectCanUnifyFail 3 "bar" "foo"
+                   , expectNotExit 2 $ CanUnify (toTerm "bar") (toTerm "foo")
+                   , expectExit 1 "isNotFoo" "bar"
+                   ]
+    let notFailGoal = predicate "isNotFoo" (Var "x" :: Var String)
+    let notFailTrace = [ expectCall 1 "isNotFoo" (Var "x" :: Var String)
+                       , expectNotCall 2 $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
+                       , expectCanUnifyCall 3 (Var "x" :: Var String) "foo"
+                       , expectCanUnifyExit 3 "foo"
+                       , expectNotFail 2 $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
+                       , expectFail 1 "isNotFoo" (Var "x" :: Var String)
+                       ]
     let run p g t c = runTest p g (map (const c) [1..length t]) t
 
     it "should prompt after every step of computation" $ do
@@ -167,6 +196,8 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run canUnifyProgram canUnifyFailGoal canUnifyFailTrace "step"
       run identicalProgram identicalGoal identicalTrace "step"
       run identicalProgram identicalFailGoal identicalFailTrace "step"
+      run notProgram notGoal notTrace "step"
+      run notProgram notFailGoal notFailTrace "step"
     it "should have a one-character alias" $ do
       run deepProgram deepGoal deepTrace "s"
       run wideProgram wideGoal wideTrace "s"
@@ -175,6 +206,8 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run canUnifyProgram canUnifyFailGoal canUnifyFailTrace "s"
       run identicalProgram identicalGoal identicalTrace "s"
       run identicalProgram identicalFailGoal identicalFailTrace "s"
+      run notProgram notGoal notTrace "s"
+      run notProgram notFailGoal notFailTrace "s"
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do

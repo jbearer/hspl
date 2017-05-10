@@ -202,6 +202,10 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         Identical (toTerm 'a') (toTerm 'b') `shouldNotEqual` Identical (toTerm True) (toTerm False)
         Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
           Identical (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))
+  describe "Not goals" $
+    it "should compare according to the inner goal" $ do
+      Not (PredGoal $ predicate "foo" ()) `shouldEqual` Not (PredGoal $ predicate "foo" ())
+      Not (PredGoal $ predicate "foo" ()) `shouldNotEqual` Not (PredGoal $ predicate "bar" ())
   describe "clauses" $ do
     it "should have type corresponding to the type of the positive literal" $ do
       clauseType (HornClause foo []) `shouldBe` predType foo

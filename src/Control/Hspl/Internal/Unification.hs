@@ -228,6 +228,7 @@ unifyGoal :: Unifier -> Goal -> Goal
 unifyGoal u (PredGoal p) = PredGoal $ unifyPredicate u p
 unifyGoal u (CanUnify t1 t2) = CanUnify (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Identical t1 t2) = Identical (unifyTerm u t1) (unifyTerm u t2)
+unifyGoal u (Not g) = Not $ unifyGoal u g
 
 -- | Apply a 'Unifier' to all 'Predicate's in a 'HornClause'.
 unifyClause :: Unifier -> HornClause -> HornClause
@@ -356,6 +357,7 @@ renameGoal (Identical t1 t2) = do
   t1' <- renameTerm t1
   t2' <- renameTerm t2
   return $ Identical t1' t2'
+renameGoal (Not g) = liftM Not $ renameGoal g
 
 -- | Rename all of the variables in a clause.
 renameClause :: Monad m => HornClause -> UnificationT m HornClause

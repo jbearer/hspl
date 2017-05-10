@@ -287,6 +287,10 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       it "should rename variables in both terms the same" $
         rename (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
           Identical (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
+    context "of Not goals" $
+      it "should rename variables in the inner goal" $
+        rename (Not $ PredGoal $ predicate "foo" (Var "x" :: Var Bool)) `shouldBe`
+          Not (PredGoal $ predicate "foo" (Fresh 0 :: Var Bool))
   describe "clause renaming" $ do
     let rename = doRenameClause
     it "should rename variables in the positive literal" $
@@ -388,6 +392,11 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           Identical (toTerm (Var "y" :: Var Char)) (toTerm 'a')
         unifyGoal u (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
           Identical (toTerm 'a') (toTerm (Var "y" :: Var Char))
+    context "to a Not goal" $
+      it "should unify the inner goal" $
+        unifyGoal (toTerm 'a' // Var "x")
+                  (Not $ PredGoal $ predicate "foo" (Var "x" :: Var Char)) `shouldBe`
+          Not (PredGoal $ predicate "foo" 'a')
   describe "clause unifier application" $ do
     it "should unify the positive literal when the unifier applies" $
       unifyClause (toTerm 'a' // Var "x")
