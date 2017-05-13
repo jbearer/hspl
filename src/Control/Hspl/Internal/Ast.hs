@@ -81,7 +81,7 @@ the abstract representation of a variable in HSPL is a Haskell data type of type
 -- Constant (True)
 --
 -- >>> toTerm (True, "foo")
--- Product (Constant (True)) (List [Constant ('F'), Constant ('o'), Constant ('o')])
+-- Tup (Constant (True)) (List [Constant ('F'), Constant ('o'), Constant ('o')])
 --
 -- >>> :t toTerm (True, "foo")
 -- toTerm (True, "Foo") :: Term (Bool, [Char])
@@ -134,33 +134,34 @@ HSPLPrimitive(Char)
 HSPLPrimitive(Bool)
 HSPLPrimitive(Int)
 HSPLPrimitive(Integer)
+HSPLPrimitive(Double)
 
 #undef HSPLPrimitive
 
 -- Tuples
 instance (TermData a, TermData b) => TermData (a, b) where
   type HSPLType (a, b) = (HSPLType a, HSPLType b)
-  toTerm t = Product (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
 instance (TermData a, TermData b, TermData c) => TermData (a, b, c) where
   type HSPLType (a, b, c) = (HSPLType a, HSPLType b, HSPLType c)
-  toTerm t = Product (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
 instance (TermData a, TermData b, TermData c, TermData d) => TermData (a, b, c, d) where
   type HSPLType (a, b, c, d) = (HSPLType a, HSPLType b, HSPLType c, HSPLType d)
-  toTerm t = Product (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
 instance (TermData a, TermData b, TermData c, TermData d, TermData e) => TermData (a, b, c, d, e) where
   type HSPLType (a, b, c, d, e) = (HSPLType a, HSPLType b, HSPLType c, HSPLType d, HSPLType e)
-  toTerm t = Product (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
 instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f) => TermData (a, b, c, d, e, f) where
   type HSPLType (a, b, c, d, e, f) = (HSPLType a, HSPLType b, HSPLType c, HSPLType d, HSPLType e, HSPLType f)
-  toTerm t = Product (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
 instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f, TermData g) => TermData (a, b, c, d, e, f, g) where
   type HSPLType (a, b, c, d, e, f, g) = (HSPLType a, HSPLType b, HSPLType c, HSPLType d, HSPLType e, HSPLType f, HSPLType g)
-  toTerm t = Product (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
 -- Lists
 instance TermData a => TermData [a] where
@@ -240,7 +241,7 @@ data Term a where
 
   -- | A product type (i.e. a tuple). We define tuples inductively with a head and a tail, which
   -- allows the simple representation of any tuple with just this one constructor.
-  Product :: (Tuple a, Typeable (Head a), Typeable (Tail a)) => Term (Head a) -> Term (Tail a) -> Term a
+  Tup :: (Tuple a, Typeable (Head a), Typeable (Tail a)) => Term (Head a) -> Term (Tail a) -> Term a
 
   -- | A primitive constant.
   Constant :: ( Data a
@@ -273,12 +274,30 @@ data Term a where
               , Show a
 #endif
               ) => Var a -> Term a
+
+  -- | An arithmetic sum of two 'Term's.
+  Sum :: Num a => Term a -> Term a -> Term a
+
+  -- | An arithmetic difference of 'Term's.
+  Difference :: Num a => Term a -> Term a -> Term a
+
+  -- | An arithmetic product of 'Term's.
+  Product :: Num a => Term a -> Term a -> Term a
+
+  -- | An arithmetic quotient of 'Term's. The quotient is obtained by floating point (real)
+  -- division, and as such the type of the represented value must have an instance for 'Fractional'.
+  Quotient :: Fractional a => Term a -> Term a -> Term a
+
+  -- |An arithmetic quotient of 'Term's. The quotient is obtained by integer division, and as such
+  -- the type of the represented value must have an instance for 'Integral'.
+  IntQuotient :: Integral a => Term a -> Term a -> Term a
+
   deriving (Typeable)
 
 #ifdef DEBUG
 instance Show (Term a) where
   show (Constructor f t) = "Constructor (" ++ show (constructor f) ++ ") (" ++ show t ++ ")"
-  show (Product t ts) = "Product (" ++ show t ++ ") (" ++ show ts ++ ")"
+  show (Tup t ts) = "Tup (" ++ show t ++ ") (" ++ show ts ++ ")"
   show (List x xs) = "List (" ++ show x ++ ") (" ++ show xs ++ ")"
   show Nil = "Nil"
 #ifdef SHOW_TERMS
@@ -287,10 +306,15 @@ instance Show (Term a) where
   show (Constant _) = "Constant"
 #endif
   show (Variable v) = "Variable (" ++ show v ++ ")"
+  show (Sum t1 t2) = "Sum (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+  show (Difference t1 t2) = "Difference (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+  show (Product t1 t2) = "Product (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+  show (Quotient t1 t2) = "Quotient (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+  show (IntQuotient t1 t2) = "IntQuotient (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
 #else
 instance Show (Term a) where
   show (Constructor f t) = show (constructor f) ++ " (" ++ show t ++ ")"
-  show (Product t ts) = show t ++ ", " ++ show ts
+  show (Tup t ts) = show t ++ ", " ++ show ts
   show (List x Nil) = show x
   show (List x xs) = show x ++ ", " ++ show xs
   show Nil = "[]"
@@ -300,6 +324,11 @@ instance Show (Term a) where
   show (Constant _) = "c"
 #endif
   show (Variable v) = show v
+  show (Sum t1 t2) = "(" ++ show t1 ++ ") |+| (" ++ show t2 ++ ")"
+  show (Difference t1 t2) = "(" ++ show t1 ++ ") |-| (" ++ show t2 ++ ")"
+  show (Product t1 t2) = "(" ++ show t1 ++ ") |*| (" ++ show t2 ++ ")"
+  show (Quotient t1 t2) = "(" ++ show t1 ++ ") |/| (" ++ show t2 ++ ")"
+  show (IntQuotient t1 t2) = "(" ++ show t1 ++ ") |\\| (" ++ show t2 ++ ")"
 #endif
 
 instance Eq (Term a) where
@@ -310,7 +339,7 @@ instance Eq (Term a) where
       Just t'' -> c == c' && t == t''
       Nothing -> False
 
-  (==) (Product t ts) (Product t' ts') = fromMaybe False $ do
+  (==) (Tup t ts) (Tup t' ts') = fromMaybe False $ do
     t'' <- cast t'
     ts'' <- cast ts'
     return $ t == t'' && ts == ts''
@@ -321,6 +350,12 @@ instance Eq (Term a) where
   (==) (Constant t) (Constant t') = t == t'
 
   (==) (Variable x) (Variable x') = x == x'
+
+  (==) (Sum t1 t2) (Sum t1' t2') = t1 == t1' && t2 == t2'
+  (==) (Difference t1 t2) (Difference t1' t2') = t1 == t1' && t2 == t2'
+  (==) (Product t1 t2) (Product t1' t2') = t1 == t1' && t2 == t2'
+  (==) (Quotient t1 t2) (Quotient t1' t2') = t1 == t1' && t2 == t2'
+  (==) (IntQuotient t1 t2) (IntQuotient t1' t2') = t1 == t1' && t2 == t2'
 
   (==) _ _ = False
 
@@ -365,18 +400,27 @@ constructor f = toConstr $ f $ error $ intercalate "\n" $ wrap 80 $ unwords
 -- term contains no variables, then this function always succeeds. If the term contains any
 -- variables, then the Haskell value cannot be determined and the result is 'Nothing'.
 fromTerm :: Term a -> Maybe a
-fromTerm (Constructor f x) = fmap f $ fromTerm x
-fromTerm (Product t ts) = do
-  ut <- fromTerm t
-  uts <- fromTerm ts
-  return $ tcons ut uts
-fromTerm (List x xs) = do
-  ux <- fromTerm x
-  uxs <- fromTerm xs
-  return $ ux : uxs
-fromTerm Nil = Just []
-fromTerm (Constant c) = Just c
-fromTerm (Variable _) = Nothing
+fromTerm term = case term of
+  Constructor f x -> fmap f $ fromTerm x
+  Tup t ts -> do
+    ut <- fromTerm t
+    uts <- fromTerm ts
+    return $ tcons ut uts
+  List x xs -> do
+    ux <- fromTerm x
+    uxs <- fromTerm xs
+    return $ ux : uxs
+  Nil -> Just []
+  Constant c -> Just c
+  Variable _ -> Nothing
+  Sum t1 t2 -> fromBinOp (+) t1 t2
+  Difference t1 t2 -> fromBinOp (-) t1 t2
+  Product t1 t2 -> fromBinOp (*) t1 t2
+  Quotient t1 t2 -> fromBinOp (/) t1 t2
+  IntQuotient t1 t2 -> fromBinOp div t1 t2
+  where fromBinOp f t1 t2 = do ut1 <- fromTerm t1
+                               ut2 <- fromTerm t2
+                               return $ f ut1 ut2
 
 -- | Determine the HSPL type of a term.
 termType :: forall a. Typeable a => Term a -> TypeRep
@@ -388,7 +432,7 @@ termType _ = typeOf (undefined :: a)
 -- In this implementation, all predicates are 1-ary -- they each take a single term. This is
 -- sufficient because the generic nature of 'Term' means that the term could encode a product type
 -- such as a tuple, or (). Thus, 0-ary predicates have the form @Predicate "foo" (Constant ())@ and
--- n-ary predicates look like @Predicate "bar" (Product ('a') (Product ...))@.
+-- n-ary predicates look like @Predicate "bar" (Tup ('a') (Tup ...))@.
 data Predicate = forall f. Typeable f => Predicate String (Term f)
 
 instance Show Predicate where
@@ -419,12 +463,22 @@ data Goal =
           | forall t. Typeable t => Identical (Term t) (Term t)
             -- | A goal which succeeds only if the inner 'Goal' fails.
           | Not Goal
+            -- | A goal which succeeds if the right-hand side, after being evaluated as an
+            -- arithmetic expression, unifies with the left-hand side.
+          | forall t. ( Typeable t
+                      , Data t
+                      , Eq t
+#ifdef SHOW_TERMS
+                      , Show t
+#endif
+                      ) => Equal (Term t) (Term t)
 
 instance Show Goal where
   show (PredGoal p) = show p
   show (CanUnify t1 t2) = show t1 ++ " |=| " ++ show t2
   show (Identical t1 t2) = show t1 ++ " |==| " ++ show t2
   show (Not g) = "lnot (" ++ show g ++ ")"
+  show (Equal t1 t2) = show t1 ++ " `is` " ++ show t2
 
 instance Eq Goal where
   (==) (PredGoal p) (PredGoal p') = p == p'
@@ -435,6 +489,9 @@ instance Eq Goal where
     Just t' -> (t1, t2) == t'
     Nothing -> False
   (==) (Not g) (Not g') = g == g'
+  (==) (Equal t1 t2) (Equal t1' t2') = case cast (t1', t2') of
+    Just t' -> (t1, t2) == t'
+    Nothing -> False
   (==) _ _ = False
 
 -- | A 'HornClause' is the logical disjunction of a single positive literal (a 'Predicate') and 0 or
@@ -482,7 +539,7 @@ findClauses p@(Predicate name _) m =
 
 {- $tuples
 The 'Tuple' class and associated functions make it easier to work with Haskell tuples in the
-HSPL type system, by allowing a single 'Product' abstract term to account for all tuple types.
+HSPL type system, by allowing a single 'Tup' abstract term to account for all tuple types.
 -}
 
 -- | A class supporting overloaded list-like operations on tuples.

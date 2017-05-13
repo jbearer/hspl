@@ -1,3 +1,6 @@
+{-# LANGUAGE CPP #-}
+{-# OPTIONS_HADDOCK show-extensions #-}
+
 {-|
 Module      : Control.Hspl.Internal.Debugger
 Description : An interactive debugger for HSPL programs.
@@ -30,8 +33,8 @@ module Control.Hspl.Internal.Debugger (
 
 import           Control.Monad.Logic
 import           Control.Monad.State
+import           Data.Data
 import qualified Data.Map as M
-import           Data.Typeable
 import           System.Console.ANSI
 import           System.IO
 import           System.IO.Unsafe
@@ -139,13 +142,16 @@ data DebugState = DS {
 -- | Monad which encapsulates the 'DebugState' during execution.
 type Debugger = SolverT (StateT DebugState IO)
 
+type DebugCont = SolverCont (StateT DebugState IO)
+
 -- | A 'SolverCont' continuation that also maintains a stack of current goals.
-debugCont :: Program -> [Goal] -> SolverCont (StateT DebugState IO)
+debugCont :: Program -> [Goal] -> DebugCont
 debugCont program stack = SolverCont { tryPredicate = debugFirstAlternative program stack
                                      , retryPredicate = debugNextAlternative program stack
                                      , tryUnifiable = debugUnifiable program stack
                                      , tryIdentical = debugIdentical program stack
                                      , tryNot = debugNot program stack
+                                     , tryEqual = debugEqual program stack
                                      , errorUnknownPred = debugErrorUnknownPred stack
                                      }
 
@@ -203,6 +209,19 @@ getTheorem :: ProofResult -> Goal
 getTheorem (Proof g _, _) = g
 getTheorem (Axiom g, _) = g
 
+-- | Attempt to prove a subgoal and log 'Call', 'Exit', and 'Fail' messages as appropriate.
+call :: Program -> [Goal] -> (DebugCont -> Program -> a -> Debugger ProofResult) -> a -> Debugger ProofResult
+call program stack cont g = do
+  ifTarget stack $ prompt stack Call $ show (head stack)
+  ifte (cont (debugCont program stack) program g)
+    (\result -> ifTarget stack (prompt stack Exit (show $ getTheorem result)) >> return result)
+    (ifTarget stack (prompt stack Fail $ show (head stack)) >> mzero)
+
+-- | Same as 'call', but for 2-ary provers.
+call2 :: Program -> [Goal] -> (DebugCont -> Program -> a -> b -> Debugger ProofResult) -> a -> b -> Debugger ProofResult
+call2 program stack cont a b =
+  call program stack (\c p (x, y) -> cont c p x y) (a, b)
+
 -- | Continuation hook for proving a predicate which matches a given clause.
 debugPredicate :: MsgType -> Program -> [Goal] -> Predicate -> HornClause -> Debugger ProofResult
 debugPredicate mtype program s p c = do
@@ -222,29 +241,34 @@ debugNextAlternative = debugPredicate Redo
 
 -- | Continaution hook for proving a 'CanUnify' goal.
 debugUnifiable :: Typeable a => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
-debugUnifiable program s t1 t2 = do
+debugUnifiable program s t1 t2 =
   let stack = CanUnify t1 t2 : s
-  ifTarget stack $ prompt stack Call $ show (head stack)
-  ifte (proveUnifiableWith (debugCont program stack) program t1 t2)
-    (\result -> ifTarget stack (prompt stack Exit (show $ getTheorem result)) >> return result)
-    (ifTarget stack (prompt stack Fail $ show (CanUnify t1 t2)) >> mzero)
+  in call2 program stack proveUnifiableWith t1 t2
 
 -- | Continaution hook for proving an 'Identical' goal.
 debugIdentical :: Typeable a => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
-debugIdentical program s t1 t2 = do
+debugIdentical program s t1 t2 =
   let stack = Identical t1 t2 : s
-  ifTarget stack $ prompt stack Call $ show (head stack)
-  ifte (proveIdenticalWith (debugCont program stack) program t1 t2)
-    (\result -> ifTarget stack (prompt stack Exit (show $ getTheorem result)) >> return result)
-    (ifTarget stack (prompt stack Fail $ show (Identical t1 t2)) >> mzero)
+  in call2 program stack proveIdenticalWith t1 t2
 
+-- | Continuation hook for proving a 'Not' goal.
 debugNot :: Program -> [Goal] -> Goal -> Debugger ProofResult
-debugNot program s g = do
+debugNot program s g =
   let stack = Not g : s
-  ifTarget stack $ prompt stack Call $ show (head stack)
-  ifte (proveNotWith (debugCont program stack) program g)
-    (\result -> ifTarget stack (prompt stack Exit (show $ getTheorem result)) >> return result)
-    (ifTarget stack (prompt stack Fail $ show (Not g)) >> mzero)
+  in call program stack proveNotWith g
+
+-- | Continuation hook for proving an 'Equal' goal.
+debugEqual :: ( Typeable a
+              , Data a
+              , Eq a
+#ifdef SHOW_TERMS
+              , Show a
+#endif
+              ) =>
+              Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
+debugEqual program s lhs rhs =
+  let stack = Equal lhs rhs : s
+  in call2 program stack proveEqualWith lhs rhs
 
 -- | Continuation hook invoked when a goal with no matching clauses is encountered.
 debugErrorUnknownPred :: [Goal] -> Predicate -> Debugger a

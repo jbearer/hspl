@@ -64,9 +64,13 @@ test = describeModule "Control.Hspl" $ do
     it "should retrieve only the first solution when requested" $
       runHspl1 program ("mortal"? string "x") `shouldBe`
         Just (head $ Solver.runHsplN 1 program (Ast.predicate "mortal" (Var "x" :: Var String)))
+    it "should retrieve at most the requested number of solutions" $
+      runHsplN 1 program ("mortal"? string "x") `shouldBe`
+        Solver.runHsplN 1 program (Ast.predicate "mortal" (Var "x" :: Var String))
     it "should handle failure gracefully" $ do
       runHspl program ("mortal"? "bob") `shouldBe` []
       runHspl1 program ("mortal"? "bob") `shouldBe` Nothing
+      runHsplN 1 program ("mortal"? "bob") `shouldBe` []
 
   describe "typed variable constructors" $ do
     it "should contruct variables of various primitive types" $ do
@@ -76,11 +80,11 @@ test = describeModule "Control.Hspl" $ do
       char "x" `shouldBe` (Var "x" :: Var Char)
       string "x" `shouldBe` (Var "x" :: Var String)
     it "should construct variables of list type" $ do
-      bool |*| "x" `shouldBe` (Var "x" :: Var [Bool])
-      int |*| "x" `shouldBe` (Var "x" :: Var [Int])
-      integer |*| "x" `shouldBe` (Var "x" :: Var [Integer])
-      char |*| "x" `shouldBe` (Var "x" :: Var String)
-      string |*| "x" `shouldBe` (Var "x" :: Var [String])
+      bool \* "x" `shouldBe` (Var "x" :: Var [Bool])
+      int \* "x" `shouldBe` (Var "x" :: Var [Int])
+      integer \* "x" `shouldBe` (Var "x" :: Var [Integer])
+      char \* "x" `shouldBe` (Var "x" :: Var String)
+      string \* "x" `shouldBe` (Var "x" :: Var [String])
     it "should deduce the type of generic variables" $ do
       auto "x" `shouldBe` (Var "x" :: Var Bool)
       auto "x" `shouldBe` (Var "x" :: Var Int)
@@ -121,7 +125,7 @@ test = describeModule "Control.Hspl" $ do
           Ast.List (Ast.toTerm (Var "x" :: Var Char))
                    (Ast.List (Ast.toTerm (Var "y" :: Var Char)) (Ast.toTerm "foo"))
       it "should prepend a variable to a list variable" $
-        char "x" <:> char |*| "xs" `shouldBe`
+        char "x" <:> char \* "xs" `shouldBe`
           Ast.List (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm (Var "xs" :: Var String))
     context "via concatenation" $ do
       it "should append a list of variables" $
@@ -180,3 +184,41 @@ test = describeModule "Control.Hspl" $ do
   describe "the lnot predicate" $
     it "should create a Not goal from an inner goal" $
       execWriter (lnot $ "foo"? 'a') `shouldBe` [Ast.Not $ Ast.PredGoal $ Ast.predicate "foo" 'a']
+
+  describe "the is predicate" $ do
+    it "should create an Equal goal from two terms" $ do
+      execWriter ((3 :: Int) `is` (3 :: Int)) `shouldBe`
+        [Ast.Equal (Ast.toTerm (3 :: Int)) (Ast.toTerm (3 :: Int))]
+      execWriter (int "x" `is` (3 :: Int)) `shouldBe`
+        [Ast.Equal (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (3 :: Int))]
+    it "should have lower precedence than arithmetic operators" $
+      execWriter (int "x" `is` (3 :: Int) |+| (2 :: Int)) `shouldBe`
+        [Ast.Equal (Ast.toTerm (Var "x" :: Var Int))
+                   (Ast.Sum (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int)))]
+
+  describe "arithmetic operators" $ do
+    it "should create a sum of terms" $ do
+      ((3 :: Int) |+| (2 :: Int)) `shouldBe`
+        Ast.Sum (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
+      (int "x" |+| (2 :: Int)) `shouldBe`
+        Ast.Sum (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))
+    it "should create a difference of terms" $ do
+      ((3 :: Int) |-| (2 :: Int)) `shouldBe`
+        Ast.Difference (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
+      (int "x" |-| (2 :: Int)) `shouldBe`
+        Ast.Difference (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))
+    it "should create a product of terms" $ do
+      ((3 :: Int) |*| (2 :: Int)) `shouldBe`
+        Ast.Product (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
+      (int "x" |*| (2 :: Int)) `shouldBe`
+        Ast.Product (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))
+    it "should create a quotient of fractionals" $ do
+      ((3 :: Double) |/| (2 :: Double)) `shouldBe`
+        Ast.Quotient (Ast.toTerm (3 :: Double)) (Ast.toTerm (2 :: Double))
+      (double "x" |/| (2 :: Double)) `shouldBe`
+        Ast.Quotient (Ast.toTerm (Var "x" :: Var Double)) (Ast.toTerm (2 :: Double))
+    it "should create a quotient of integrals" $ do
+      ((3 :: Int) |\| (2 :: Int)) `shouldBe`
+        Ast.IntQuotient (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
+      (int "x" |\| (2 :: Int)) `shouldBe`
+        Ast.IntQuotient (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))

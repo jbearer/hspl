@@ -14,7 +14,7 @@ import           Control.Exception.Base (evaluate)
 import           Control.Monad.State hiding (when)
 import           Data.Data
 import qualified Data.Map as M
-import           Data.Monoid
+import           Data.Monoid hiding (Sum, Product)
 import           Data.Typeable
 
 data RecursiveType = Base | Rec RecursiveType
@@ -200,6 +200,28 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         mgu (Constructor Left (toTerm (Var "x" :: Var Char)))
             (Constructor Right (toTerm (Var "y" :: Var Char))) `shouldBe`
           Nothing
+    when "both terms are arithmetic expressions" $ do
+      it "should unify terms of the same type of expression by unifying the operands" $ do
+        mgu (Sum (toTerm $ Var "x") (toTerm (1 :: Int)))
+            (Sum (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
+          Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
+        mgu (Difference (toTerm $ Var "x") (toTerm (1 :: Int)))
+            (Difference (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
+          Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
+        mgu (Product (toTerm $ Var "x") (toTerm (1 :: Int)))
+            (Product (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
+          Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
+        mgu (Quotient (toTerm $ Var "x") (toTerm (1.0 :: Double)))
+            (Quotient (toTerm (2.0 :: Double)) (toTerm $ Var "y")) `shouldBe`
+          Just (toTerm (1.0 :: Double) // Var "y" <> toTerm (2.0 :: Double) // Var "x")
+        mgu (IntQuotient (toTerm $ Var "x") (toTerm (1 :: Int)))
+            (IntQuotient (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
+          Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
+      it "should fail to unify different types of expressions" $ do
+        mgu (Sum (toTerm $ Var "x") (toTerm (1 :: Int)))
+            (Difference (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe` Nothing
+        mgu (Quotient (toTerm $ Var "x") (toTerm (1.0 :: Double)))
+            (Product (toTerm $ Var "x") (toTerm (1.0 :: Double))) `shouldBe` Nothing
     it "should prohibit unification of terms of different types" $ do
       -- This should work
       evaluate $ mgu (toTerm True) (toTerm True)
@@ -260,6 +282,29 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           Constructor Just (toTerm (Fresh 1 :: Var Char))
         rename (Constructor Just (toTerm (Var "x" :: Var Char, Var "q" :: Var Int))) `shouldBe`
           Constructor Just (toTerm (Fresh 1 :: Var Char, Fresh 4 :: Var Int))
+    context "of an arithmetic expression" $ do
+      it "should recursively rename variables in each operand" $ do
+        rename (Sum (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
+          Sum (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 5)
+        rename (Difference (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
+          Difference (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 5)
+        rename (Product (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
+          Product (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 5)
+        rename (Quotient (toTerm (Var "x" :: Var Double)) (toTerm $ Var "y")) `shouldBe`
+          Quotient (toTerm (Fresh 4 :: Var Double)) (toTerm $ Fresh 5)
+        rename (IntQuotient (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
+          IntQuotient (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 5)
+      it "should rename the same variable with the same replacement" $ do
+        rename (Sum (toTerm (Var "x" :: Var Int)) (toTerm $ Var "x")) `shouldBe`
+          Sum (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 4)
+        rename (Difference (toTerm (Var "x" :: Var Int)) (toTerm $ Var "x")) `shouldBe`
+          Difference (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 4)
+        rename (Product (toTerm (Var "x" :: Var Int)) (toTerm $ Var "x")) `shouldBe`
+          Product (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 4)
+        rename (Quotient (toTerm (Var "x" :: Var Double)) (toTerm $ Var "x")) `shouldBe`
+          Quotient (toTerm (Fresh 4 :: Var Double)) (toTerm $ Fresh 4)
+        rename (IntQuotient (toTerm (Var "x" :: Var Int)) (toTerm $ Var "x")) `shouldBe`
+          IntQuotient (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 4)
   describe "predicate renaming" $ do
     let r = Renamer $ M.singleton (typeOf True) (VarMap $ M.singleton (Var "x" :: Var Bool) (Fresh 0))
     let rename = renamePredWithContext r 1
@@ -291,6 +336,13 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       it "should rename variables in the inner goal" $
         rename (Not $ PredGoal $ predicate "foo" (Var "x" :: Var Bool)) `shouldBe`
           Not (PredGoal $ predicate "foo" (Fresh 0 :: Var Bool))
+    context "of Equal goals" $ do
+      it "should rename variables in each term" $
+        rename (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
+          Equal (toTerm (Fresh 0 :: Var Int)) (toTerm (Fresh 1 :: Var Int))
+      it "should rename variables in both terms the same" $
+        rename (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
+          Equal (toTerm (Fresh 0 :: Var Int)) (toTerm (Fresh 0 :: Var Int))
   describe "clause renaming" $ do
     let rename = doRenameClause
     it "should rename variables in the positive literal" $
@@ -356,6 +408,23 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       it "should recursively apply the unifier to the argument" $
         unifyTerm (toTerm 'a' // Var "x") (Constructor Just $ toTerm (Var "x" :: Var Char)) `shouldBe`
           Constructor Just (toTerm 'a')
+    context "to an arithmetic expression" $
+      it "should recursively apply the unifier to each element" $ do
+        unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
+                  (Sum (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
+          Sum (toTerm (1 :: Int)) (toTerm (2 :: Int))
+        unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
+                  (Difference (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
+          Difference (toTerm (1 :: Int)) (toTerm (2 :: Int))
+        unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
+                  (Product (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
+          Product (toTerm (1 :: Int)) (toTerm (2 :: Int))
+        unifyTerm (toTerm (1.0 :: Double) // Var "x" <> (2.0 :: Double) // Var "y")
+                  (Quotient (toTerm (Var "x" :: Var Double)) (toTerm $ Var "y")) `shouldBe`
+          Quotient (toTerm (1.0 :: Double)) (toTerm (2.0 :: Double))
+        unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
+                  (IntQuotient (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
+          IntQuotient (toTerm (1 :: Int)) (toTerm (2 :: Int))
   describe "predicate unifier application" $ do
     it "should unify the argument when the unifier applies" $
       unifyPredicate (toTerm 'a' // Var "x") (predicate "foo" (Var "x" :: Var Char)) `shouldBe`
@@ -397,6 +466,17 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         unifyGoal (toTerm 'a' // Var "x")
                   (Not $ PredGoal $ predicate "foo" (Var "x" :: Var Char)) `shouldBe`
           Not (PredGoal $ predicate "foo" 'a')
+    context "to an Equal goal" $ do
+      it "should unify both terms" $
+        unifyGoal (toTerm (1 :: Int) // Var "x" <> toTerm (2 :: Int) // Var "y")
+          (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
+          Equal (toTerm (1 :: Int)) (toTerm (2 :: Int))
+      it "should leave either term unchanged when the unifier does not apply" $ do
+        let u = toTerm (1 :: Int) // Var "x"
+        unifyGoal u (Equal (toTerm (Var "y" :: Var Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
+          Equal (toTerm (Var "y" :: Var Int)) (toTerm (1 :: Int))
+        unifyGoal u (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
+          Equal (toTerm (1 :: Int)) (toTerm (Var "y" :: Var Int))
   describe "clause unifier application" $ do
     it "should unify the positive literal when the unifier applies" $
       unifyClause (toTerm 'a' // Var "x")

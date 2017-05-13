@@ -52,13 +52,13 @@ adts = hspl $
 -- [member(1, 1, 1)]
 lists :: Hspl
 lists = hspl $ do
-  def "member"? (int "x", int "x" <:> int |*| "xs")
-  def "member"? (int "y", int "x" <:> int |*| "xs") |- "member"? (int "y", int |*| "xs")
+  def "member"? (int "x", int "x" <:> int \* "xs")
+  def "member"? (int "y", int "x" <:> int \* "xs") |- "member"? (int "y", int \* "xs")
 
-  def "distinct"? (int "x", int "x" <:> int |*| "xs")
-  def "distinct"? (int "y", int "x" <:> int |*| "xs") |- do
+  def "distinct"? (int "x", int "x" <:> int \* "xs")
+  def "distinct"? (int "y", int "x" <:> int \* "xs") |- do
     int "y" |\=| int "x"
-    "distinct"? (int "y", int |*| "xs")
+    "distinct"? (int "y", int \* "xs")
 
 -- | Example illustrating the difference between '(|=|)' and '(|==|)'.
 --
@@ -74,3 +74,14 @@ equals :: Hspl
 equals = hspl $ do
   def "isFoo"? string "x" |- auto "x" |==| "foo"
   def "couldBeFoo"? string "x" |- auto "x" |=| "foo"
+
+-- | Example of a program with infinitely many solutions.
+--
+-- >>> getAllSolutions $ runHsplN 5 odds $ "odd"? int "x"
+-- [odd(1),odd(3),odd(5),odd(7),odd(9)]
+odds :: Hspl
+odds = hspl $ do
+  def "odd"? int "x" |- do
+    "odd"? int "y"
+    int "x" `is` int "y" |+| (2 :: Int)
+  def "odd"? (1 :: Int)

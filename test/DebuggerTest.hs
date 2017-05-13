@@ -56,12 +56,10 @@ expectCanUnifyCall d t1 t2 = "(" ++ show d ++ ") Call: " ++ show (CanUnify (toTe
 expectCanUnifyExit :: (TermData a) => Int -> a -> String
 expectCanUnifyExit d t = "(" ++ show d ++ ") Exit: " ++ show (CanUnify (toTerm t) (toTerm t))
 
-expectCanUnifyFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
-                        Int -> a -> b -> String
+expectCanUnifyFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
 expectCanUnifyFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ show (CanUnify (toTerm t1) (toTerm t2))
 
-expectIdenticalCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
-                        Int -> a -> b -> String
+expectIdenticalCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
 expectIdenticalCall d t1 t2 = "(" ++ show d ++ ") Call: " ++ show (Identical (toTerm t1) (toTerm t2))
 
 expectIdenticalExit :: (TermData a) => Int -> a -> String
@@ -79,6 +77,15 @@ expectNotExit d g = "(" ++ show d ++ ") Exit: " ++ show (Not g)
 
 expectNotFail :: Int -> Goal -> String
 expectNotFail d g = "(" ++ show d ++ ") Fail: " ++ show (Not g)
+
+expectEqualCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
+expectEqualCall d a b = "(" ++ show d ++ ") Call: " ++ show (Equal (toTerm a) (toTerm b))
+
+expectEqualExit :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
+expectEqualExit d a b = "(" ++ show d ++ ") Exit: " ++ show (Equal (toTerm a) (toTerm b))
+
+expectEqualFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
+expectEqualFail d a b = "(" ++ show d ++ ") Fail: " ++ show (Equal (toTerm a) (toTerm b))
 
 deepProgram = addClauses [ HornClause (predicate "foo" (Var "x" :: Var Char))
                                       [PredGoal $ predicate "bar" (Var "x" :: Var Char)]
@@ -115,6 +122,10 @@ identicalProgram = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var S
 notProgram = addClauses [ HornClause ( predicate "isNotFoo" (Var "x" :: Var String))
                                      [ Not $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")]
                         ] emptyProgram
+
+equalProgram = addClauses [ HornClause (predicate "equal" (Var "x" :: Var Int, Var "y" :: Var Int))
+                                       [Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))]
+                          ] emptyProgram
 
 test = describeModule "Control.Hspl.Internal.Debugger" $ do
   describe "the step command" $ do
@@ -186,6 +197,12 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                        , expectNotFail 2 $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
                        , expectFail 1 "isNotFoo" (Var "x" :: Var String)
                        ]
+    let equalGoal = predicate "equal" (Var "x" :: Var Int, Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+    let equalTrace = [ expectCall 1 "equal" (Var "x" :: Var Int, Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                     , expectEqualCall 2 (Var "x" :: Var Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                     , expectEqualExit 2 (3 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                     , expectExit 1 "equal" (3 :: Int, Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                     ]
     let run p g t c = runTest p g (map (const c) [1..length t]) t
 
     it "should prompt after every step of computation" $ do
@@ -198,6 +215,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run identicalProgram identicalFailGoal identicalFailTrace "step"
       run notProgram notGoal notTrace "step"
       run notProgram notFailGoal notFailTrace "step"
+      run equalProgram equalGoal equalTrace "step"
     it "should have a one-character alias" $ do
       run deepProgram deepGoal deepTrace "s"
       run wideProgram wideGoal wideTrace "s"
@@ -208,6 +226,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run identicalProgram identicalFailGoal identicalFailTrace "s"
       run notProgram notGoal notTrace "s"
       run notProgram notFailGoal notFailTrace "s"
+      run equalProgram equalGoal equalTrace "step"
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do

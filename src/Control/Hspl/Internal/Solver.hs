@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
@@ -42,15 +43,16 @@ module Control.Hspl.Internal.Solver (
   , proveUnifiableWith
   , proveIdenticalWith
   , proveNotWith
+  , proveEqualWith
   , proveWith
   , prove
   ) where
 
 import Control.Monad.Identity
 import Control.Monad.Logic
+import Data.Data
 import Data.Maybe
-import Data.Monoid
-import Data.Typeable
+import Data.Monoid hiding (Sum, Product)
 
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Unification
@@ -199,6 +201,20 @@ data SolverCont (m :: * -> *) =
                -- produce a trivial proof of the negation of the goal. The zero-overhead version of
                -- this continuation is 'proveNotWith'.
              , tryNot :: Goal -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove equality of arithmetic
+               -- expressions. The resulting computation in the 'SolverT' monad should evaluate the
+               -- right-hand side as an arithmetic expression and, if successful, attempt to unify
+               -- the resulting constant with the 'Term' on the left-hand side. If the right-hand
+               -- side does not evaluate to a constant (for example, because it contains one or more
+               -- free variables) the program should terminate with a runtime error. The zero-
+               -- overhead version of this continuation is 'proveEqualWith'.
+             , tryEqual :: forall a. ( Typeable a
+                                     , Data a
+                                     , Eq a
+#ifdef SHOW_TERMS
+                                     , Show a
+#endif
+                                     ) => Term a -> Term a -> SolverT m ProofResult
                -- | Continuation to be invoked when a goal fails because there are no matching
                -- clauses. This computation should result in 'mzero', but may perform effects in the
                -- underlying monad first.
@@ -213,6 +229,7 @@ solverCont p = SolverCont { tryPredicate = provePredicateWith (solverCont p) p
                           , tryUnifiable = proveUnifiableWith (solverCont p) p
                           , tryIdentical = proveIdenticalWith (solverCont p) p
                           , tryNot = proveNotWith (solverCont p) p
+                          , tryEqual = proveEqualWith (solverCont p) p
                           , errorUnknownPred = const mzero
                           }
 
@@ -265,6 +282,28 @@ proveNotWith cont program g = ifte (once $ proveWith cont program g)
                                    (const mzero)
                                    (return (Axiom $ Not g, mempty))
 
+-- | Check if the value of the right-hand side unifies with the left-hand side.
+proveEqualWith :: ( Typeable a
+                  , Data a
+                  , Eq a
+#ifdef SHOW_TERMS
+                  , Show a
+#endif
+                  , Monad m
+                  ) =>
+                  SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
+proveEqualWith _ _ lhs rhs = case mgu lhs (Constant $ eval rhs) of
+    Just u -> return (Axiom $ Equal (unifyTerm u lhs) (unifyTerm u rhs), u)
+    Nothing -> mzero
+  where eval (Constant c) = c
+        eval (Sum t1 t2) = eval t1 + eval t2
+        eval (Difference t1 t2) = eval t1 - eval t2
+        eval (Product t1 t2) = eval t1 * eval t2
+        eval (Quotient t1 t2) = eval t1 / eval t2
+        eval (IntQuotient t1 t2) = eval t1 `div` eval t2
+        eval (Variable _) = error "Arguments are not sufficiently instantiated."
+        eval _ = error "Argument must be an arithmetic expression."
+
 -- | Produce a proof of the goal from the clauses in the program. This function will either fail,
 -- or backtrack over all possible proofs. It will invoke the appropriate continuations in the given
 -- 'SolverCont' whenever a relevant event occurs during the course of the proof.
@@ -276,3 +315,4 @@ proveWith cont program g = case g of
   CanUnify t1 t2 -> tryUnifiable cont t1 t2
   Identical t1 t2 -> tryIdentical cont t1 t2
   Not g' -> tryNot cont g'
+  Equal t1 t2 -> tryEqual cont t1 t2

@@ -6,7 +6,7 @@ import Testing
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Unification
-import Data.Monoid
+import Data.Monoid hiding (Sum, Product)
 
 -- x is a member of x:xs
 member1 = HornClause (predicate "member" ( Var "x" :: Var Int
@@ -131,6 +131,20 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should succeed if the inner goal fails" $
       runTest example0 (PredGoal $ predicate "foo" ('b', 'a')) `shouldBe`
         [(Axiom $ Not $ PredGoal $ predicate "foo" ('b', 'a'), mempty)]
+  describe "proveEqualWith" $ do
+    let runTest lhs rhs = observeAllSolver $
+          proveEqualWith (solverCont emptyProgram) emptyProgram (toTerm lhs) (toTerm rhs)
+    it "should unify a variable with a constant" $ do
+      let (proofs, us) = unzip $ runTest (Var "x" :: Var Int) (1 :: Int)
+      proofs `shouldBe` [Axiom $ Equal (toTerm (1 :: Int)) (toTerm (1 :: Int))]
+      length us `shouldBe` 1
+      head us `shouldSatisfy` ((1 :: Int) // Var "x" `isSubunifierOf`)
+    it "should evaluate an arithmetic expression" $ do
+      let (proofs, us) = unzip $ runTest (5 :: Int) (Sum (toTerm (3 :: Int)) (toTerm (2 :: Int)))
+      proofs `shouldBe` [Axiom $ Equal (toTerm (5 :: Int)) (Sum (toTerm (3 :: Int)) (toTerm (2 :: Int)))]
+      us `shouldBe` [mempty]
+    it "should fail when the left-hand side does not unify with the result of the right" $
+      runTest (5 :: Int) (Product (toTerm (3 :: Int)) (toTerm (2 :: Int))) `shouldBe` []
   describe "a proof search" $ do
     it "should traverse every branch of the proof" $ do
       let p = predicate "p" ()

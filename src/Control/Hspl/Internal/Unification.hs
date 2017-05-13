@@ -61,7 +61,7 @@ import           Control.Monad.State
 import           Data.List
 import qualified Data.Map as M
 import           Data.Maybe
-import           Data.Monoid hiding (Product)
+import           Data.Monoid hiding (Sum, Product)
 import           Data.Typeable
 
 import Control.Hspl.Internal.Ast
@@ -156,9 +156,14 @@ freeIn x (Variable y) = case cast y of
   Nothing -> False
 freeIn _ (Constant _) = False
 freeIn x (Constructor _ t) = freeIn x t
-freeIn x (Product t ts) = freeIn x t || freeIn x ts
+freeIn x (Tup t ts) = freeIn x t || freeIn x ts
 freeIn x (List t ts) = freeIn x t || freeIn x ts
 freeIn _ Nil = False
+freeIn x (Sum t1 t2) = freeIn x t1 || freeIn x t2
+freeIn x (Difference t1 t2) = freeIn x t1 || freeIn x t2
+freeIn x (Product t1 t2) = freeIn x t1 || freeIn x t2
+freeIn x (Quotient t1 t2) = freeIn x t1 || freeIn x t2
+freeIn x (IntQuotient t1 t2) = freeIn x t1 || freeIn x t2
 
 -- | Compute the most general unifier for two 'Term's. A "most general unifier" is a 'Unifier' that
 -- cannot be created by composing (@<>@) two smaller unifiers. This function will fail with
@@ -189,25 +194,30 @@ mgu (Constructor f t) (Constructor f' t') = case cast t' of
   Just t'' -> if constructor f == constructor f' then mgu t t'' else Nothing
   Nothing -> Nothing
 
-mgu (Product t ts) (Product t' ts') = do
-  -- Unify the productands in sequence, applying each intermediate unifier to the remaining terms
-  mgu1 <- mgu t t'
-  let uts = unifyTerm mgu1 ts
-  let uts' = unifyTerm mgu1 ts'
-  mgu2 <- mgu uts uts'
-  return $ mgu1 <> mgu2
+mgu (Tup t ts) (Tup t' ts') = mguBinaryTerm (t, ts) (t', ts')
 
 mgu Nil Nil = Just mempty
 mgu (List _ _) Nil = Nothing
 mgu Nil (List _ _) = Nothing
-mgu (List t ts) (List t' ts') = do
-  mgu1 <- mgu t t'
-  let uts = unifyTerm mgu1 ts
-  let uts' = unifyTerm mgu1 ts'
-  mgu2 <- mgu uts uts'
-  return $ mgu1 <> mgu2
+mgu (List t ts) (List t' ts') = mguBinaryTerm (t, ts) (t', ts')
+
+mgu (Sum t1 t2) (Sum t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
+mgu (Difference t1 t2) (Difference t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
+mgu (Product t1 t2) (Product t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
+mgu (Quotient t1 t2) (Quotient t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
+mgu (IntQuotient t1 t2) (IntQuotient t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 
 mgu _ _ = Nothing
+
+-- | Helper function for computing the 'mgu' of a 'Term' with two subterms.
+mguBinaryTerm :: (Term a, Term b) -> (Term a, Term b) -> Maybe Unifier
+mguBinaryTerm (t1, t2) (t1', t2') = do
+  -- Unify the subterms in sequence, applying each intermediate unifier to the remaining terms
+  mgu1 <- mgu t1 t1'
+  let ut2 = unifyTerm mgu1 t2
+  let ut2' = unifyTerm mgu1 t2'
+  mgu2 <- mgu ut2 ut2'
+  return $ mgu1 <> mgu2
 
 -- | Apply a 'Unifier' to a 'Term' and return the new 'Term', in which all free variables appearing
 -- in the unifier are replaced by the corresponding sub-terms.
@@ -215,9 +225,14 @@ unifyTerm :: Unifier -> Term a -> Term a
 unifyTerm u v@(Variable x) = findVarWithDefault v u x
 unifyTerm _ c@(Constant _) = c
 unifyTerm u (Constructor f t) = Constructor f (unifyTerm u t)
-unifyTerm u (Product t ts) = Product (unifyTerm u t) (unifyTerm u ts)
+unifyTerm u (Tup t ts) = Tup (unifyTerm u t) (unifyTerm u ts)
 unifyTerm u (List t ts) = List (unifyTerm u t) (unifyTerm u ts)
 unifyTerm _ Nil = Nil
+unifyTerm u (Sum t1 t2) = Sum (unifyTerm u t1) (unifyTerm u t2)
+unifyTerm u (Difference t1 t2) = Difference (unifyTerm u t1) (unifyTerm u t2)
+unifyTerm u (Product t1 t2) = Product (unifyTerm u t1) (unifyTerm u t2)
+unifyTerm u (Quotient t1 t2) = Quotient (unifyTerm u t1) (unifyTerm u t2)
+unifyTerm u (IntQuotient t1 t2) = IntQuotient (unifyTerm u t1) (unifyTerm u t2)
 
 -- | Apply a 'Unifier' to the argument of a 'Predicate'.
 unifyPredicate :: Unifier -> Predicate -> Predicate
@@ -229,6 +244,7 @@ unifyGoal u (PredGoal p) = PredGoal $ unifyPredicate u p
 unifyGoal u (CanUnify t1 t2) = CanUnify (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Identical t1 t2) = Identical (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Not g) = Not $ unifyGoal u g
+unifyGoal u (Equal t1 t2) = Equal (unifyTerm u t1) (unifyTerm u t2)
 
 -- | Apply a 'Unifier' to all 'Predicate's in a 'HornClause'.
 unifyClause :: Unifier -> HornClause -> HornClause
@@ -331,16 +347,23 @@ renameVar x = do
 renameTerm :: Monad m => Term a -> RenamedT m (Term a)
 renameTerm (Variable x) = liftM Variable $ renameVar x
 renameTerm (Constant c) = return $ Constant c
-renameTerm (Product t ts) = do
-  rt <- renameTerm t
-  rts <- renameTerm ts
-  return $ Product rt rts
-renameTerm (List t ts) = do
-  rt <- renameTerm t
-  rts <- renameTerm ts
-  return $ List rt rts
+renameTerm (Tup t ts) = renameBinaryTerm Tup t ts
+renameTerm (List t ts) = renameBinaryTerm List t ts
 renameTerm Nil = return Nil
 renameTerm (Constructor f t) = liftM (Constructor f) $ renameTerm t
+renameTerm (Sum t1 t2) = renameBinaryTerm Sum t1 t2
+renameTerm (Difference t1 t2) = renameBinaryTerm Difference t1 t2
+renameTerm (Product t1 t2) = renameBinaryTerm Product t1 t2
+renameTerm (Quotient t1 t2) = renameBinaryTerm Quotient t1 t2
+renameTerm (IntQuotient t1 t2) = renameBinaryTerm IntQuotient t1 t2
+
+-- | Helper function for renaming variables in a 'Term' with two subterms.
+renameBinaryTerm :: Monad m =>
+                    (Term a -> Term b -> Term c) -> Term a -> Term b -> RenamedT m (Term c)
+renameBinaryTerm constr t1 t2 = do
+  rt1 <- renameTerm t1
+  rt2 <- renameTerm t2
+  return $ constr rt1 rt2
 
 -- | Rename all of the variables in a predicate.
 renamePredicate :: Monad m => Predicate -> RenamedT m Predicate
@@ -349,15 +372,17 @@ renamePredicate (Predicate name arg) = liftM (Predicate name) $ renameTerm arg
 -- | Rename all of the variables in a goal.
 renameGoal :: Monad m => Goal -> RenamedT m Goal
 renameGoal (PredGoal p) = liftM PredGoal $ renamePredicate p
-renameGoal (CanUnify t1 t2) = do
-  t1' <- renameTerm t1
-  t2' <- renameTerm t2
-  return $ CanUnify t1' t2'
-renameGoal (Identical t1 t2) = do
-  t1' <- renameTerm t1
-  t2' <- renameTerm t2
-  return $ Identical t1' t2'
+renameGoal (CanUnify t1 t2) = renameBinaryGoal CanUnify t1 t2
+renameGoal (Identical t1 t2) = renameBinaryGoal Identical t1 t2
 renameGoal (Not g) = liftM Not $ renameGoal g
+renameGoal (Equal t1 t2) = renameBinaryGoal Equal t1 t2
+
+-- | Helper function for renaming variables in a 'Goal' with two 'Term' arguments.
+renameBinaryGoal :: Monad m => (Term a -> Term b -> Goal) -> Term a -> Term b -> RenamedT m Goal
+renameBinaryGoal constr t1 t2 = do
+  t1' <- renameTerm t1
+  t2' <- renameTerm t2
+  return $ constr t1' t2'
 
 -- | Rename all of the variables in a clause.
 renameClause :: Monad m => HornClause -> UnificationT m HornClause

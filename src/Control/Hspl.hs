@@ -43,10 +43,12 @@ module Control.Hspl (
   , (|==|)
   , (|\==|)
   , lnot
+  , is
   -- * Running HSPL programs
   , ProofResult
   , runHspl
   , runHspl1
+  , runHsplN
   , searchProof
   , getUnifier
   , getAllUnifiers
@@ -63,9 +65,18 @@ module Control.Hspl (
   , int
   , integer
   , char
+  , double
   , string
-  , (|*|)
+  , (\*)
   , auto
+  -- ** Numbers
+  -- | HSPL provides special semantics for numeric types. Arithmetic expressions can be created
+  -- using the following operators and evaluated using 'is'.
+  , (|+|)
+  , (|-|)
+  , (|*|)
+  , (|/|)
+  , (|\|)
   -- ** Lists
   -- $lists
   , (<:>)
@@ -154,7 +165,7 @@ p |- gs =
 (|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
 t1 |=| t2 = tell [Ast.CanUnify (toTerm t1) (toTerm t2)]
 
--- | Negation of '(|=|)'. The predicate @t1 |\=| t2@ succeeds if and only if @t1 |=| t2@ fails. No
+-- | Negation of '|=|'. The predicate @t1 |\\=| t2@ succeeds if and only if @t1 |=| t2@ fails. No
 -- new bindings are created.
 (|\=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
 t1 |\=| t2 = lnot $ t1 |=| t2
@@ -164,7 +175,7 @@ t1 |\=| t2 = lnot $ t1 |=| t2
 (|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
 t1 |==| t2 = tell [Ast.Identical (toTerm t1) (toTerm t2)]
 
--- | Negation of '(|==|)'. The predicate @t1 |\==| t2@ succeeds if and only if @t1 |==| t2@ fails.
+-- | Negation of '|==|'. The predicate @t1 |\\==| t2@ succeeds if and only if @t1 |==| t2@ fails.
 -- No new bindings are created.
 (|\==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
 t1 |\==| t2 = lnot $ t1 |==| t2
@@ -175,6 +186,47 @@ lnot :: ClauseBuilder a -> ClauseBuilder ()
 lnot p = case execWriter p of
   [g] -> tell [Not g]
   _ -> error "lnot must be applied to exactly one predicate."
+
+-- | Evaluate an arithmetic expression. The right-hand side is evaluated, and the resulting numeric
+-- constant is then unified with the left-hand side. Note that 'is' will cause a run-time error if
+-- the right-hand side expression contains unbound variables, or is not a valid arithmetic
+-- expression. An expression may contain constants, instantiated variables, and combinations thereof
+-- formed using '|+|', '|-|', '|*|', '|/|', and '|\|'.
+infix 1 `is`
+is :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
+is a b = tell [Equal (toTerm a) (toTerm b)]
+
+-- | Addition. Create a term representing the sum of two terms.
+infixl 8 |+|
+(|+|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
+         a -> b -> Term (HSPLType a)
+a |+| b = Ast.Sum (toTerm a) (toTerm b)
+
+-- | Subtraction. Create a term representing the difference of two terms.
+infixl 8 |-|
+(|-|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
+         a -> b -> Term (HSPLType a)
+a |-| b = Ast.Difference (toTerm a) (toTerm b)
+
+-- | Multiplication. Create a term representing the product of two terms.
+infixl 9 |*|
+(|*|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
+         a -> b -> Term (HSPLType a)
+a |*| b = Ast.Product (toTerm a) (toTerm b)
+
+-- | Division. Create a term representing the quotient of two terms. Both operands must be of
+-- 'Fractional' type.
+infixl 9 |/|
+(|/|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Fractional (HSPLType a)) =>
+         a -> b -> Term (HSPLType a)
+a |/| b = Ast.Quotient (toTerm a) (toTerm b)
+
+-- | Integer divison. Create a term representing the the quotient of two terms, truncated towards 0.
+-- Both operands must be of 'Integral' type.
+infixl 9 |\|
+(|\|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Integral (HSPLType a)) =>
+         a -> b -> Term (HSPLType a)
+a |\| b = Ast.IntQuotient (toTerm a) (toTerm b)
 
 -- | Construct an HSPL program.
 hspl :: HsplBuilder a -> Hspl
@@ -189,11 +241,15 @@ runHspl program gs = case execWriter gs of
 
 -- | Query an HSPL program for a given goal. If a proof is found, stop immediately instead of
 -- backtracking to look for additional solutions. If no proof is found, return 'Nothing'.
-runHspl1 :: TermData a => Hspl -> ClauseBuilder a -> Maybe ProofResult
-runHspl1 program gs = case execWriter gs of
-  [PredGoal goal] -> case Solver.runHsplN 1 program goal of
-    [] -> Nothing
-    (res:_) -> Just res
+runHspl1 :: Hspl -> ClauseBuilder a -> Maybe ProofResult
+runHspl1 program gs = case runHsplN 1 program gs of
+  [] -> Nothing
+  (res:_) -> Just res
+
+-- | Query an HSPL program for a given goal. Stop after @n@ solutions are found.
+runHsplN :: Int -> Hspl -> ClauseBuilder a -> [ProofResult]
+runHsplN n program gs = case execWriter gs of
+  [PredGoal goal] -> Solver.runHsplN n program goal
   _ -> error "Please specify exactly one predicate to prove."
 
 {- $types
@@ -249,13 +305,17 @@ bool = Var
 char :: String -> Var Char
 char = Var
 
+-- | Contruct a 'Double' variable
+double :: String -> Var Double
+double = Var
+
 -- | Construct a variable which represents a list of terms.
 --
--- >>> char |*| "x"
+-- >>> char \* "x"
 -- x :: [Char]
-infixr 9 |*|
-(|*|) :: Typeable a => (String -> Var a) -> String -> Var [a]
-(|*|) _ = Var
+infixr 9 \*
+(\*) :: Typeable a => (String -> Var a) -> String -> Var [a]
+(\*) _ = Var
 
 -- | Construct a variable and let the Haskell compiler try to deduce its type.
 auto :: Typeable a => String -> Var a

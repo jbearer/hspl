@@ -44,69 +44,80 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       toTerm (42 :: Int) `shouldBe` Constant (42 :: Int)
       toTerm (42 :: Integer) `shouldBe` Constant (42 :: Integer)
     it "can be constructed from tuples" $ do
-      toTerm (True, 'a') `shouldBe` Product (Constant True) (Constant 'a')
-      toTerm (True, 'a', ()) `shouldBe` Product (Constant True) (Product (Constant 'a') (Constant ()))
+      toTerm (True, 'a') `shouldBe` Tup (Constant True) (Constant 'a')
+      toTerm (True, 'a', ()) `shouldBe` Tup (Constant True) (Tup (Constant 'a') (Constant ()))
       toTerm ((), (), ()) `shouldBe`
-        Product (Constant ()) (
-        Product (Constant ())
+        Tup (Constant ()) (
+        Tup (Constant ())
                 (Constant ()))
       toTerm ((), (), (), ()) `shouldBe`
-        Product (Constant ()) (
-        Product (Constant ()) (
-        Product (Constant ())
+        Tup (Constant ()) (
+        Tup (Constant ()) (
+        Tup (Constant ())
                 (Constant ())))
       toTerm ((), (), (), (), ()) `shouldBe`
-        Product (Constant ()) (
-        Product (Constant ()) (
-        Product (Constant ()) (
-        Product (Constant ())
+        Tup (Constant ()) (
+        Tup (Constant ()) (
+        Tup (Constant ()) (
+        Tup (Constant ())
                 (Constant ()))))
       toTerm ((), (), (), (), (), ()) `shouldBe`
-        Product (Constant ()) (
-        Product (Constant ()) (
-        Product (Constant ()) (
-        Product (Constant ()) (
-        Product (Constant ())
+        Tup (Constant ()) (
+        Tup (Constant ()) (
+        Tup (Constant ()) (
+        Tup (Constant ()) (
+        Tup (Constant ())
                 (Constant ())))))
       toTerm ((), (), (), (), (), (), ()) `shouldBe`
-        Product (Constant ()) (
-        Product (Constant ()) (
-        Product (Constant ()) (
-        Product (Constant ()) (
-        Product (Constant ()) (
-        Product (Constant ())
+        Tup (Constant ()) (
+        Tup (Constant ()) (
+        Tup (Constant ()) (
+        Tup (Constant ()) (
+        Tup (Constant ()) (
+        Tup (Constant ())
                 (Constant ()))))))
 
       -- Nested tuples have the same internal represetation as flat tuples, but a different type
-      toTerm (True, ('a', ())) `shouldBe` Product (Constant True) (Product (Constant 'a') (Constant ()))
+      toTerm (True, ('a', ())) `shouldBe` Tup (Constant True) (Tup (Constant 'a') (Constant ()))
       toTerm (True, 'a', (), 'b') `shouldBe`
-        Product (Constant True) (
-        Product (Constant 'a') (
-        Product (Constant ())
+        Tup (Constant True) (
+        Tup (Constant 'a') (
+        Tup (Constant ())
                 (Constant 'b')))
       toTerm (True, ('a', ((), 'b'))) `shouldBe`
-        Product (Constant True) (
-        Product (Constant 'a') (
-        Product (Constant ())
+        Tup (Constant True) (
+        Tup (Constant 'a') (
+        Tup (Constant ())
                 (Constant 'b')))
       toTerm (True, ('a', (), 'b')) `shouldBe`
-        Product (Constant True) (
-        Product (Constant 'a') (
-        Product (Constant ())
+        Tup (Constant True) (
+        Tup (Constant 'a') (
+        Tup (Constant ())
                 (Constant 'b')))
     it "can be constructed from lists" $ do
       toTerm "foo" `shouldBe` List (Constant 'f') (List (Constant 'o') (List (Constant 'o') Nil))
       toTerm ("foo", [True, False]) `shouldBe`
-        Product (List (Constant 'f') (List (Constant 'o') (List (Constant 'o') Nil)))
+        Tup (List (Constant 'f') (List (Constant 'o') (List (Constant 'o') Nil)))
                 (List (Constant True) (List (Constant False) Nil))
     it "should provide sufficient generality to represent ADTs" $ do
       termType (Constructor (\(x, y, z) -> Tree x y z)
-                  (Product (Constant True)
-                           (Product (Constructor Leaf $ Constant True)
+                  (Tup (Constant True)
+                           (Tup (Constructor Leaf $ Constant True)
                                     (Constructor Leaf $ Constant False)))) `shouldBe`
         typeOf (Leaf True)
       termType (Constructor Leaf (Constructor Leaf (Constant True))) `shouldBe`
         typeOf (Leaf (Leaf True))
+    it "should allow the representation of arithmetic expressions" $ do
+      termType (Sum (toTerm (42 :: Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
+        typeOf (42 :: Int)
+      termType (Difference (toTerm (1.0 :: Double)) (toTerm (Var "x" :: Var Double))) `shouldBe`
+        typeOf (1.0 :: Double)
+      termType (Product (toTerm (42 :: Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
+        typeOf (42 :: Int)
+      termType (Quotient (toTerm (1.0 :: Double)) (toTerm (Var "x" :: Var Double))) `shouldBe`
+        typeOf (1.0 :: Double)
+      termType (IntQuotient (toTerm (42 :: Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
+        typeOf (42 :: Int)
     it "can be constructed from variables any type" $ do
       toTerm (Var "x" :: Var Bool) `shouldBe` Variable (Var "x" :: Var Bool)
       toTerm (Var "x" :: Var (Tree Bool)) `shouldBe` Variable (Var "x" :: Var (Tree Bool))
@@ -116,9 +127,9 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       toTerm (Fresh 0 :: Var (Bool, String)) `shouldBe` Variable (Fresh 0 :: Var (Bool, String))
     it "should permit embedded variables" $ do
       toTerm (True, Var "x" :: Var Bool) `shouldBe`
-        Product (Constant True) (Variable (Var "x" :: Var Bool))
+        Tup (Constant True) (Variable (Var "x" :: Var Bool))
       toTerm (True, (Var "x" :: Var Bool, False)) `shouldBe`
-        Product (Constant True) (Product (Variable $ Var "x") (Constant False))
+        Tup (Constant True) (Tup (Variable $ Var "x") (Constant False))
     it "should have type corresponding to the enclosed value" $ do
       termType (toTerm True) `shouldBe` typeOf True
       termType (toTerm ('a', True, ())) `shouldBe` typeOf ('a', True, ())
@@ -134,8 +145,8 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         fromTerm (toTerm (True, 'a')) `shouldBe` Just (True, 'a')
         fromTerm (toTerm "foo") `shouldBe` Just "foo"
         fromTerm (Constructor (\(x, y, z) -> Tree x y z)
-                    (Product (Constant True)
-                             (Product (Constructor Leaf $ Constant True)
+                    (Tup (Constant True)
+                             (Tup (Constructor Leaf $ Constant True)
                                       (Constructor Leaf $ Constant False)))) `shouldBe`
           Just (Tree True (Leaf True) (Leaf False))
         fromTerm (Constructor Leaf (Constructor Leaf (Constant True))) `shouldBe`
@@ -148,14 +159,22 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         fromTerm (toTerm (True, 'a', (), 'b')) `shouldBe` Just (True, 'a', (), 'b')
         fromTerm (toTerm (True, ('a', ((), 'b')))) `shouldBe` Just (True, ('a', ((), 'b')))
         fromTerm (toTerm (True, ('a', (), 'b'))) `shouldBe` Just (True, ('a', (), 'b'))
+
+        -- Arithmetic expressions
+        fromTerm (Sum (toTerm (41 :: Int)) (toTerm (1 :: Int))) `shouldBe` Just 42
+        fromTerm (Difference (toTerm (43 :: Int)) (toTerm (1 :: Int))) `shouldBe` Just 42
+        fromTerm (Product (toTerm (7 :: Int)) (toTerm (6 :: Int))) `shouldBe` Just 42
+        fromTerm (Quotient (toTerm (10.5 :: Double)) (toTerm (0.25 :: Double))) `shouldBe` Just 42.0
+        fromTerm (IntQuotient (toTerm (85 :: Int)) (toTerm (2 :: Int))) `shouldBe` Just 42
     when "containing variables" $
       it "fromTerm should return Nothing" $ do
         fromTerm (toTerm (Var "x" :: Var ())) `shouldBe` (Nothing :: Maybe ())
         fromTerm (toTerm (True, Var "x" :: Var Bool)) `shouldBe` (Nothing :: Maybe (Bool, Bool))
         fromTerm (Constructor (\(x, y, z) -> Tree x y z)
-                    (Product (Constant True)
-                             (Product (Constructor Leaf $ Constant True)
+                    (Tup (Constant True)
+                             (Tup (Constructor Leaf $ Constant True)
                                       (Variable $ Var "x")))) `shouldBe` Nothing
+        fromTerm (Sum (toTerm (42 :: Int)) (toTerm (Var "x" :: Var Int))) `shouldBe` Nothing
   describe "predicates" $ do
     it "should have type corresponding to the type of the argument" $ do
       predType (predicate "foo" ()) `shouldBe` termType (toTerm ())
@@ -206,6 +225,23 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
     it "should compare according to the inner goal" $ do
       Not (PredGoal $ predicate "foo" ()) `shouldEqual` Not (PredGoal $ predicate "foo" ())
       Not (PredGoal $ predicate "foo" ()) `shouldNotEqual` Not (PredGoal $ predicate "bar" ())
+  describe "Equal goals" $ do
+    context "of the same type" $
+      it "should compare according to the arguments" $ do
+        Equal (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldEqual`
+          Equal (toTerm (1 :: Int)) (toTerm (2 :: Int))
+        Equal (toTerm (Var "x" :: Var Int)) (toTerm (1 :: Int)) `shouldEqual`
+          Equal (toTerm (Var "x" :: Var Int)) (toTerm (1 :: Int))
+        Equal (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldNotEqual`
+          Equal (toTerm (1 :: Int)) (toTerm (1 :: Int))
+        Equal (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int)) `shouldNotEqual`
+          Equal (toTerm (Var "y" :: Var Int)) (toTerm (2 :: Int))
+    context "of different types" $
+      it "should compare unequal" $ do
+        Equal (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldNotEqual`
+          Equal (toTerm (1.0 :: Double)) (toTerm (2.0 :: Double))
+        Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int)) `shouldNotEqual`
+          Equal (toTerm (Var "x" :: Var Double)) (toTerm (Var "y" :: Var Double))
   describe "clauses" $ do
     it "should have type corresponding to the type of the positive literal" $ do
       clauseType (HornClause foo []) `shouldBe` predType foo
