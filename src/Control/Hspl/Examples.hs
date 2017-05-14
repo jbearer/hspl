@@ -52,13 +52,16 @@ adts = hspl $
 -- [member(1, 1, 1)]
 lists :: Hspl
 lists = hspl $ do
-  def "member"? (int "x", int "x" <:> int \* "xs")
-  def "member"? (int "y", int "x" <:> int \* "xs") |- "member"? (int "y", int \* "xs")
+  let member = decl "member" :: PredDecl (Int, [Int])
+  let distinct = decl "distinct" :: PredDecl (Int, [Int])
 
-  def "distinct"? (int "x", int "x" <:> int \* "xs")
-  def "distinct"? (int "y", int "x" <:> int \* "xs") |- do
+  def member? (int "x", int "x" <:> int \* "xs")
+  def member? (int "y", int "x" <:> int \* "xs") |- member? (v"y", v"xs")
+
+  def distinct? (int "x", int "x" <:> int \* "xs")
+  def distinct? (int "y", int "x" <:> int \* "xs") |- do
     int "y" |\=| int "x"
-    "distinct"? (int "y", int \* "xs")
+    distinct? (v"y", v"xs")
 
 -- | Example illustrating the difference between '(|=|)' and '(|==|)'.
 --

@@ -6,6 +6,7 @@
 #if __GLASGOW_HASKELL__ < 710
 {-# LANGUAGE OverlappingInstances #-}
 #endif
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
@@ -26,7 +27,6 @@ module Control.Hspl (
   , Term
   , Goal
   , Clause
-  , PredDef
   -- * Building HSPL programs
   , HsplBuilder
   , ClauseBuilder
@@ -34,7 +34,12 @@ module Control.Hspl (
   -- ** Defining predicates
   , def
   , (|-)
-  , PredApp (..)
+  , (?)
+  -- *** Typed predicates
+  -- | Predicates can be foward declared with a type annotation to allow the compiler to infer types
+  -- whenever the predicate is applied.
+  , PredDecl
+  , decl
   -- ** Special predicates
   -- | Some predicates have special semantics. These can appear as goals on the right-hand side of
   -- '|-', but they can never be the object of a 'def' statement on the left-hand side.
@@ -69,6 +74,7 @@ module Control.Hspl (
   , string
   , (\*)
   , auto
+  , v
   -- ** Numbers
   -- | HSPL provides special semantics for numeric types. Arithmetic expressions can be created
   -- using the following operators and evaluated using 'is'.
@@ -125,34 +131,90 @@ class PredApp a b c | a b -> c where
 instance TermData a => PredApp String a (ClauseBuilder ()) where
   name? arg = tell [PredGoal $ Ast.predicate name arg]
 
-instance TermData a => PredApp PredDef a (HsplBuilder ()) where
+instance (TermData b, a ~ HSPLType b) => PredApp (PredDecl a) b (ClauseBuilder ()) where
+  name? arg = unDecl name ? arg
+
+instance (TermData b, a ~ HSPLType b) => PredApp (PredDef a) b (HsplBuilder ()) where
   name? arg = tell [Ast.HornClause (Ast.predicate (unDef name) arg) []]
 
--- | The type of a predicate declaration with a particular name. 'PredDef's are created using 'def'
--- and are suitable only for defining a predicate with '(?)' and '(|-)'.
-newtype PredDef = Def { unDef :: String }
+instance (TermData a) => PredApp UntypedPredDef a (HsplBuilder ()) where
+  name? arg = tell [Ast.HornClause (Ast.predicate (unUDef name) arg) []]
 
--- | Define a new predicate. The predicate has a name and an argument, which is pattern matched
--- whenever a goal with a matching name is encountered. The definition may be empty, in which case
--- the predicate succeeds whenever pattern matching succeeds. Otherwise, the definition consists of
--- the '|-' operator followed by a @do@ block containing a sequence of predicate applications. If
--- pattern matching on the argument succeeds, then each line of the @do@ block is tried as a
--- subgoal; if all subgoals succeed, the predicate succeeds.
---
--- In terms of first-order logic, the relationship between the predicate and the definition is one
--- of implication; the conjunction of all of the goals in the definition implies the predicate.
---
--- Example:
+-- | The type of a forward declaration of a predicate. 'PredDecl's are created using 'decl' and are
+-- suitable only for applying a predicate with '(?)'.
+newtype PredDecl a = Decl { unDecl :: String }
+
+-- | Give a forward declaration of a predicate. This is never required; however, using 'decl' with
+-- a type annotation can allow for more effective use of type inference. For example, if we define
 --
 -- @
---  def "mortal"? int "x" |- do
---    "human"? int "x"
+--  cons = decl "cons" :: PredDecl (Int, [Int], [Int])
 -- @
 --
--- This defines a predicate @mortal(X)@, which is true if @human(X)@ is true; in other words,
--- this definition defines the relationship @human(X) => mortal(X)@.
-def :: String -> PredDef
-def = Def
+-- Then the predicate application
+--
+-- @
+--  cons? (v"x", v"xs", v"x" <:> v"xs")
+-- @
+--
+-- is equivalent to
+--
+-- @
+--  "cons"? (int "x", int \* "xs", int "x" <:> int \* "xs")
+-- @
+decl :: String -> PredDecl a
+decl = Decl
+
+-- | The type of a predicate definition with a particular name. 'PredDef's are created using 'def'
+-- and are suitable only for defining a predicate with '(?)' and '(|-)'.
+newtype PredDef a = Def { unDef :: String }
+
+-- | The type of a predicate definition with unkown type. The type of the predicate will be inferred
+-- from the type of the argument to which it is applied.
+newtype UntypedPredDef = UDef { unUDef :: String }
+
+-- | Overloaded functions for predicate definitions.
+class Definition a b | a -> b where
+  -- | Define a new predicate. The predicate has a name and an argument, which is pattern matched
+  -- whenever a goal with a matching name is encountered. The definition may be empty, in which case
+  -- the predicate succeeds whenever pattern matching succeeds. Otherwise, the definition consists of
+  -- the '|-' operator followed by a @do@ block containing a sequence of predicate applications. If
+  -- pattern matching on the argument succeeds, then each line of the @do@ block is tried as a
+  -- subgoal; if all subgoals succeed, the predicate succeeds.
+  --
+  -- In terms of first-order logic, the relationship between the predicate and the definition is one
+  -- of implication; the conjunction of all of the goals in the definition implies the predicate.
+  --
+  -- Example:
+  --
+  -- @
+  --  def "mortal"? int "x" |- do
+  --    "human"? int "x"
+  -- @
+  --
+  -- This defines a predicate @mortal(X)@, which is true if @human(X)@ is true; in other words,
+  -- this definition defines the relationship @human(X) => mortal(X)@.
+  --
+  -- This function is polymorphic in its first argument (the name of the predicate to define).
+  -- If that argument is a 'String', as above, then the type of the argument to the predicate is
+  -- ambiguous and must be deduced from the argument itself.
+  --
+  -- If, however, the first argument to 'def' is a 'PredDecl' (result of 'decl') then the argument
+  -- to the predicate must have the corresponding type, and the Haskell compiler can infer that
+  -- type. The following declaration is equivalent to the previous example:
+  --
+  -- @
+  --  mortal = decl "mortal" :: PredDecl Int
+  --  def mortal? auto "x" |- do
+  --    "human"? int "x"
+  -- @
+  def :: a -> b
+
+instance Definition (PredDecl a) (PredDef a) where
+  def = Def . unDecl
+
+instance Definition String UntypedPredDef where
+  def = UDef
 
 -- | Indicates the beginning of the definition of a predicate.
 infixr 0 |-
@@ -328,6 +390,10 @@ infixr 9 \*
 -- | Construct a variable and let the Haskell compiler try to deduce its type.
 auto :: Typeable a => String -> Var a
 auto = Var
+
+-- | Terser, but less readable, synonym for 'auto'.
+v :: Typeable a => String -> Var a
+v = auto
 
 -- Helper type allowing singleton "tuples" and true tuples to be treated somewhat uniformly
 type family Tuple a where

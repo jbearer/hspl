@@ -28,6 +28,16 @@ test = describeModule "Control.Hspl" $ do
         [Ast.PredGoal $ Ast.predicate "foo" (Var "x" :: Var String)]
       execWriter ("foo"? ('a', Var "x" :: Var Char)) `shouldBe`
         [Ast.PredGoal $ Ast.predicate "foo" ('a', Var "x" :: Var Char)]
+  describe "predicate forward declarations" $ do
+    let foo = decl "foo" :: PredDecl (Int, [Int])
+    context "in a def statement" $
+      it "should allow the compiler to deduce the type of the argument" $
+        execWriter (def foo? (v"x", v"xs")) `shouldBe`
+          [Ast.HornClause (Ast.predicate "foo" (Var "x" :: Var Int, Var "xs" :: Var [Int])) []]
+    context "in a goal" $
+      it "should allow the compiler to deduce the type of the argument" $
+        execWriter (foo? (v"x", v"xs")) `shouldBe`
+          [Ast.PredGoal $ Ast.predicate "foo" (Var "x" :: Var Int, Var "xs" :: Var [Int])]
   describe "clause building" $ do
     it "should build a clause from a positive literal and a ClauseBuilder" $ do
       execWriter (def "foo"? (Var "x" :: Var String) |- "bar"? (Var "x" :: Var String)) `shouldBe`
@@ -91,6 +101,11 @@ test = describeModule "Control.Hspl" $ do
       auto "x" `shouldBe` (Var "x" :: Var Integer)
       auto "x" `shouldBe` (Var "x" :: Var Char)
       auto "x" `shouldBe` (Var "x" :: Var String)
+      v"x" `shouldBe` (Var "x" :: Var Bool)
+      v"x" `shouldBe` (Var "x" :: Var Int)
+      v"x" `shouldBe` (Var "x" :: Var Integer)
+      v"x" `shouldBe` (Var "x" :: Var Char)
+      v"x" `shouldBe` (Var "x" :: Var String)
 
   describe "ADT term construction" $ do
     it "should work with constructors of all arities" $ do
