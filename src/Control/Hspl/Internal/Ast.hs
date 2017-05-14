@@ -519,7 +519,7 @@ addClause c@(HornClause (Predicate name _) _) m =
   let ty = clauseType c
       innerM = M.findWithDefault M.empty ty m
       cs = M.findWithDefault [] name innerM
-      innerM' = M.insert name (c : cs) innerM
+      innerM' = M.insert name (cs ++ [c]) innerM
       m' = M.insert ty innerM' m
   in m'
 

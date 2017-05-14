@@ -19,9 +19,9 @@ test = describeModule "Control.Hspl.Examples" $ do
   describe "lists" $ do
     it "should find all members of [1, 2, 3]" $
       getAllSolutions (runHspl lists $ "member"? (int "x", [1, 2, 3] :: [Int])) `shouldBe`
-        [ predicate "member" (3 :: Int, [1, 2, 3] :: [Int])
+        [ predicate "member" (1 :: Int, [1, 2, 3] :: [Int])
         , predicate "member" (2 :: Int, [1, 2, 3] :: [Int])
-        , predicate "member" (1 :: Int, [1, 2, 3] :: [Int])
+        , predicate "member" (3 :: Int, [1, 2, 3] :: [Int])
         ]
     it "should find all (not necessarily distinct) members of [1, 1]" $
       getAllSolutions (runHspl lists $ "member"? (int "x", [1, 1] :: [Int])) `shouldBe`

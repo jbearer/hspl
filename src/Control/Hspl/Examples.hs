@@ -81,7 +81,7 @@ equals = hspl $ do
 -- [odd(1),odd(3),odd(5),odd(7),odd(9)]
 odds :: Hspl
 odds = hspl $ do
+  def "odd"? (1 :: Int)
   def "odd"? int "x" |- do
     "odd"? int "y"
     int "x" `is` int "y" |+| (2 :: Int)
-  def "odd"? (1 :: Int)

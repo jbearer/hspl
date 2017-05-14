@@ -149,12 +149,12 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                     ]
     let backtrackingGoal = predicate "foo" (Var "x" :: Var Char)
     let backtrackingTrace = [ expectCall 1 "foo" (Var "x" :: Var Char)
-                            , expectCall 2 "baz" 'a'
-                            , expectFail 2 "baz" 'a'
-                            , expectFail 1 "foo" (Var "x" :: Var Char)
-                            , expectRedo 1 "foo" (Var "x" :: Var Char)
                             , expectCall 2 "bar" (Var "x" :: Var Char)
                             , expectUnknownPred 2 "bar" (Var "x" :: Var Char)
+                            , expectFail 1 "foo" (Var "x" :: Var Char)
+                            , expectRedo 1 "foo" (Var "x" :: Var Char)
+                            , expectCall 2 "baz" 'a'
+                            , expectFail 2 "baz" 'a'
                             , expectFail 1 "foo" (Var "x" :: Var Char)
                             ]
     let canUnifyGoal = predicate "isFoo" (Var "x" :: Var String)
@@ -277,7 +277,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       runTest backtrackingProgram (predicate "foo" (Var "x" :: Var Char))
         ["step", "finish", "finish"]
         [ expectCall 1 "foo" (Var "x" :: Var Char)
-        , expectCall 2 "baz" 'a'
+        , expectCall 2 "bar" (Var "x" :: Var Char)
         , expectFail 1 "foo" (Var "x" :: Var Char)
         ]
     it "should have a one-character alias" $

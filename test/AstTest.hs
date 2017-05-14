@@ -266,7 +266,7 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       let cs = findClauses p ex1
       cs `shouldNotBe` [] -- Otherwise this test is broken
       let m = addClause c ex1
-      findClauses p m `shouldBe` (c : cs)
+      findClauses p m `shouldBe` (cs ++ [c]) -- New clause goes at the end of the list
     it "should handle clauses of the same name different types" $ do
       let p1 = predicate "pred" (True, "false")
       let p2 = predicate "pred" ()
