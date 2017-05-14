@@ -5,6 +5,7 @@ import qualified UnificationTest as Unification
 import qualified SolverTest as Solver
 import qualified DebuggerTest as Debugger
 import qualified HsplTest as Hspl
+import qualified ExamplesTest as Examples
 
 main :: IO ()
 main = hspec $ do
@@ -13,3 +14,4 @@ main = hspec $ do
   Solver.test
   Debugger.test
   Hspl.test
+  Examples.test

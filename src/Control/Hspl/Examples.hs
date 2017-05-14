@@ -17,7 +17,7 @@ import Control.Hspl
 -- | A classic example of modus ponens: all humans are mortal, and Hypatia is human. Therefore,
 -- Hypatia is mortal.
 --
--- >>> getAllSolutions $ runHspl syllogism $ "mortal"? (string "x")
+-- >>> getAllSolutions $ runHspl syllogism $ "mortal"? string "x"
 -- [mortal("hypatia")]
 syllogism :: Hspl
 syllogism = hspl $ do
@@ -62,13 +62,13 @@ lists = hspl $ do
 
 -- | Example illustrating the difference between '(|=|)' and '(|==|)'.
 --
--- >>> getAllSolutions $ runHspl equals $ "isFoo"? (string "x")
+-- >>> getAllSolutions $ runHspl equals $ "isFoo"? string "x"
 -- []
 --
 -- >>> getAllSolutions $ runHspl equals $ "isFoo"? "foo"
 -- [isFoo("foo")]
 --
--- >>> getAllSolutions $ runHspl equals $ "couldBeFoo"? (string "x")
+-- >>> getAllSolutions $ runHspl equals $ "couldBeFoo"? string "x"
 -- [couldBeFoo("foo")]
 equals :: Hspl
 equals = hspl $ do

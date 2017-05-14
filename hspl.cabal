@@ -78,6 +78,7 @@ test-suite hspl-test
                      , SolverTest
                      , DebuggerTest
                      , HsplTest
+                     , ExamplesTest
 
 source-repository head
   type:     git
