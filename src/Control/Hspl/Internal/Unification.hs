@@ -164,6 +164,7 @@ freeIn x (Difference t1 t2) = freeIn x t1 || freeIn x t2
 freeIn x (Product t1 t2) = freeIn x t1 || freeIn x t2
 freeIn x (Quotient t1 t2) = freeIn x t1 || freeIn x t2
 freeIn x (IntQuotient t1 t2) = freeIn x t1 || freeIn x t2
+freeIn x (Modulus t1 t2) = freeIn x t1 || freeIn x t2
 
 -- | Compute the most general unifier for two 'Term's. A "most general unifier" is a 'Unifier' that
 -- cannot be created by composing (@<>@) two smaller unifiers. This function will fail with
@@ -206,6 +207,7 @@ mgu (Difference t1 t2) (Difference t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 mgu (Product t1 t2) (Product t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 mgu (Quotient t1 t2) (Quotient t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 mgu (IntQuotient t1 t2) (IntQuotient t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
+mgu (Modulus t1 t2) (Modulus t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 
 mgu _ _ = Nothing
 
@@ -233,6 +235,7 @@ unifyTerm u (Difference t1 t2) = Difference (unifyTerm u t1) (unifyTerm u t2)
 unifyTerm u (Product t1 t2) = Product (unifyTerm u t1) (unifyTerm u t2)
 unifyTerm u (Quotient t1 t2) = Quotient (unifyTerm u t1) (unifyTerm u t2)
 unifyTerm u (IntQuotient t1 t2) = IntQuotient (unifyTerm u t1) (unifyTerm u t2)
+unifyTerm u (Modulus t1 t2) = Modulus (unifyTerm u t1) (unifyTerm u t2)
 
 -- | Apply a 'Unifier' to the argument of a 'Predicate'.
 unifyPredicate :: Unifier -> Predicate -> Predicate
@@ -356,6 +359,7 @@ renameTerm (Difference t1 t2) = renameBinaryTerm Difference t1 t2
 renameTerm (Product t1 t2) = renameBinaryTerm Product t1 t2
 renameTerm (Quotient t1 t2) = renameBinaryTerm Quotient t1 t2
 renameTerm (IntQuotient t1 t2) = renameBinaryTerm IntQuotient t1 t2
+renameTerm (Modulus t1 t2) = renameBinaryTerm Modulus t1 t2
 
 -- | Helper function for renaming variables in a 'Term' with two subterms.
 renameBinaryTerm :: Monad m =>

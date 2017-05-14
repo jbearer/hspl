@@ -118,6 +118,8 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         typeOf (1.0 :: Double)
       termType (IntQuotient (toTerm (42 :: Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
         typeOf (42 :: Int)
+      termType (Modulus (toTerm (42 :: Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
+        typeOf (42 :: Int)
     it "can be constructed from variables any type" $ do
       toTerm (Var "x" :: Var Bool) `shouldBe` Variable (Var "x" :: Var Bool)
       toTerm (Var "x" :: Var (Tree Bool)) `shouldBe` Variable (Var "x" :: Var (Tree Bool))
@@ -166,6 +168,7 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         fromTerm (Product (toTerm (7 :: Int)) (toTerm (6 :: Int))) `shouldBe` Just 42
         fromTerm (Quotient (toTerm (10.5 :: Double)) (toTerm (0.25 :: Double))) `shouldBe` Just 42.0
         fromTerm (IntQuotient (toTerm (85 :: Int)) (toTerm (2 :: Int))) `shouldBe` Just 42
+        fromTerm (Modulus (toTerm (85 :: Int)) (toTerm (2 :: Int))) `shouldBe` Just 1
     when "containing variables" $
       it "fromTerm should return Nothing" $ do
         fromTerm (toTerm (Var "x" :: Var ())) `shouldBe` (Nothing :: Maybe ())

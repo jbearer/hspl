@@ -288,9 +288,13 @@ data Term a where
   -- division, and as such the type of the represented value must have an instance for 'Fractional'.
   Quotient :: Fractional a => Term a -> Term a -> Term a
 
-  -- |An arithmetic quotient of 'Term's. The quotient is obtained by integer division, and as such
+  -- | An arithmetic quotient of 'Term's. The quotient is obtained by integer division, and as such
   -- the type of the represented value must have an instance for 'Integral'.
   IntQuotient :: Integral a => Term a -> Term a -> Term a
+
+  -- | An arithmetic expression representing the remainder when dividing the first 'Term' by the
+  -- second.
+  Modulus :: Integral a => Term a -> Term a -> Term a
 
   deriving (Typeable)
 
@@ -311,6 +315,7 @@ instance Show (Term a) where
   show (Product t1 t2) = "Product (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
   show (Quotient t1 t2) = "Quotient (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
   show (IntQuotient t1 t2) = "IntQuotient (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+  show (Modulus t1 t2) = "Modulus (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
 #else
 instance Show (Term a) where
   show (Constructor f t) = show (constructor f) ++ " (" ++ show t ++ ")"
@@ -324,11 +329,12 @@ instance Show (Term a) where
   show (Constant _) = "c"
 #endif
   show (Variable v) = show v
-  show (Sum t1 t2) = "(" ++ show t1 ++ ") |+| (" ++ show t2 ++ ")"
-  show (Difference t1 t2) = "(" ++ show t1 ++ ") |-| (" ++ show t2 ++ ")"
-  show (Product t1 t2) = "(" ++ show t1 ++ ") |*| (" ++ show t2 ++ ")"
-  show (Quotient t1 t2) = "(" ++ show t1 ++ ") |/| (" ++ show t2 ++ ")"
-  show (IntQuotient t1 t2) = "(" ++ show t1 ++ ") |\\| (" ++ show t2 ++ ")"
+  show (Sum t1 t2) = show t1 ++ " |+| " ++ show t2
+  show (Difference t1 t2) = show t1 ++ " |-| " ++ show t2
+  show (Product t1 t2) = show t1 ++ " |*| " ++ show t2
+  show (Quotient t1 t2) = show t1 ++ " |/| " ++ show t2
+  show (IntQuotient t1 t2) = show t1 ++ " |\\| " ++ show t2
+  show (Modulus t1 t2) = show t1 ++ " |%| " ++ show t2
 #endif
 
 instance Eq (Term a) where
@@ -356,6 +362,7 @@ instance Eq (Term a) where
   (==) (Product t1 t2) (Product t1' t2') = t1 == t1' && t2 == t2'
   (==) (Quotient t1 t2) (Quotient t1' t2') = t1 == t1' && t2 == t2'
   (==) (IntQuotient t1 t2) (IntQuotient t1' t2') = t1 == t1' && t2 == t2'
+  (==) (Modulus t1 t2) (Modulus t1' t2') = t1 == t1' && t2 == t2'
 
   (==) _ _ = False
 
@@ -418,6 +425,7 @@ fromTerm term = case term of
   Product t1 t2 -> fromBinOp (*) t1 t2
   Quotient t1 t2 -> fromBinOp (/) t1 t2
   IntQuotient t1 t2 -> fromBinOp div t1 t2
+  Modulus t1 t2 -> fromBinOp mod t1 t2
   where fromBinOp f t1 t2 = do ut1 <- fromTerm t1
                                ut2 <- fromTerm t2
                                return $ f ut1 ut2

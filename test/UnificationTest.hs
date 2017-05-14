@@ -217,6 +217,9 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         mgu (IntQuotient (toTerm $ Var "x") (toTerm (1 :: Int)))
             (IntQuotient (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
           Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
+        mgu (Modulus (toTerm $ Var "x") (toTerm (1 :: Int)))
+            (Modulus (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
+          Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
       it "should fail to unify different types of expressions" $ do
         mgu (Sum (toTerm $ Var "x") (toTerm (1 :: Int)))
             (Difference (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe` Nothing
@@ -294,6 +297,8 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           Quotient (toTerm (Fresh 4 :: Var Double)) (toTerm $ Fresh 5)
         rename (IntQuotient (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
           IntQuotient (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 5)
+        rename (Modulus (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
+          Modulus (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 5)
       it "should rename the same variable with the same replacement" $ do
         rename (Sum (toTerm (Var "x" :: Var Int)) (toTerm $ Var "x")) `shouldBe`
           Sum (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 4)
@@ -305,6 +310,8 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           Quotient (toTerm (Fresh 4 :: Var Double)) (toTerm $ Fresh 4)
         rename (IntQuotient (toTerm (Var "x" :: Var Int)) (toTerm $ Var "x")) `shouldBe`
           IntQuotient (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 4)
+        rename (Modulus (toTerm (Var "x" :: Var Int)) (toTerm $ Var "x")) `shouldBe`
+          Modulus (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 4)
   describe "predicate renaming" $ do
     let r = Renamer $ M.singleton (typeOf True) (VarMap $ M.singleton (Var "x" :: Var Bool) (Fresh 0))
     let rename = renamePredWithContext r 1
@@ -425,6 +432,9 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
                   (IntQuotient (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
           IntQuotient (toTerm (1 :: Int)) (toTerm (2 :: Int))
+        unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
+                  (Modulus (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
+          Modulus (toTerm (1 :: Int)) (toTerm (2 :: Int))
   describe "predicate unifier application" $ do
     it "should unify the argument when the unifier applies" $
       unifyPredicate (toTerm 'a' // Var "x") (predicate "foo" (Var "x" :: Var Char)) `shouldBe`

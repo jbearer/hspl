@@ -301,6 +301,7 @@ proveEqualWith _ _ lhs rhs = case mgu lhs (Constant $ eval rhs) of
         eval (Product t1 t2) = eval t1 * eval t2
         eval (Quotient t1 t2) = eval t1 / eval t2
         eval (IntQuotient t1 t2) = eval t1 `div` eval t2
+        eval (Modulus t1 t2) = eval t1 `mod` eval t2
         eval (Variable _) = error "Arguments are not sufficiently instantiated."
         eval _ = error "Argument must be an arithmetic expression."
 

@@ -77,6 +77,7 @@ module Control.Hspl (
   , (|*|)
   , (|/|)
   , (|\|)
+  , (|%|)
   -- ** Lists
   -- $lists
   , (<:>)
@@ -191,7 +192,7 @@ lnot p = case execWriter p of
 -- constant is then unified with the left-hand side. Note that 'is' will cause a run-time error if
 -- the right-hand side expression contains unbound variables, or is not a valid arithmetic
 -- expression. An expression may contain constants, instantiated variables, and combinations thereof
--- formed using '|+|', '|-|', '|*|', '|/|', and '|\|'.
+-- formed using '|+|', '|-|', etc.
 infix 1 `is`
 is :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
 is a b = tell [Equal (toTerm a) (toTerm b)]
@@ -227,6 +228,13 @@ infixl 9 |\|
 (|\|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Integral (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
 a |\| b = Ast.IntQuotient (toTerm a) (toTerm b)
+
+-- | Modular arithmetic. Create a term representing the remainer when dividing the first term by the
+-- second. Both operands must be of 'Integral' type.
+infixl 9 |%|
+(|%|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Integral (HSPLType a)) =>
+         a -> b -> Term (HSPLType a)
+a |%| b = Ast.Modulus (toTerm a) (toTerm b)
 
 -- | Construct an HSPL program.
 hspl :: HsplBuilder a -> Hspl

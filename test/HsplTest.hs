@@ -222,3 +222,47 @@ test = describeModule "Control.Hspl" $ do
         Ast.IntQuotient (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
       (int "x" |\| (2 :: Int)) `shouldBe`
         Ast.IntQuotient (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))
+    it "should create a modular expression" $ do
+      ((3 :: Int) |%| (2 :: Int)) `shouldBe`
+        Ast.Modulus (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
+      (int "x" |%| (2 :: Int)) `shouldBe`
+        Ast.Modulus (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))
+    it "should be left-associative" $ do
+      (int "x" |+| int "y" |-| int "z") `shouldBe`
+        Ast.Difference (Ast.Sum (Ast.toTerm (Var "x" :: Var Int))
+                                (Ast.toTerm (Var "y" :: Var Int)))
+                       (Ast.toTerm (Var "z" :: Var Int))
+      (int "x" |*| int "y" |\| int "z") `shouldBe`
+        Ast.IntQuotient (Ast.Product (Ast.toTerm (Var "x" :: Var Int))
+                                     (Ast.toTerm (Var "y" :: Var Int)))
+                        (Ast.toTerm (Var "z" :: Var Int))
+      (double "x" |*| double "y" |/| double "z") `shouldBe`
+        Ast.Quotient (Ast.Product (Ast.toTerm (Var "x" :: Var Double))
+                                  (Ast.toTerm (Var "y" :: Var Double)))
+                     (Ast.toTerm (Var "z" :: Var Double))
+      (int "x" |%| int "y" |%| int "z") `shouldBe`
+        Ast.Modulus (Ast.Modulus (Ast.toTerm (Var "x" :: Var Int))
+                                 (Ast.toTerm (Var "y" :: Var Int)))
+                    (Ast.toTerm (Var "z" :: Var Int))
+    it "should give multiplication and division higher precedence than addition and subtraction" $ do
+      (int "x" |+| int "y" |*| int "z") `shouldBe`
+        Ast.Sum (Ast.toTerm (Var "x" :: Var Int))
+                (Ast.Product (Ast.toTerm (Var "y" :: Var Int))
+                             (Ast.toTerm (Var "z" :: Var Int)))
+      (int "x" |-| int "y" |\| int "z") `shouldBe`
+        Ast.Difference (Ast.toTerm (Var "x" :: Var Int))
+                       (Ast.IntQuotient (Ast.toTerm (Var "y" :: Var Int))
+                                        (Ast.toTerm (Var "z" :: Var Int)))
+      (double "x" |+| double "y" |/| double "z") `shouldBe`
+        Ast.Sum (Ast.toTerm (Var "x" :: Var Double))
+                (Ast.Quotient (Ast.toTerm(Var "y" :: Var Double))
+                              (Ast.toTerm(Var "z" :: Var Double)))
+    it "should give modulus the same precedence as multiplication" $ do
+      (int "x" |*| int "y" |%| int "z") `shouldBe`
+        Ast.Modulus (Ast.Product (Ast.toTerm (Var "x" :: Var Int))
+                                 (Ast.toTerm (Var "y" :: Var Int)))
+                    (Ast.toTerm (Var "z" :: Var Int))
+      (int "x" |%| int "y" |*| int "z") `shouldBe`
+        Ast.Product (Ast.Modulus (Ast.toTerm (Var "x" :: Var Int))
+                                 (Ast.toTerm (Var "y" :: Var Int)))
+                    (Ast.toTerm (Var "z" :: Var Int))
