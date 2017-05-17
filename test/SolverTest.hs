@@ -40,6 +40,11 @@ example1 = addClauses [ HornClause ( predicate "foo" (Var "x" :: Var Char, Var "
                       , HornClause ( predicate "baz" 'b' ) []
                       ] emptyProgram
 
+example2 = addClauses [ HornClause (predicate "foo" 'a')
+                                   [PredGoal $ predicate "bar" 'a']
+                      , HornClause (predicate "bar" 'a') []
+                      ] emptyProgram
+
 noUnification = addClauses [HornClause (predicate "foo" (Var "x" :: Var Char)) []] emptyProgram
 
 partialUnification = addClauses [HornClause (predicate "foo" (Var "x" :: Var Char, 'b')) []] emptyProgram
@@ -104,6 +109,13 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
                [ Axiom $ PredGoal $ predicate "bar" 'a'
                , Axiom $ PredGoal $ predicate "baz" 'b']]
       runTest example1 (predicate "bar" 'b') (HornClause (predicate "bar" 'a') []) `shouldBe` []
+    it "should return unifications made in the goal" $ do
+      let (_, us) = unzip $ runTest example2
+            (predicate "foo" (Var "x" :: Var Char))
+            (HornClause (predicate "foo" 'a')
+                        [PredGoal $ predicate "bar" 'a'])
+      length us `shouldBe` 1
+      head us `shouldSatisfy` ('a' // Var "x" `isSubunifierOf`)
   describe "proveUnifiableWith" $ do
     let runTest prog t1 t2 = observeAllSolver $
           proveUnifiableWith (solverCont prog) prog (toTerm t1) (toTerm t2)
@@ -216,7 +228,7 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should return a unifier for each solution" $ do
       let (_, us) = unzip $ runHspl syllogism (predicate "mortal" (Var "x" :: Var String))
       length us `shouldBe` 2
-      if head us `isSubunifierOf` ("hypatia" // Var "x")
+      if ("hypatia" // Var "x") `isSubunifierOf` head us
         then last us `shouldSatisfy` (("fred" // Var "x") `isSubunifierOf`)
         else do head us `shouldSatisfy` (("fred" // Var "x") `isSubunifierOf`)
                 last us `shouldSatisfy` (("hypatia" // Var "x") `isSubunifierOf`)

@@ -242,7 +242,7 @@ provePredicateWith cont program p c = do
   (gs, u) <- getSubGoals p c
   case gs of
     [] -> return (Axiom $ unifyGoal u (PredGoal p), u)
-    _ -> do (subProofs, netU) <- proveSubGoals mempty gs
+    _ -> do (subProofs, netU) <- proveSubGoals u gs
             return (Proof (unifyGoal netU (PredGoal p)) subProofs, netU)
   where getSubGoals p' c' = do mgs <- lift $ unify p' c'
                                case mgs of
