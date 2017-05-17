@@ -188,13 +188,13 @@ data SolverCont (m :: * -> *) =
                -- unified. The resulting computation in the 'SolverT' monad should either fail with
                -- 'mzero' or produce a unifier and a trivial proof of the unified terms. The zero-
                -- overhead version of this continuation is 'proveUnifiableWith'.
-             , tryUnifiable :: forall a. Typeable a => Term a -> Term a -> SolverT m ProofResult
+             , tryUnifiable :: forall a. TermEntry a => Term a -> Term a -> SolverT m ProofResult
                -- | Continuation to be invoked when attempting to prove that two terms are identical
                -- after applying the current unifier. No new unifications are created. The resulting
                -- computation in the 'SolverT' monad should either fail with 'mzero' or produce a
                -- trivial proof of the equality of the terms. The zero-overhead version of this
                -- continuation is 'proveIdenticalWith'.
-             , tryIdentical :: forall a. Typeable a => Term a -> Term a -> SolverT m ProofResult
+             , tryIdentical :: forall a. TermEntry a => Term a -> Term a -> SolverT m ProofResult
                -- | Continuation to be invoked when attempting to prove the negation of a goal. No
                -- new unifications are created. The resulting computation in the 'SolverT' monad
                -- should either fail with 'mzero' (if the negated goal succeeds at least once) or
@@ -208,13 +208,7 @@ data SolverCont (m :: * -> *) =
                -- side does not evaluate to a constant (for example, because it contains one or more
                -- free variables) the program should terminate with a runtime error. The zero-
                -- overhead version of this continuation is 'proveEqualWith'.
-             , tryEqual :: forall a. ( Typeable a
-                                     , Data a
-                                     , Eq a
-#ifdef SHOW_TERMS
-                                     , Show a
-#endif
-                                     ) => Term a -> Term a -> SolverT m ProofResult
+             , tryEqual :: forall a. TermEntry a => Term a -> Term a -> SolverT m ProofResult
                -- | Continuation to be invoked when a goal fails because there are no matching
                -- clauses. This computation should result in 'mzero', but may perform effects in the
                -- underlying monad first.
@@ -262,7 +256,7 @@ provePredicateWith cont program p c = do
 
 -- | Check if the given terms can unify. If so, produce the unifier and a trivial proof of their
 -- unifiability. Use the given continuations when proving subgoals.
-proveUnifiableWith :: (Typeable a, Monad m) =>
+proveUnifiableWith :: (TermEntry a, Monad m) =>
                       SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
 proveUnifiableWith _ _ t1 t2 = case mgu t1 t2 of
   Just u -> return (Axiom $ unifyGoal u $ CanUnify t1 t2, u)
@@ -270,7 +264,7 @@ proveUnifiableWith _ _ t1 t2 = case mgu t1 t2 of
 
 -- | Check if the given terms are identical (i.e. they have already been unified). If so, produce a
 -- trivial proof of their equality. Use the given continuations when proving subgoals.
-proveIdenticalWith :: (Typeable a, Monad m) =>
+proveIdenticalWith :: (TermEntry a, Monad m) =>
                       SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
 proveIdenticalWith _ _ t1 t2 = if t1 == t2
   then return (Axiom $ Identical t1 t2, mempty)
@@ -283,19 +277,13 @@ proveNotWith cont program g = ifte (once $ proveWith cont program g)
                                    (return (Axiom $ Not g, mempty))
 
 -- | Check if the value of the right-hand side unifies with the left-hand side.
-proveEqualWith :: ( Typeable a
-                  , Data a
-                  , Eq a
-#ifdef SHOW_TERMS
-                  , Show a
-#endif
-                  , Monad m
-                  ) =>
+proveEqualWith :: (TermEntry a, Monad m) =>
                   SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
 proveEqualWith _ _ lhs rhs = case mgu lhs (Constant $ eval rhs) of
     Just u -> return (Axiom $ Equal (unifyTerm u lhs) (unifyTerm u rhs), u)
     Nothing -> mzero
-  where eval (Constant c) = c
+  where eval :: Term a -> a
+        eval (Constant c) = c
         eval (Sum t1 t2) = eval t1 + eval t2
         eval (Difference t1 t2) = eval t1 - eval t2
         eval (Product t1 t2) = eval t1 * eval t2

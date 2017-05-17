@@ -99,7 +99,7 @@ import Data.Tuple.Curry
 import Data.Tuple.OneTuple
 
 import qualified Control.Hspl.Internal.Ast as Ast
-import           Control.Hspl.Internal.Ast (Var (Var), Term, TermData(..), Goal(..))
+import           Control.Hspl.Internal.Ast (Var (Var), Term, TermEntry, TermData(..), Goal(..), HSPLType)
 import qualified Control.Hspl.Internal.Solver as Solver
 import           Control.Hspl.Internal.Solver ( ProofResult
                                               , searchProof
@@ -131,10 +131,10 @@ class PredApp a b c | a b -> c where
 instance TermData a => PredApp String a (ClauseBuilder ()) where
   name? arg = tell [PredGoal $ Ast.predicate name arg]
 
-instance (TermData b, a ~ HSPLType b) => PredApp (PredDecl a) b (ClauseBuilder ()) where
+instance (TermData b, TermEntry a, a ~ HSPLType b) => PredApp (PredDecl a) b (ClauseBuilder ()) where
   name? arg = unDecl name ? arg
 
-instance (TermData b, a ~ HSPLType b) => PredApp (PredDef a) b (HsplBuilder ()) where
+instance (TermData b, TermEntry a, a ~ HSPLType b) => PredApp (PredDef a) b (HsplBuilder ()) where
   name? arg = tell [Ast.HornClause (Ast.predicate (unDef name) arg) []]
 
 instance (TermData a) => PredApp UntypedPredDef a (HsplBuilder ()) where
@@ -445,16 +445,8 @@ Algebraic data types can be used as HSPL terms via the '$$' constructor. See
 -- subtrees are represented by the variables @"left"@ and @"right"@. Note the classes which must be
 -- derived in order to use ADTs with HSPL: 'Eq', 'Typeable', and 'Data', as well as 'Show' if the
 -- @ShowTerms@ flag is enabled. Deriving these classes requires the extension @DeriveDataTypeable@.
-($$) :: ( TermData a
-         , ToTuple (HSPLType a)
-         , Curry (Tuple (HSPLType a) -> r) f
-         , Eq r
-         , Data r
-#ifdef SHOW_TERMS
-         , Show r
-#endif
-         ) =>
-     f -> a -> Term r
+($$) :: (TermData a, ToTuple (HSPLType a), Curry (Tuple (HSPLType a) -> r) f, TermEntry r) =>
+        f -> a -> Term r
 f $$ x = Ast.Constructor (uncurryN f . toTuple) (toTerm x)
 
 {- $lists

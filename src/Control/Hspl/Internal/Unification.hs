@@ -1,4 +1,5 @@
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -70,7 +71,7 @@ import Control.Hspl.Internal.Ast
 -- those variables. We will use this to build a generalized 'Unifier' supporting variables of any
 -- type. However, this intermediate structure allows the compiler to prove that a variable will
 -- never map to a term of the wrong type, a nice property to have.
-data SubMap = forall a. Typeable a => SubMap (M.Map (Var a) (Term a))
+data SubMap = forall a. TermEntry a => SubMap (M.Map (Var a) (Term a))
 
 instance Eq SubMap where
   (==) (SubMap m) (SubMap m') = case cast m' of
@@ -138,7 +139,7 @@ compose (Unifier u1) gu2@(Unifier u2) =
   in Unifier $ M.union u1' u2
 
 -- | A unifier representing the replacement of a variable by a term.
-(//) :: TermData a => a -> Var (HSPLType a) -> Unifier
+(//) :: (TermData a, TermEntry (HSPLType a)) => a -> Var (HSPLType a) -> Unifier
 t // x = Unifier $ M.singleton (varType x) $ SubMap (M.singleton x (toTerm t))
 
 -- | @u1 `isSubunifierOf` u2@ if and only if every substitution in @u1@ is also in @u2@.
@@ -280,7 +281,7 @@ data UnificationStatus a =
   deriving (Show, Eq)
 
 -- | Query the unification status of a variable.
-queryVar :: Typeable a => Unifier -> Var a -> UnificationStatus a
+queryVar :: TermEntry a => Unifier -> Var a -> UnificationStatus a
 queryVar u x = case findVar u x of
   Nothing -> Ununified
   Just t -> case fromTerm t of

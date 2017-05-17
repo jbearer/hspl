@@ -28,6 +28,7 @@ module Control.Hspl.Internal.Ast (
   -- * Type system
   -- $typeSystem
     TermData (..)
+  , TermEntry
   -- * AST
   -- $ast
   , Var (..)
@@ -74,6 +75,23 @@ the abstract representation of a variable in HSPL is a Haskell data type of type
 @a@ represents the HSPL type of the variable.
 -}
 
+-- | Class for types which can be represented by a term. The only purpose of this class is to give
+-- a succinct method for constraining the superclasses required of any HSPL type.
+class ( Typeable a
+      , Data a
+      , Eq a
+#ifdef SHOW_TERMS
+      , Show a
+#endif
+      ) => TermEntry a where {}
+instance ( Typeable a
+         , Data a
+         , Eq a
+#ifdef SHOW_TERMS
+         , Show a
+#endif
+         ) => TermEntry a
+
 -- |
 -- The class of types which can be deconstructed and converted to a 'Term'. For example,
 --
@@ -85,13 +103,7 @@ the abstract representation of a variable in HSPL is a Haskell data type of type
 --
 -- >>> :t toTerm (True, "foo")
 -- toTerm (True, "Foo") :: Term (Bool, [Char])
-class ( Data (HSPLType a)
-      , Eq (HSPLType a)
-#ifdef SHOW_TERMS
-      , Show (HSPLType a)
-#endif
-      ) => TermData a where
-
+class TermEntry (HSPLType a) => TermData a where
   -- | A map from Haskell types to HSPL types. This is a many-to-one type function which takes
   --
   -- * @Var a@ to @HSPLType a@
@@ -104,22 +116,12 @@ class ( Data (HSPLType a)
   toTerm :: a -> Term (HSPLType a)
 
 -- Variables
-instance ( Data a
-         , Eq a
-#ifdef SHOW_TERMS
-         , Show a
-#endif
-         ) => TermData (Var a) where
+instance TermEntry a => TermData (Var a) where
   type HSPLType (Var a) = a
   toTerm = Variable
 
 -- Terms can trivially be converted to Terms
-instance ( Data a
-         , Eq a
-#ifdef SHOW_TERMS
-         , Show a
-#endif
-         ) => TermData (Term a) where
+instance TermEntry a => TermData (Term a) where
   type HSPLType (Term a) = a
   toTerm = id
 
@@ -164,7 +166,7 @@ instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f
   toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
 -- Lists
-instance TermData a => TermData [a] where
+instance (TermData a, TermEntry (HSPLType a)) => TermData [a] where
   type HSPLType [a] = [HSPLType a]
   toTerm [] = Nil
   toTerm (x:xs) = List (toTerm x) (toTerm xs)
@@ -230,71 +232,45 @@ data Term a where
   -- ADTs by uncurring the constructors. Note that the first argument /must/ be an ADT constructor,
   -- any function with the right type will not do. This is checked at runtime. See 'constructor' for
   -- details.
-  Constructor :: ( Typeable a
-                 , Data b
-                 , Eq b
-#ifdef SHOW_TERMS
-                 , Show a
-                 , Show b
-#endif
-                 ) => (a -> b) -> Term a -> Term b
+  Constructor :: (TermEntry a, TermEntry b) => (a -> b) -> Term a -> Term b
 
   -- | A product type (i.e. a tuple). We define tuples inductively with a head and a tail, which
   -- allows the simple representation of any tuple with just this one constructor.
-  Tup :: (Tuple a, Typeable (Head a), Typeable (Tail a)) => Term (Head a) -> Term (Tail a) -> Term a
+  Tup :: (Tuple a, TermEntry a, TermEntry (Head a), TermEntry (Tail a)) =>
+         Term (Head a) -> Term (Tail a) -> Term a
 
   -- | A primitive constant.
-  Constant :: ( Data a
-              , Eq a
-#ifdef SHOW_TERMS
-              , Show a
-#endif
-              ) => a -> Term a
+  Constant :: TermEntry a => a -> Term a
 
   -- | A cons cell.
-  List :: ( Data a
-          , Eq a
-#ifdef SHOW_TERMS
-          , Show a
-#endif
-          ) => Term a -> Term [a] -> Term [a]
+  List :: TermEntry a => Term a -> Term [a] -> Term [a]
 
   -- | An emtpy list (base case for the 'List' constructor)
-  Nil :: ( Data a
-         , Eq a
-#ifdef SHOW_TERMS
-         , Show a
-#endif
-         ) => Term [a]
+  Nil :: TermEntry a => Term [a]
 
   -- | A variable which can unify with any 'Term' of type @a@.
-  Variable :: ( Data a
-              , Eq a
-#ifdef SHOW_TERMS
-              , Show a
-#endif
-              ) => Var a -> Term a
+  Variable :: TermEntry a => Var a -> Term a
 
   -- | An arithmetic sum of two 'Term's.
-  Sum :: Num a => Term a -> Term a -> Term a
+  Sum :: (Num a, TermEntry a) => Term a -> Term a -> Term a
 
   -- | An arithmetic difference of 'Term's.
-  Difference :: Num a => Term a -> Term a -> Term a
+  Difference :: (Num a, TermEntry a) => Term a -> Term a -> Term a
 
   -- | An arithmetic product of 'Term's.
-  Product :: Num a => Term a -> Term a -> Term a
+  Product :: (Num a, TermEntry a) => Term a -> Term a -> Term a
 
   -- | An arithmetic quotient of 'Term's. The quotient is obtained by floating point (real)
   -- division, and as such the type of the represented value must have an instance for 'Fractional'.
-  Quotient :: Fractional a => Term a -> Term a -> Term a
+  Quotient :: (Fractional a, TermEntry a) => Term a -> Term a -> Term a
 
   -- | An arithmetic quotient of 'Term's. The quotient is obtained by integer division, and as such
   -- the type of the represented value must have an instance for 'Integral'.
-  IntQuotient :: Integral a => Term a -> Term a -> Term a
+  IntQuotient :: (Integral a, TermEntry a) => Term a -> Term a -> Term a
 
   -- | An arithmetic expression representing the remainder when dividing the first 'Term' by the
   -- second.
-  Modulus :: Integral a => Term a -> Term a -> Term a
+  Modulus :: (Integral a, TermEntry a) => Term a -> Term a -> Term a
 
   deriving (Typeable)
 
@@ -329,12 +305,12 @@ instance Show (Term a) where
   show (Constant _) = "c"
 #endif
   show (Variable v) = show v
-  show (Sum t1 t2) = show t1 ++ " |+| " ++ show t2
-  show (Difference t1 t2) = show t1 ++ " |-| " ++ show t2
-  show (Product t1 t2) = show t1 ++ " |*| " ++ show t2
-  show (Quotient t1 t2) = show t1 ++ " |/| " ++ show t2
-  show (IntQuotient t1 t2) = show t1 ++ " |\\| " ++ show t2
-  show (Modulus t1 t2) = show t1 ++ " |%| " ++ show t2
+  show (Sum t1 t2) = "(" ++ show t1 ++ ") |+| (" ++ show t2 ++ ")"
+  show (Difference t1 t2) = "(" ++ show t1 ++ ") |-| (" ++ show t2 ++ ")"
+  show (Product t1 t2) = "(" ++ show t1 ++ ") |*| (" ++ show t2 ++ ")"
+  show (Quotient t1 t2) = "(" ++ show t1 ++ ") |/| (" ++ show t2 ++ ")"
+  show (IntQuotient t1 t2) = "(" ++ show t1 ++ ") |\\| (" ++ show t2 ++ ")"
+  show (Modulus t1 t2) = "(" ++ show t1 ++ ") |%| (" ++ show t2 ++ ")"
 #endif
 
 instance Eq (Term a) where
@@ -406,7 +382,7 @@ constructor f = toConstr $ f $ error $ intercalate "\n" $ wrap 80 $ unwords
 -- | Convert an HSPL 'Term' back to the Haskell value represented by the term, if possible. If the
 -- term contains no variables, then this function always succeeds. If the term contains any
 -- variables, then the Haskell value cannot be determined and the result is 'Nothing'.
-fromTerm :: Term a -> Maybe a
+fromTerm :: TermEntry a => Term a -> Maybe a
 fromTerm term = case term of
   Constructor f x -> fmap f $ fromTerm x
   Tup t ts -> do
@@ -465,21 +441,15 @@ data Goal =
             -- | A goal which succeeds if the 'Predicate' is true.
             PredGoal Predicate
             -- | A goal which succeeds if the two 'Term's can be unified.
-          | forall t. Typeable t => CanUnify (Term t) (Term t)
+          | forall t. TermEntry t => CanUnify (Term t) (Term t)
             -- | A goal which succeeds if the two 'Term's are identical under the current
             -- 'Control.Hspl.Internal.Unification.Unifier'.
-          | forall t. Typeable t => Identical (Term t) (Term t)
+          | forall t. TermEntry t => Identical (Term t) (Term t)
             -- | A goal which succeeds only if the inner 'Goal' fails.
           | Not Goal
             -- | A goal which succeeds if the right-hand side, after being evaluated as an
             -- arithmetic expression, unifies with the left-hand side.
-          | forall t. ( Typeable t
-                      , Data t
-                      , Eq t
-#ifdef SHOW_TERMS
-                      , Show t
-#endif
-                      ) => Equal (Term t) (Term t)
+          | forall t. TermEntry t => Equal (Term t) (Term t)
 
 instance Show Goal where
   show (PredGoal p) = show p

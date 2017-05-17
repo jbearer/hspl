@@ -33,7 +33,6 @@ module Control.Hspl.Internal.Debugger (
 
 import           Control.Monad.Logic
 import           Control.Monad.State
-import           Data.Data
 import qualified Data.Map as M
 import           System.Console.ANSI
 import           System.IO
@@ -240,13 +239,13 @@ debugNextAlternative :: Program -> [Goal] -> Predicate -> HornClause -> Debugger
 debugNextAlternative = debugPredicate Redo
 
 -- | Continaution hook for proving a 'CanUnify' goal.
-debugUnifiable :: Typeable a => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
+debugUnifiable :: TermEntry a => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
 debugUnifiable program s t1 t2 =
   let stack = CanUnify t1 t2 : s
   in call2 program stack proveUnifiableWith t1 t2
 
 -- | Continaution hook for proving an 'Identical' goal.
-debugIdentical :: Typeable a => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
+debugIdentical :: TermEntry a => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
 debugIdentical program s t1 t2 =
   let stack = Identical t1 t2 : s
   in call2 program stack proveIdenticalWith t1 t2
@@ -258,14 +257,7 @@ debugNot program s g =
   in call program stack proveNotWith g
 
 -- | Continuation hook for proving an 'Equal' goal.
-debugEqual :: ( Typeable a
-              , Data a
-              , Eq a
-#ifdef SHOW_TERMS
-              , Show a
-#endif
-              ) =>
-              Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
+debugEqual :: (TermEntry a) => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
 debugEqual program s lhs rhs =
   let stack = Equal lhs rhs : s
   in call2 program stack proveEqualWith lhs rhs
