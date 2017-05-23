@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -8,83 +9,132 @@ Stability   : Experimental
 
 This module contains example programs which are meant to illustrate the various capabilites of HSPL.
 -}
-module Control.Hspl.Examples where
+module Control.Hspl.Examples (
+  -- * Syllogism
+  -- $syllogism
+    mortal
+  , human
+  -- * Using ADTs
+  -- $adts
+  , Widget (..)
+  , goodWidget
+  -- * Using lists
+  -- $lists
+  , member
+  , distinct
+  -- * Unification and equality
+  -- $equals
+  , isFoo
+  , couldBeFoo
+  -- * Infinite computations
+  -- $odds
+  , odds
+  ) where
 
 import Data.Data
 
 import Control.Hspl
+import Control.Hspl.Internal.Ast (TermEntry)
 
--- | A classic example of modus ponens: all humans are mortal, and Hypatia is human. Therefore,
+-- $syllogism
+-- A classic example of modus ponens: all humans are mortal, and Hypatia is human. Therefore,
 -- Hypatia is mortal.
 --
--- >>> getAllSolutions $ runHspl syllogism $ "mortal"? string "x"
+-- >>> getAllSolutions $ runHspl $ mortal? string "x"
 -- [mortal("hypatia")]
-syllogism :: Hspl
-syllogism = hspl $ do
-  def "mortal"? string "x" |- "human"? string "x"
-  def "human"? "hypatia"
+
+-- | Succeeds when the argument is mortal, which is true whenever the argument is human.
+mortal :: Predicate String
+mortal = predicate "mortal" $
+  match(v"x") |- human? v"x"
+
+-- | Defines the fact that Hypatia is human.
+human :: Predicate String
+human = predicate "human" $
+  match "hypatia"
+
+-- $adts
+-- A somewhat contrived example showcasing the usage of ADT constructors in HSPL pattern matching.
+--
+-- >>> getAllSolutions $ runHspl $ goodWidget? (Wuzzle $$ string "x")
+-- [goodWidget(Wuzzle "foo")]
+--
+-- >>> getAllSolutions $ runHspl $ goodWidget? (Gibber $$ int "x")
+-- []
 
 -- | A contrived example ADT.
 data Widget = Gibber Int
             | Wuzzle String
   deriving (Show, Eq, Typeable, Data)
 
--- | A somewhat contrived example showcasing the usage of ADT constructors in HSPL pattern matching.
---
--- >>> getAllSolutions $ runHspl adts $ "goodWidget"? (Wuzzle $$ string "x")
--- [goodWidget(Wuzzle "foo")]
---
--- >>> getAllSolutions $ runHspl adts $ "goodWidget"? (Gibber $$ int "x")
--- []
-adts :: Hspl
-adts = hspl $
-  def "goodWidget"? (Wuzzle $$ string "x") |- auto "x" |=| "foo"
+-- | Succeeds only for the 'Widget' @Wuzzle "foo"@.
+goodWidget :: Predicate Widget
+goodWidget = predicate "goodWidget" $
+  match (Wuzzle $$ string "x") |- v"x" |=| "foo"
 
--- | A simple example illustrating the use of lists in HSPL.
+-- $lists
+-- A simple example illustrating the use of lists in HSPL.
 --
--- >>> getAllSolutions $ runHspl lists $ "member"? (int "x", [1, 2, 3] :: [Int])
--- [member(3, 1, 2, 3),member(2, 1, 2, 3),member(1, 1, 2, 3)]
+-- >>> getAllSolutions $ runHspl $ member? (char "x", "abc")
+-- [member('a', 'a', 'b', 'c'),member('b', 'a', 'b', 'c'),member('c', 'a', 'b', 'c')]
 --
--- >>> getAllSolutions $ runHspl lists "member" (int "x", [1, 1] :: [Int])
+-- >>> getAllSolutions $ runHspl $ member? (int "x", [1, 1] :: [Int])
 -- [member(1, 1, 1),member(1, 1, 1)]
 --
--- >>> getAllSolutions $ runHspl lists "distinct" (int "x", [1, 1] :: [Int])
+-- >>> getAllSolutions $ runHspl $ distinct? (int "x", [1, 1] :: [Int])
 -- [member(1, 1, 1)]
-lists :: Hspl
-lists = hspl $ do
-  let member = decl "member" :: PredDecl (Int, [Int])
-  let distinct = decl "distinct" :: PredDecl (Int, [Int])
 
-  def member? (int "x", int "x" <:> int \* "xs")
-  def member? (int "y", int "x" <:> int \* "xs") |- member? (v"y", v"xs")
+-- | @member? (v"x", [...])@ succeeds once for each element of the list, and binds that element to
+-- the variable @"x"@. @member? (x, xs)@ succeeds if and only if @x@ is an element of @xs@.
+member :: forall a. TermEntry a => Predicate (a, [a])
+member = predicate "member" $ do
+  let a :: String -> Var a
+      a = v
+  match (a"x", a"x" <:> v"xs")
+  match (a"y", a"x" <:> v"xs") |- member? (a"y", a \* "xs")
 
-  def distinct? (int "x", int "x" <:> int \* "xs")
-  def distinct? (int "y", int "x" <:> int \* "xs") |- do
-    int "y" |\=| int "x"
-    distinct? (v"y", v"xs")
+-- | Similar to 'member', but if the first variable is unbound, 'distinct' succeeds only once for
+-- each distinct element of the list.
+distinct :: forall a. TermEntry a => Predicate (a, [a])
+distinct = predicate "distinct" $ do
+  match (v"x", v"x" <:> v"xs")
+  match (v"y", v"x" <:> v"xs") |- do
+    (v"y" :: Var a) |\=| (v"x" :: Var a)
+    distinct? (v"y" :: Var a, v"xs" :: Var [a])
 
--- | Example illustrating the difference between '(|=|)' and '(|==|)'.
+-- $equals
+-- Example illustrating the difference between '|=|' and '|==|'.
 --
--- >>> getAllSolutions $ runHspl equals $ "isFoo"? string "x"
+-- >>> getAllSolutions $ runHspl $ isFoo? string "x"
 -- []
 --
--- >>> getAllSolutions $ runHspl equals $ "isFoo"? "foo"
+-- >>> getAllSolutions $ runHspl $ isFoo? "foo"
 -- [isFoo("foo")]
 --
--- >>> getAllSolutions $ runHspl equals $ "couldBeFoo"? string "x"
+-- >>> getAllSolutions $ runHspl $ couldBeFoo? string "x"
 -- [couldBeFoo("foo")]
-equals :: Hspl
-equals = hspl $ do
-  def "isFoo"? string "x" |- auto "x" |==| "foo"
-  def "couldBeFoo"? string "x" |- auto "x" |=| "foo"
 
--- | Example of a program with infinitely many solutions.
+-- | Succeeds if and only if the argument is identical to the string @"foo"@. No bindings are
+-- created.
+isFoo :: Predicate String
+isFoo = predicate "isFoo" $
+  match (v"x") |- v"x" |==| "foo"
+
+-- | Succeeds if the argument can be unified with the string @"foo"@, and does so.
+couldBeFoo :: Predicate String
+couldBeFoo = predicate "couldBeFoo" $
+  match (v"x") |- v"x" |=| "foo"
+
+-- $odds
+-- Example of a program with infinitely many solutions.
 --
--- >>> getAllSolutions $ runHsplN 5 odds $ "odd"? int "x"
--- [odd(1),odd(3),odd(5),odd(7),odd(9)]
-odds :: Hspl
-odds = hspl $ do
-  def "odd"? (1 :: Int)
-  def "odd"? int "x" |- do
-    "odd"? int "y"
-    int "x" `is` int "y" |+| (2 :: Int)
+-- >>> getAllSolutions $ runHsplN 5 $ odds? int "x"
+-- [odds(1),odds(3),odds(5),odds(7),odds(9)]
+
+-- | @odds? v"x"@ succeeds once for every odd number, in ascending order and starting from @1@.
+odds :: Predicate Int
+odds = predicate "odds" $ do
+  match(1 :: Int)
+  match(v"x") |- do
+    odds? v"y"
+    v"x" `is` v"y" |+| (2 :: Int)

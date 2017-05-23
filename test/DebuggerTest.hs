@@ -12,8 +12,8 @@ import Data.Time.Clock
 import System.Directory
 import System.FilePath
 
-runTest :: Program -> Predicate -> [String] -> [String] -> IO ()
-runTest p g commands expectedOutput = do
+runTest :: Goal -> [String] -> [String] -> IO ()
+runTest g commands expectedOutput = do
   tmp <- getTemporaryDirectory
 
   UTCTime { utctDayTime=ts } <- getCurrentTime
@@ -24,7 +24,7 @@ runTest p g commands expectedOutput = do
                            , coloredOutput = False
                            }
   writeFile (inputFile config) $ unlines commands
-  debug config p g
+  debug config g
   actualOutput <- readFile $ outputFile config
   removeFile $ inputFile config
   removeFile $ outputFile config
@@ -87,67 +87,63 @@ expectEqualExit d a b = "(" ++ show d ++ ") Exit: " ++ show (Equal (toTerm a) (t
 expectEqualFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
 expectEqualFail d a b = "(" ++ show d ++ ") Fail: " ++ show (Equal (toTerm a) (toTerm b))
 
-deepProgram = addClauses [ HornClause (predicate "foo" (Var "x" :: Var Char))
-                                      [PredGoal $ predicate "bar" (Var "x" :: Var Char)]
-                         , HornClause (predicate "bar" (Var "x" :: Var Char))
-                                      [PredGoal $ predicate "baz" (Var "x" :: Var Char)]
-                         , HornClause (predicate "baz" 'a') []
-                         ] emptyProgram
+-- deep(X) :- foo(X).
+-- foo(X) :- bar(X).
+-- bar(a).
+deep = [ HornClause (predicate "deep" (Var "x" :: Var Char))
+                    [PredGoal (predicate "foo" (Var "x" :: Var Char))
+                              [HornClause (predicate "foo" (Var "x" :: Var Char))
+                                                [PredGoal (predicate "bar" (Var "x" :: Var Char))
+                                                          [HornClause (predicate "bar" 'a') []]]]]
+       ]
 
-wideProgram = addClauses [ HornClause ( predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char))
-                                      [ PredGoal $ predicate "foo" (Var "x" :: Var Char)
-                                      , PredGoal $ predicate "bar" (Var "y" :: Var Char)
-                                      , PredGoal $ predicate "baz" (Var "z" :: Var Char)
-                                      ]
-                         , HornClause ( predicate "foo" 'a') []
-                         , HornClause ( predicate "bar" 'b') []
-                         , HornClause ( predicate "baz" 'c') []
-                         ] emptyProgram
+-- wide(X, Y, Z) :- foo(X), bar(Y), baz(Z).
+-- foo(a).
+-- bar(b).
+-- baz(c).
+wide = [ HornClause ( predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char))
+                    [ PredGoal (predicate "foo" (Var "x" :: Var Char))
+                               [HornClause (predicate "foo" 'a') []]
+                    , PredGoal (predicate "bar" (Var "y" :: Var Char))
+                               [HornClause (predicate "bar" 'b') []]
+                    , PredGoal (predicate "baz" (Var "z" :: Var Char))
+                               [HornClause (predicate "baz" 'c') []]
+                    ]
+       ]
 
-backtrackingProgram = addClauses [ HornClause (predicate "foo" (Var "x" :: Var Char))
-                                              [PredGoal $ predicate "bar" (Var "x" :: Var Char)]
-                                 , HornClause (predicate "foo" (Var "x" :: Var Char))
-                                              [PredGoal $ predicate "baz" 'a']
-                                 , HornClause ( predicate "baz" 'b') []
-                                 ] emptyProgram
-
-canUnifyProgram = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var String))
-                                          [ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")]
-                             ] emptyProgram
-
-identicalProgram = addClauses [ HornClause ( predicate "isFoo" (Var "x" :: Var String))
-                                           [ Identical (toTerm (Var "x" :: Var String)) (toTerm "foo")]
-                              ] emptyProgram
-
-notProgram = addClauses [ HornClause ( predicate "isNotFoo" (Var "x" :: Var String))
-                                     [ Not $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")]
-                        ] emptyProgram
-
-equalProgram = addClauses [ HornClause (predicate "equal" (Var "x" :: Var Int, Var "y" :: Var Int))
-                                       [Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))]
-                          ] emptyProgram
+-- foo(X) :-
+--   bar(X) % Undefined predicate
+--   baz(a) % Predicate that fails on input 'a'
+-- baz(b).
+backtracking = [ HornClause (predicate "foo" (Var "x" :: Var Char))
+                            [PredGoal (predicate "bar" (Var "x" :: Var Char)) []]
+               , HornClause (predicate "foo" (Var "x" :: Var Char))
+                            [PredGoal (predicate "baz" 'a')
+                                      [HornClause (predicate "baz" 'b') []]]
+               ]
 
 test = describeModule "Control.Hspl.Internal.Debugger" $ do
   describe "the step command" $ do
-    let deepGoal = predicate "foo" (Var "x" :: Var Char)
-    let deepTrace = [ expectCall 1 "foo" (Var "x" :: Var Char)
-                    , expectCall 2 "bar" (Var "x" :: Var Char)
-                    , expectCall 3 "baz" (Var "x" :: Var Char)
-                    , expectExit 3 "baz" 'a'
-                    , expectExit 2 "bar" 'a'
-                    , expectExit 1 "foo" 'a'
+    let deepGoal = PredGoal (predicate "deep" (Var "x" :: Var Char)) deep
+    let deepTrace = [ expectCall 1 "deep" (Var "x" :: Var Char)
+                    , expectCall 2 "foo" (Var "x" :: Var Char)
+                    , expectCall 3 "bar" (Var "x" :: Var Char)
+                    , expectExit 3 "bar" 'a'
+                    , expectExit 2 "foo" 'a'
+                    , expectExit 1 "deep" 'a'
                     ]
-    let wideGoal = predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-    let wideTrace = [ expectCall 1 "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+    let wideGoal = PredGoal (predicate "wide"
+                      (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide
+    let wideTrace = [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
                     , expectCall 2 "foo" (Var "x" :: Var Char)
                     , expectExit 2 "foo" 'a'
                     , expectCall 2 "bar" (Var "y" :: Var Char)
                     , expectExit 2 "bar" 'b'
                     , expectCall 2 "baz" (Var "z" :: Var Char)
                     , expectExit 2 "baz" 'c'
-                    , expectExit 1 "p" ('a', 'b', 'c')
+                    , expectExit 1 "wide" ('a', 'b', 'c')
                     ]
-    let backtrackingGoal = predicate "foo" (Var "x" :: Var Char)
+    let backtrackingGoal = PredGoal (predicate "foo" (Var "x" :: Var Char)) backtracking
     let backtrackingTrace = [ expectCall 1 "foo" (Var "x" :: Var Char)
                             , expectCall 2 "bar" (Var "x" :: Var Char)
                             , expectUnknownPred 2 "bar" (Var "x" :: Var Char)
@@ -157,142 +153,138 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                             , expectFail 2 "baz" 'a'
                             , expectFail 1 "foo" (Var "x" :: Var Char)
                             ]
-    let canUnifyGoal = predicate "isFoo" (Var "x" :: Var String)
-    let canUnifyTrace = [ expectCall 1 "isFoo" (Var "x" :: Var String)
-                        , expectCanUnifyCall 2 (Var "x" :: Var String) "foo"
-                        , expectCanUnifyExit 2 "foo"
-                        , expectExit 1 "isFoo" "foo"
+    let canUnifyGoal = CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
+    let canUnifyTrace = [ expectCanUnifyCall 1 (Var "x" :: Var String) "foo"
+                        , expectCanUnifyExit 1 "foo"
                         ]
-    let canUnifyFailGoal = predicate "isFoo" "bar"
-    let canUnifyFailTrace = [ expectCall 1 "isFoo" "bar"
-                            , expectCanUnifyCall 2 "bar" "foo"
-                            , expectCanUnifyFail 2 "bar" "foo"
-                            , expectFail 1 "isFoo" "bar"
+    let canUnifyFailGoal = CanUnify (toTerm "bar") (toTerm "foo")
+    let canUnifyFailTrace = [ expectCanUnifyCall 1 "bar" "foo"
+                            , expectCanUnifyFail 1 "bar" "foo"
                             ]
-    let identicalGoal = predicate "isFoo" "foo"
-    let identicalTrace = [ expectCall 1 "isFoo" "foo"
-                         , expectIdenticalCall 2 "foo" "foo"
-                         , expectIdenticalExit 2 "foo"
-                         , expectExit 1 "isFoo" "foo"
+    let identicalGoal = Identical (toTerm "foo") (toTerm "foo")
+    let identicalTrace = [ expectIdenticalCall 1 "foo" "foo"
+                         , expectIdenticalExit 1 "foo"
                          ]
-    let identicalFailGoal = predicate "isFoo" (Var "x" :: Var String)
-    let identicalFailTrace = [ expectCall 1 "isFoo" (Var "x" :: Var String)
-                             , expectIdenticalCall 2 (Var "x" :: Var String) "foo"
-                             , expectIdenticalFail 2 (Var "x" :: Var String) "foo"
-                             , expectFail 1 "isFoo" (Var "x" :: Var String)
+    let identicalFailGoal = Identical (toTerm (Var "x" :: Var String)) (toTerm "foo")
+    let identicalFailTrace = [ expectIdenticalCall 1 (Var "x" :: Var String) "foo"
+                             , expectIdenticalFail 1 (Var "x" :: Var String) "foo"
                              ]
-    let notGoal = predicate "isNotFoo" "bar"
-    let notTrace = [ expectCall 1 "isNotFoo" "bar"
-                   , expectNotCall 2 $ CanUnify (toTerm "bar") (toTerm "foo")
-                   , expectCanUnifyCall 3 "bar" "foo"
-                   , expectCanUnifyFail 3 "bar" "foo"
-                   , expectNotExit 2 $ CanUnify (toTerm "bar") (toTerm "foo")
-                   , expectExit 1 "isNotFoo" "bar"
+    let notGoal = Not $ CanUnify (toTerm "bar") (toTerm "foo")
+    let notTrace = [ expectNotCall 1 $ CanUnify (toTerm "bar") (toTerm "foo")
+                   , expectCanUnifyCall 2 "bar" "foo"
+                   , expectCanUnifyFail 2 "bar" "foo"
+                   , expectNotExit 1 $ CanUnify (toTerm "bar") (toTerm "foo")
                    ]
-    let notFailGoal = predicate "isNotFoo" (Var "x" :: Var String)
-    let notFailTrace = [ expectCall 1 "isNotFoo" (Var "x" :: Var String)
-                       , expectNotCall 2 $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
-                       , expectCanUnifyCall 3 (Var "x" :: Var String) "foo"
-                       , expectCanUnifyExit 3 "foo"
-                       , expectNotFail 2 $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
-                       , expectFail 1 "isNotFoo" (Var "x" :: Var String)
+    let notFailGoal = Not $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
+    let notFailTrace = [ expectNotCall 1 $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
+                       , expectCanUnifyCall 2 (Var "x" :: Var String) "foo"
+                       , expectCanUnifyExit 2 "foo"
+                       , expectNotFail 1 $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
                        ]
-    let equalGoal = predicate "equal" (Var "x" :: Var Int, Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-    let equalTrace = [ expectCall 1 "equal" (Var "x" :: Var Int, Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                     , expectEqualCall 2 (Var "x" :: Var Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                     , expectEqualExit 2 (3 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                     , expectExit 1 "equal" (3 :: Int, Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+    let equalGoal = Equal (toTerm (Var "x" :: Var Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+    let equalTrace = [ expectEqualCall 1 (Var "x" :: Var Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                     , expectEqualExit 1 (3 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
                      ]
-    let run p g t c = runTest p g (map (const c) [1..length t]) t
+    let equalFailGoal = Equal (toTerm (2 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+    let equalFailTrace = [ expectEqualCall 1 (2 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                         , expectEqualFail 1 (2 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                         ]
+    let run g t c = runTest g (map (const c) [1..length t]) t
 
     it "should prompt after every step of computation" $ do
-      run deepProgram deepGoal deepTrace "step"
-      run wideProgram wideGoal wideTrace "step"
-      run backtrackingProgram backtrackingGoal backtrackingTrace "step"
-      run canUnifyProgram canUnifyGoal canUnifyTrace "step"
-      run canUnifyProgram canUnifyFailGoal canUnifyFailTrace "step"
-      run identicalProgram identicalGoal identicalTrace "step"
-      run identicalProgram identicalFailGoal identicalFailTrace "step"
-      run notProgram notGoal notTrace "step"
-      run notProgram notFailGoal notFailTrace "step"
-      run equalProgram equalGoal equalTrace "step"
+      run deepGoal deepTrace "step"
+      run wideGoal wideTrace "step"
+      run backtrackingGoal backtrackingTrace "step"
+      run canUnifyGoal canUnifyTrace "step"
+      run canUnifyFailGoal canUnifyFailTrace "step"
+      run identicalGoal identicalTrace "step"
+      run identicalFailGoal identicalFailTrace "step"
+      run notGoal notTrace "step"
+      run notFailGoal notFailTrace "step"
+      run equalGoal equalTrace "step"
+      run equalFailGoal equalFailTrace "step"
     it "should have a one-character alias" $ do
-      run deepProgram deepGoal deepTrace "s"
-      run wideProgram wideGoal wideTrace "s"
-      run backtrackingProgram backtrackingGoal backtrackingTrace "s"
-      run canUnifyProgram canUnifyGoal canUnifyTrace "s"
-      run canUnifyProgram canUnifyFailGoal canUnifyFailTrace "s"
-      run identicalProgram identicalGoal identicalTrace "s"
-      run identicalProgram identicalFailGoal identicalFailTrace "s"
-      run notProgram notGoal notTrace "s"
-      run notProgram notFailGoal notFailTrace "s"
-      run equalProgram equalGoal equalTrace "step"
+      run deepGoal deepTrace "s"
+      run wideGoal wideTrace "s"
+      run backtrackingGoal backtrackingTrace "s"
+      run canUnifyGoal canUnifyTrace "s"
+      run canUnifyFailGoal canUnifyFailTrace "s"
+      run identicalGoal identicalTrace "s"
+      run identicalFailGoal identicalFailTrace "s"
+      run notGoal notTrace "s"
+      run notFailGoal notFailTrace "s"
+      run equalGoal equalTrace "s"
+      run equalFailGoal equalFailTrace "s"
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do
-      runTest deepProgram (predicate "foo" (Var "x" :: Var Char))
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
         ["next", "next"]
-        [ expectCall 1 "foo" (Var "x" :: Var Char)
-        , expectExit 1 "foo" 'a'
+        [ expectCall 1 "deep" (Var "x" :: Var Char)
+        , expectExit 1 "deep" 'a'
         ]
-      runTest wideProgram (predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char))
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
         ["next", "next"]
-        [ expectCall 1 "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , expectExit 1 "p" ('a', 'b', 'c')
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , expectExit 1 "wide" ('a', 'b', 'c')
         ]
-      runTest wideProgram (predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char))
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
         ["step", "next", "next", "next", "next", "next", "next", "next"]
-        [ expectCall 1 "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
         , expectCall 2 "foo" (Var "x" :: Var Char)
         , expectExit 2 "foo" 'a'
         , expectCall 2 "bar" (Var "y" :: Var Char)
         , expectExit 2 "bar" 'b'
         , expectCall 2 "baz" (Var "z" :: Var Char)
         , expectExit 2 "baz" 'c'
-        , expectExit 1 "p" ('a', 'b', 'c')
+        , expectExit 1 "wide" ('a', 'b', 'c')
         ]
     it "if no more events at the current depth, it should stop at the next decrease in depth" $
-      runTest deepProgram (predicate "foo" (Var "x" :: Var Char))
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
         ["step", "next", "next", "next"]
-        [ expectCall 1 "foo" (Var "x" :: Var Char)
-        , expectCall 2 "bar" (Var "x" :: Var Char)
-        , expectExit 2 "bar" 'a'
-        , expectExit 1 "foo" 'a'
+        [ expectCall 1 "deep" (Var "x" :: Var Char)
+        , expectCall 2 "foo" (Var "x" :: Var Char)
+        , expectExit 2 "foo" 'a'
+        , expectExit 1 "deep" 'a'
         ]
     it "should have a one-character alias" $
-      runTest deepProgram (predicate "foo" (Var "x" :: Var Char))
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
         ["n", "n"]
-        [ expectCall 1 "foo" (Var "x" :: Var Char)
-        , expectExit 1 "foo" 'a'
+        [ expectCall 1 "deep" (Var "x" :: Var Char)
+        , expectExit 1 "deep" 'a'
         ]
 
   describe "the finish command" $ do
     it "should skip to the next decrease in depth" $ do
-      runTest wideProgram (predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char))
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
         ["step", "finish", "step"]
-        [ expectCall 1 "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
         , expectCall 2 "foo" (Var "x" :: Var Char)
-        , expectExit 1 "p" ('a', 'b', 'c')
+        , expectExit 1 "wide" ('a', 'b', 'c')
         ]
-      runTest backtrackingProgram (predicate "foo" (Var "x" :: Var Char))
+      runTest (PredGoal (predicate "foo" (Var "x" :: Var Char)) backtracking)
         ["step", "finish", "finish"]
         [ expectCall 1 "foo" (Var "x" :: Var Char)
         , expectCall 2 "bar" (Var "x" :: Var Char)
         , expectFail 1 "foo" (Var "x" :: Var Char)
         ]
     it "should have a one-character alias" $
-        runTest wideProgram (predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char))
+        runTest (PredGoal (predicate "wide"
+                  (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
         ["s", "f", "s"]
-        [ expectCall 1 "p" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
         , expectCall 2 "foo" (Var "x" :: Var Char)
-        , expectExit 1 "p" ('a', 'b', 'c')
+        , expectExit 1 "wide" ('a', 'b', 'c')
         ]
 
   describe "the help command" $
     it "should print a usage message" $ do
-      let run comm = runTest deepProgram (predicate "foo" (Var "x" :: Var Char))
+      let run comm = runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
                       [comm, "f"]
-                      [ expectCall 1 "foo" (Var "x" :: Var Char)
+                      [ expectCall 1 "deep" (Var "x" :: Var Char)
                       , debugHelp
                       ]
       run "?"
@@ -301,16 +293,16 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
 
   describe "a blank command" $
     it "should repeat the previous command" $
-      runTest deepProgram (predicate "foo" (Var "x" :: Var Char))
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
         ["n", ""]
-        [ expectCall 1 "foo" (Var "x" :: Var Char)
-        , expectExit 1 "foo" 'a'
+        [ expectCall 1 "deep" (Var "x" :: Var Char)
+        , expectExit 1 "deep" 'a'
         ]
 
   describe "an unknown command" $
     it "should trigger a retry prompt" $
-      runTest deepProgram (predicate "foo" (Var "x" :: Var Char))
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
         ["bogus", "finish"]
-        [ expectCall 1 "foo" (Var "x" :: Var Char)
+        [ expectCall 1 "deep" (Var "x" :: Var Char)
         , "Unknown command \"bogus\". Try \"?\" for help."
         ]

@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module HsplTest where
 
@@ -20,67 +21,73 @@ data Arities = A1 Char
              | A7 Char Char Char Char Char Char Char
   deriving (Show, Eq, Typeable, Data)
 
+foo :: Predicate Char
+foo = predicate "foo" $ match (v"x")
+
+fooDefs = [Ast.HornClause (Ast.predicate "foo" (Var "x" :: Var Char)) []]
+
+bar :: Predicate (Char, Char)
+bar = predicate "bar" $ match (v"x", v"y")
+
+barDefs = [Ast.HornClause (Ast.predicate "bar" (Var "x" :: Var Char, Var "y" :: Var Char)) []]
+
+generic :: Ast.TermEntry a => Predicate a
+generic = predicate "generic" $ match (v"x")
+
+genericDefs :: forall a. Ast.TermEntry a => a -> [Ast.HornClause]
+genericDefs _ = [Ast.HornClause (Ast.predicate "generic" (Var "x" :: Var a)) []]
+
 test = describeModule "Control.Hspl" $ do
-  describe "predicate application" $
-    it "should convert a String and a TermData to a Goal" $ do
-      execWriter ("foo"? 'a') `shouldBe` [Ast.PredGoal $ Ast.predicate "foo" 'a']
-      execWriter ("foo"? (Var "x" :: Var String)) `shouldBe`
-        [Ast.PredGoal $ Ast.predicate "foo" (Var "x" :: Var String)]
-      execWriter ("foo"? ('a', Var "x" :: Var Char)) `shouldBe`
-        [Ast.PredGoal $ Ast.predicate "foo" ('a', Var "x" :: Var Char)]
-  describe "predicate forward declarations" $ do
-    let foo = decl "foo" :: PredDecl (Int, [Int])
-    context "in a def statement" $
-      it "should allow the compiler to deduce the type of the argument" $
-        execWriter (def foo? (v"x", v"xs")) `shouldBe`
-          [Ast.HornClause (Ast.predicate "foo" (Var "x" :: Var Int, Var "xs" :: Var [Int])) []]
-    context "in a goal" $
-      it "should allow the compiler to deduce the type of the argument" $
-        execWriter (foo? (v"x", v"xs")) `shouldBe`
-          [Ast.PredGoal $ Ast.predicate "foo" (Var "x" :: Var Int, Var "xs" :: Var [Int])]
-  describe "clause building" $ do
-    it "should build a clause from a positive literal and a ClauseBuilder" $ do
-      execWriter (def "foo"? (Var "x" :: Var String) |- "bar"? (Var "x" :: Var String)) `shouldBe`
-        [Ast.HornClause (Ast.predicate "foo" (Var "x" :: Var String))
-                        [Ast.PredGoal $ Ast.predicate "bar" (Var "x" :: Var String)]]
-      execWriter (def "foo"? (Var "x" :: Var String) |- do
-                    "bar"? (Var "x" :: Var String)
-                    "baz"? 'b') `shouldBe`
-        [Ast.HornClause ( Ast.predicate "foo" (Var "x" :: Var String))
-                        [ Ast.PredGoal $ Ast.predicate "bar" (Var "x" :: Var String)
-                        , Ast.PredGoal $ Ast.predicate "baz" 'b'
-                        ]]
+  describe "predicate application" $ do
+    it "should convert a Predicate and a TermData to a Goal" $ do
+      execWriter (foo? 'a') `shouldBe` [Ast.PredGoal (Ast.predicate "foo" 'a') fooDefs]
+      execWriter (foo? (Var "x" :: Var Char)) `shouldBe`
+        [Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs]
+      execWriter (bar? ('a', Var "x" :: Var Char)) `shouldBe`
+        [Ast.PredGoal (Ast.predicate "bar" ('a', Var "x" :: Var Char)) barDefs]
+    it "should handle generic predicates" $ do
+      execWriter (generic? 'a') `shouldBe`
+        [Ast.PredGoal (Ast.predicate "generic" 'a') $ genericDefs 'a']
+      execWriter (generic? "a") `shouldBe`
+        [Ast.PredGoal (Ast.predicate "generic" "a") $ genericDefs "a"]
+      execWriter (generic? (1 :: Int)) `shouldBe`
+        [Ast.PredGoal (Ast.predicate "generic" (1 :: Int)) $ genericDefs (1 :: Int)]
+  describe "pattern matching" $ do
+    let name = "dummy"
+    let run w = map ($name) $ execWriter $ unCW w
+    it "should build a clause from a pattern and a GoalWriter" $ do
+      run (match (Var "x" :: Var Char) |- foo? (Var "x" :: Var Char)) `shouldBe`
+        [Ast.HornClause (Ast.predicate name (Var "x" :: Var Char))
+                        [Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs]]
+      run (match 'a' |- foo? (Var "x" :: Var Char)) `shouldBe`
+        [Ast.HornClause (Ast.predicate name 'a')
+                        [Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs]]
     it "should build unit clauses" $
-      execWriter (def "foo"? 'a') `shouldBe` [Ast.HornClause (Ast.predicate "foo" 'a') []]
-  describe "program building" $
-    it "should convert a sequence of clause builders to an HSPL program" $
-      hspl (do
-        def "foo"? 'a'
-        def "bar"? 'b'
-        def "bar"? (Var "x" :: Var Char) |- "foo"? (Var "x" :: Var Char)) `shouldBe`
-        Ast.addClauses [ Ast.HornClause (Ast.predicate "foo" 'a') []
-                       , Ast.HornClause (Ast.predicate "bar" 'b') []
-                       , Ast.HornClause (Ast.predicate "bar" (Var "x" :: Var Char))
-                                        [Ast.PredGoal $ Ast.predicate "foo" (Var "x" :: Var Char)]
-                       ] Ast.emptyProgram
+      run (match 'a') `shouldBe` [Ast.HornClause (Ast.predicate name 'a') []]
   describe "program execution" $ do
-    let program = hspl $ do
-                          def "mortal"? string "x" |- "human"? string "x"
-                          def "human"? "hypatia"
-                          def "human"? "fred"
+    let human = predicate "human" $ do { match "hypatia"; match "fred" }
+    let humanDefs = [ Ast.HornClause (Ast.predicate "human" "hypatia") []
+                    , Ast.HornClause (Ast.predicate "human" "fred") []
+                    ]
+    let mortal = predicate "mortal" $ match (string "x") |- human? string "x"
+    let mortalDefs = [Ast.HornClause (Ast.predicate "mortal" (Var "x" :: Var String))
+                                     [Ast.PredGoal (Ast.predicate "human" (Var "x" :: Var String)) humanDefs]]
     it "should obtain all solutions when requested" $
-      runHspl program ("mortal"? string "x") `shouldBe`
-        Solver.runHspl program (Ast.predicate "mortal" (Var "x" :: Var String))
+      runHspl (mortal? v"x") `shouldBe`
+        Solver.runHspl
+          (Ast.PredGoal (Ast.predicate "mortal" (Var "x" :: Var String)) mortalDefs)
     it "should retrieve only the first solution when requested" $
-      runHspl1 program ("mortal"? string "x") `shouldBe`
-        Just (head $ Solver.runHsplN 1 program (Ast.predicate "mortal" (Var "x" :: Var String)))
+      runHspl1 (mortal? v"x") `shouldBe`
+        Just (head $ Solver.runHsplN 1
+          (Ast.PredGoal (Ast.predicate "mortal" (Var "x" :: Var String)) mortalDefs))
     it "should retrieve at most the requested number of solutions" $
-      runHsplN 1 program ("mortal"? string "x") `shouldBe`
-        Solver.runHsplN 1 program (Ast.predicate "mortal" (Var "x" :: Var String))
+      runHsplN 1 (mortal? v"x") `shouldBe`
+        Solver.runHsplN 1
+          (Ast.PredGoal (Ast.predicate "mortal" (Var "x" :: Var String)) mortalDefs)
     it "should handle failure gracefully" $ do
-      runHspl program ("mortal"? "bob") `shouldBe` []
-      runHspl1 program ("mortal"? "bob") `shouldBe` Nothing
-      runHsplN 1 program ("mortal"? "bob") `shouldBe` []
+      runHspl (mortal? "bob") `shouldBe` []
+      runHspl1 (mortal? "bob") `shouldBe` Nothing
+      runHsplN 1 (mortal? "bob") `shouldBe` []
 
   describe "typed variable constructors" $ do
     it "should contruct variables of various primitive types" $ do
@@ -198,7 +205,7 @@ test = describeModule "Control.Hspl" $ do
 
   describe "the lnot predicate" $
     it "should create a Not goal from an inner goal" $
-      execWriter (lnot $ "foo"? 'a') `shouldBe` [Ast.Not $ Ast.PredGoal $ Ast.predicate "foo" 'a']
+      execWriter (lnot $ foo? 'a') `shouldBe` [Ast.Not $ Ast.PredGoal (Ast.predicate "foo" 'a') fooDefs]
 
   describe "the is predicate" $ do
     it "should create an Equal goal from two terms" $ do

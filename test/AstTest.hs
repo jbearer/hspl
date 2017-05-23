@@ -11,8 +11,6 @@ foo = predicate "foo" ()
 bar = predicate "bar" True
 baz = predicate "baz" (True, ())
 
-ex1 = addClause (HornClause foo [PredGoal bar, PredGoal baz]) emptyProgram
-
 predNamed x = predicate x ()
 
 data Tree a = Leaf a | Tree a (Tree a) (Tree a)
@@ -196,6 +194,18 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
     context "of different types" $
       it "should compare unequal" $
         predicate "foo" True `shouldNotEqual` predicate "foo" (True, False)
+  describe "Predicate goals" $ do
+    it "should compare based on the predicate" $ do
+      PredGoal (predicate "foo" ()) [] `shouldEqual` PredGoal (predicate "foo" ()) []
+      PredGoal (predicate "foo" ()) [] `shouldNotEqual` PredGoal (predicate "bar" ()) []
+      PredGoal (predicate "foo" True) [] `shouldNotEqual` PredGoal (predicate "foo" ()) []
+      PredGoal (predicate "foo" True) [] `shouldNotEqual` PredGoal (predicate "foo" False) []
+    it "should compare based on the alternatives" $ do
+      let c1 = HornClause (predicate "c1pred" ()) []
+      let c2 = HornClause (predicate "c2pred" ()) []
+      PredGoal (predicate "foo" ()) [c1] `shouldEqual` PredGoal (predicate "foo" ()) [c1]
+      PredGoal (predicate "foo" ()) [c1] `shouldNotEqual` PredGoal (predicate "foo" ()) [c2]
+      PredGoal (predicate "foo" ()) [c1] `shouldNotEqual` PredGoal (predicate "foo" ()) [c1, c2]
   describe "CanUnify goals" $ do
     context "of the same type" $
       it "should compare according to the arguments" $ do
@@ -226,8 +236,8 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
           Identical (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))
   describe "Not goals" $
     it "should compare according to the inner goal" $ do
-      Not (PredGoal $ predicate "foo" ()) `shouldEqual` Not (PredGoal $ predicate "foo" ())
-      Not (PredGoal $ predicate "foo" ()) `shouldNotEqual` Not (PredGoal $ predicate "bar" ())
+      Not (PredGoal (predicate "foo" ()) []) `shouldEqual` Not (PredGoal (predicate "foo" ()) [])
+      Not (PredGoal (predicate "foo" ()) []) `shouldNotEqual` Not (PredGoal (predicate "bar" ()) [])
   describe "Equal goals" $ do
     context "of the same type" $
       it "should compare according to the arguments" $ do
@@ -248,37 +258,14 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
   describe "clauses" $ do
     it "should have type corresponding to the type of the positive literal" $ do
       clauseType (HornClause foo []) `shouldBe` predType foo
-      clauseType (HornClause foo [PredGoal $ predicate "P" ()]) `shouldBe` predType foo
-      clauseType (HornClause foo [PredGoal $ predicate "P" (), PredGoal $ predicate "Q" (True, 'a')])
+      clauseType (HornClause foo [PredGoal (predicate "P" ()) []]) `shouldBe` predType foo
+      clauseType (HornClause foo [PredGoal (predicate "P" ()) [], PredGoal (predicate "Q" (True, 'a')) []])
         `shouldBe` predType foo
     it "should compare according to the literals" $ do
       HornClause foo [] `shouldEqual` HornClause foo []
-      HornClause foo [PredGoal bar, PredGoal baz] `shouldEqual` HornClause foo [PredGoal bar, PredGoal baz]
-      HornClause foo [] `shouldNotEqual` HornClause foo [PredGoal bar]
-      HornClause foo [PredGoal bar, PredGoal baz] `shouldNotEqual` HornClause bar [PredGoal foo, PredGoal baz]
+      HornClause foo [PredGoal bar [], PredGoal baz []] `shouldEqual`
+        HornClause foo [PredGoal bar [], PredGoal baz []]
+      HornClause foo [] `shouldNotEqual` HornClause foo [PredGoal bar []]
+      HornClause foo [PredGoal bar [], PredGoal baz []] `shouldNotEqual`
+        HornClause bar [PredGoal foo [], PredGoal baz []]
       HornClause (predicate "P" ()) [] `shouldNotEqual` HornClause (predicate "P" True) []
-  describe "the program builder" $ do
-    it "should add a clause to a new predicate" $ do
-      let p = foo
-      let c = HornClause p []
-      let m = addClause c emptyProgram
-      findClauses p m `shouldBe` [c]
-    it "should add additional clauses to existing predicates" $ do
-      let p = foo
-      let c = HornClause p [CanUnify (toTerm 'a') (toTerm 'b')]
-      let cs = findClauses p ex1
-      cs `shouldNotBe` [] -- Otherwise this test is broken
-      let m = addClause c ex1
-      findClauses p m `shouldBe` (cs ++ [c]) -- New clause goes at the end of the list
-    it "should handle clauses of the same name different types" $ do
-      let p1 = predicate "pred" (True, "false")
-      let p2 = predicate "pred" ()
-      let m = addClauses [HornClause p1 [], HornClause p2 []] emptyProgram
-      findClauses p1 m `shouldBe` [HornClause p1 []]
-      findClauses p2 m `shouldBe` [HornClause p2 []]
-    it "should handle clauses of the same type but different names" $ do
-      let p1 = predNamed "foo"
-      let p2 = predNamed "bar"
-      let m = addClauses [HornClause p1 [], HornClause p2 []] emptyProgram
-      findClauses p1 m `shouldBe` [HornClause p1 []]
-      findClauses p2 m `shouldBe` [HornClause p2 []]

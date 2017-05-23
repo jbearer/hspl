@@ -49,6 +49,8 @@ module Control.Hspl.Internal.Unification (
   , Renamer (..)
   , RenamedT
   , Renamed
+  , runRenamedT
+  , runRenamed
   , renameVar
   , renameTerm
   , renamePredicate
@@ -244,7 +246,7 @@ unifyPredicate u (Predicate name term) = Predicate name (unifyTerm u term)
 
 -- | Apply a 'Unifier' to a 'Goal'.
 unifyGoal :: Unifier -> Goal -> Goal
-unifyGoal u (PredGoal p) = PredGoal $ unifyPredicate u p
+unifyGoal u (PredGoal p cs) = PredGoal (unifyPredicate u p) cs
 unifyGoal u (CanUnify t1 t2) = CanUnify (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Identical t1 t2) = Identical (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Not g) = Not $ unifyGoal u g
@@ -307,6 +309,14 @@ type RenamedT m = StateT Renamer (UnificationT m)
 
 -- | Non-transformed version of the 'RenamedT' monad.
 type Renamed = RenamedT Identity
+
+-- | Evaluate a computation in a 'RenamedT' monad.
+runRenamedT :: Monad m => RenamedT m a -> m a
+runRenamedT m = runUnificationT $ evalStateT m (Renamer M.empty)
+
+-- | Special case of 'runRenamedT' for the plain 'Renamed' monad.
+runRenamed :: Renamed a -> a
+runRenamed = runIdentity . runRenamedT
 
 -- | Monad in which all unification operations take place. This type encapsulates the state
 -- necessary to generate unique 'Fresh' variables. All unifications in a single run of an HSPL
@@ -376,7 +386,7 @@ renamePredicate (Predicate name arg) = liftM (Predicate name) $ renameTerm arg
 
 -- | Rename all of the variables in a goal.
 renameGoal :: Monad m => Goal -> RenamedT m Goal
-renameGoal (PredGoal p) = liftM PredGoal $ renamePredicate p
+renameGoal (PredGoal p cs) = renamePredicate p >>= \p' -> return (PredGoal p' cs)
 renameGoal (CanUnify t1 t2) = renameBinaryGoal CanUnify t1 t2
 renameGoal (Identical t1 t2) = renameBinaryGoal Identical t1 t2
 renameGoal (Not g) = liftM Not $ renameGoal g

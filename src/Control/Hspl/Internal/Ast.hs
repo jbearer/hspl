@@ -27,29 +27,27 @@ user-defined ADTs, to be used as 'Term's.
 module Control.Hspl.Internal.Ast (
   -- * Type system
   -- $typeSystem
-    TermData (..)
-  , TermEntry
+    TermEntry
+  , TermData (..)
   -- * AST
   -- $ast
+  -- ** Variables
   , Var (..)
-  , Term (..)
-  , Predicate (..)
-  , Goal (..)
-  , HornClause (..)
-  , Program
-  -- * Functions for building a program
-  , predicate
-  , emptyProgram
-  , addClause
-  , addClauses
-  -- * Functions for inspecting a program
   , varType
+  -- ** Terms
+  , Term (..)
   , termType
-  , predType
-  , clauseType
-  , findClauses
   , fromTerm
   , constructor
+  -- ** Predicates
+  , Predicate (..)
+  , predicate
+  , predType
+  -- ** Goals
+  , Goal (..)
+  -- ** Clauses
+  , HornClause (..)
+  , clauseType
   -- * Miscellaneous utilites
   -- ** Tuple construction and deconstruction
   -- $tuples
@@ -60,10 +58,8 @@ module Control.Hspl.Internal.Ast (
   , wrap
   ) where
 
-import           Control.Monad.State
 import           Data.Data
 import           Data.List
-import qualified Data.Map       as M
 import           Data.Maybe
 
 {- $typeSystem
@@ -438,8 +434,12 @@ predType (Predicate _ t) = termType t
 
 -- | A 'Goal' is a proposition which can appear as a negative literal in a 'HornClause'.
 data Goal =
-            -- | A goal which succeeds if the 'Predicate' is true.
-            PredGoal Predicate
+            -- | A goal which succeeds if the 'Predicate' is true. The predicate is true if for at
+            -- least one of the clauses
+            --
+            -- * The predicate unifies the the positive literal of the 'HornClause'.
+            -- * Each 'Goal' which is a negative literal of the 'HornClause' is true.
+            PredGoal Predicate [HornClause]
             -- | A goal which succeeds if the two 'Term's can be unified.
           | forall t. TermEntry t => CanUnify (Term t) (Term t)
             -- | A goal which succeeds if the two 'Term's are identical under the current
@@ -452,14 +452,14 @@ data Goal =
           | forall t. TermEntry t => Equal (Term t) (Term t)
 
 instance Show Goal where
-  show (PredGoal p) = show p
+  show (PredGoal p _) = show p
   show (CanUnify t1 t2) = show t1 ++ " |=| " ++ show t2
   show (Identical t1 t2) = show t1 ++ " |==| " ++ show t2
   show (Not g) = "lnot (" ++ show g ++ ")"
   show (Equal t1 t2) = show t1 ++ " `is` " ++ show t2
 
 instance Eq Goal where
-  (==) (PredGoal p) (PredGoal p') = p == p'
+  (==) (PredGoal p cs) (PredGoal p' cs') = p == p' && cs == cs'
   (==) (CanUnify t1 t2) (CanUnify t1' t2') = case cast (t1', t2') of
     Just t' -> (t1, t2) == t'
     Nothing -> False
@@ -482,38 +482,6 @@ data HornClause = HornClause Predicate [Goal]
 -- 'Predicate'.
 clauseType :: HornClause -> TypeRep
 clauseType (HornClause p _) = predType p
-
--- | The abstract representation of an HSPL program. Sets of 'HornClause's can be indexed by their
--- type, and each matching set can be indexed by the name of the positive 'Predicate'.
-type Program = M.Map TypeRep (M.Map String [HornClause])
-
--- | A program containing no clauses.
-emptyProgram :: Program
-emptyProgram = M.empty
-
--- | Add a clause to a program.
-addClause :: HornClause -> Program -> Program
-addClause c@(HornClause (Predicate name _) _) m =
-  let ty = clauseType c
-      innerM = M.findWithDefault M.empty ty m
-      cs = M.findWithDefault [] name innerM
-      innerM' = M.insert name (cs ++ [c]) innerM
-      m' = M.insert ty innerM' m
-  in m'
-
--- | Syntactic sugar for multiple calls to 'addClause'.
-addClauses :: [HornClause] -> Program -> Program
-addClauses cs m = m'
-  where (_, m') = runState comp m
-        comp = forM cs $ \c -> modify $ addClause c
-
--- | Return all 'HornClause's which have the same name and type as the given 'Predicate'.
-findClauses :: Predicate -> Program -> [HornClause]
-findClauses p@(Predicate name _) m =
-  let ty = predType p
-      innerM = M.findWithDefault M.empty ty m
-      cs = M.findWithDefault [] name innerM
-  in cs
 
 {- $tuples
 The 'Tuple' class and associated functions make it easier to work with Haskell tuples in the

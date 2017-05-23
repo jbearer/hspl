@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
@@ -55,30 +56,73 @@ import Data.Maybe
 import Data.Monoid hiding (Sum, Product)
 
 import Control.Hspl.Internal.Ast
-import Control.Hspl.Internal.Unification
+import Control.Hspl.Internal.Unification hiding (Unified)
 
--- | A resolution proof is a tree where each node is a 'Goal'. The root of the tree is the statement
--- to be proven. Each node follows logically from its children. A leaf, since it has no children,
--- stands on its own as a true statement -- in other words, leaves represent axioms.
-data Proof = Axiom Goal | Proof Goal [Proof]
-  deriving (Show, Eq)
+-- | Abstract representation of a proof. A proof can be thought of as a tree, where each node is a
+-- goal or subgoal which was proven, and the children of that node, if any, are subgoals which
+-- together imply the truth of the node. There are various types of nodes (represented by the
+-- different 'Proof' constructors) corresponding to the various types of 'Goal's.
+data Proof =
+             -- | A proof of a 'PredGoal' by the resolution inference rule. This is the only kind of
+             -- node which has children; the children here correspond to the negative literals of
+             -- the 'HornClause' which was used to prove the 'Predicate'.
+             Resolved Predicate [Proof]
+             -- | A proof of a 'CanUnify' goal.
+           | forall a. TermEntry a => Unified (Term a) (Term a)
+             -- | A proof of an 'Identical' goal.
+           | forall a. TermEntry a => Identified (Term a) (Term a)
+             -- | A proof of an 'Equal' goal.
+           | forall a. TermEntry a => Equated (Term a) (Term a)
+             -- | A proof of a 'Not' goal.
+           | Negated Goal
+
+instance Eq Proof where
+  (==) (Resolved p ps) (Resolved p' ps') = p == p' && ps == ps'
+  (==) (Unified t1 t2) (Unified t1' t2') = case cast (t1', t2') of
+    Just t' -> (t1, t2) == t'
+    Nothing -> False
+  (==) (Identified t1 t2) (Identified t1' t2') = case cast (t1', t2') of
+    Just t' -> (t1, t2) == t'
+    Nothing -> False
+  (==) (Equated t1 t2) (Equated t1' t2') = case cast (t1', t2') of
+    Just t' -> (t1, t2) == t'
+    Nothing -> False
+  (==) (Negated g) (Negated g') = g == g'
+  (==) _ _ = False
+
+instance Show Proof where
+  show (Resolved p ps) = "Resolved (" ++ show p ++ ")" ++ show ps
+  show (Unified t1 t2) = "Unified (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+  show (Identified t1 t2) = "Identified (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+  show (Equated t1 t2) = "Equated (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+  show (Negated g) = "Negated (" ++ show g ++ ")"
 
 -- | The output of the solver. This is meant to be treated as an opaque data type which can be
 -- inspected via the functions defined in this module.
 type ProofResult = (Proof, Unifier)
 
 -- | Return the list of all goals or subgoals in the given result which unify with a particular goal.
-searchProof :: ProofResult -> Predicate -> [Predicate]
-searchProof (proof, _) = searchProof' proof
-  where searchProof' pr g = case pr of
-                              Proof (PredGoal p) ps -> [p | match p g] ++ recurse ps g
-                              Proof _ ps -> recurse ps g
-                              Axiom (PredGoal p) -> [p | match p g]
-                              Axiom _ -> []
-        recurse ps g' = concatMap (\p' -> searchProof' p' g') ps
-        match (Predicate name arg) (Predicate name' arg')
-          | name == name' = isJust $ cast arg >>= mgu arg'
-          | otherwise = False
+searchProof :: ProofResult -> Goal -> [Goal]
+searchProof (proof, _) goal = searchProof' proof (runRenamed $ renameGoal goal)
+  where searchProof' p@(Resolved _ ps) g =
+          maybeToList (matchGoal (getSolution (p, mempty)) g) ++ concatMap (\p' -> searchProof' p' g) ps
+        searchProof' p g = maybeToList (matchGoal (getSolution (p, mempty)) g)
+        matchGoal (PredGoal prd@(Predicate name arg) _) (PredGoal (Predicate name' arg') _)
+          | name == name' = case cast arg' >>= mgu arg of
+              Just u -> Just $ PredGoal (unifyPredicate u prd) []
+              Nothing -> Nothing
+          | otherwise = Nothing
+        matchGoal (CanUnify t1 t2) (CanUnify t1' t2') = matchBinary CanUnify (t1, t2) (t1', t2')
+        matchGoal (Identical t1 t2) (Identical t1' t2') = matchBinary Identical (t1, t2) (t1', t2')
+        matchGoal (Equal t1 t2) (Equal t1' t2') = matchBinary Equal (t1, t2) (t1', t2')
+        matchGoal (Not g) (Not g') = fmap Not $ matchGoal g g'
+        matchGoal _ _ = Nothing
+        matchBinary constr (t1, t2) (t1', t2') =
+          let t = toTerm (t1, t2)
+              t' = toTerm (t1', t2')
+          in case cast t' >>= mgu t of
+            Just u -> Just $ unifyGoal u $ constr t1 t2
+            Nothing -> Nothing
 
 -- | Get the 'Unifier' which maps variables in the goal to their final values (the values for which
 -- they were substituted in the proven theorem). This unifier can then be queried with 'queryVar' to
@@ -93,30 +137,29 @@ getUnifier (_, u) = u
 getAllUnifiers :: [ProofResult] -> [Unifier]
 getAllUnifiers = map getUnifier
 
--- | Get the theorem which follows from a 'Proof'. This will always be the predicate at the root of a
--- proof tree.
-getSolution :: ProofResult -> Predicate
+-- | Get the theorem which follows from a 'Proof'; i.e., the root of a proof tree.
+getSolution :: ProofResult -> Goal
 getSolution (proof, _) = case proof of
-  Proof p _ -> getSol p
-  Axiom p -> getSol p
-  where getSol (PredGoal p) = p
-        getSol _ = error "Top-level goal must be a predicate."
+  Resolved p _ -> PredGoal p []
+  Unified t1 t2 -> CanUnify t1 t2
+  Identified t1 t2 -> Identical t1 t2
+  Equated t1 t2 -> Equal t1 t2
+  Negated g -> Not g
 
 -- | Get the set of theorems which were proven by each 'Proof' tree in a forest.
-getAllSolutions :: [ProofResult] -> [Predicate]
+getAllSolutions :: [ProofResult] -> [Goal]
 getAllSolutions = map getSolution
 
--- | Attempt to prove the given predicate from the clauses in the given 'Program'. This function
--- returns a forest of 'Proof' trees. If the goal cannot be derived from the given clauses, the
--- result is @[]@. Otherwise, the contents of the resulting list represent various alternative ways
--- of proving the theorem. If there are variables in the goal, they may unify with different values
--- in each alternative proof.
-runHspl :: Program -> Predicate -> [ProofResult]
-runHspl p g = observeAllSolver $ prove p (PredGoal g)
+-- | Attempt to prove the given 'Goal'. This function returns a forest of 'Proof' trees. If the
+-- goal cannot be proven, the result is @[]@. Otherwise, the contents of the resulting list
+-- represent various alternative ways of proving the theorem. If there are variables in the goal,
+-- they may unify with different values in each alternative proof.
+runHspl :: Goal -> [ProofResult]
+runHspl = observeAllSolver . prove
 
 -- | Like 'runHspl', but return at most the given number of proofs.
-runHsplN :: Int -> Program -> Predicate -> [ProofResult]
-runHsplN n p g = observeManySolver n $ prove p (PredGoal g)
+runHsplN :: Int -> Goal -> [ProofResult]
+runHsplN n = observeManySolver n . prove
 
 -- | The monad which defines the backtracking control flow of the solver.
 type SolverT m = LogicT (UnificationT m)
@@ -215,72 +258,69 @@ data SolverCont (m :: * -> *) =
              , errorUnknownPred :: Predicate -> SolverT m ProofResult
              }
 
--- | Continuations which, when passed to 'proveWith', will allow statements in the given program to
--- be proven with no additional behavior and no interprative overhead.
-solverCont :: Program -> SolverCont Identity
-solverCont p = SolverCont { tryPredicate = provePredicateWith (solverCont p) p
-                          , retryPredicate = provePredicateWith (solverCont p) p
-                          , tryUnifiable = proveUnifiableWith (solverCont p) p
-                          , tryIdentical = proveIdenticalWith (solverCont p) p
-                          , tryNot = proveNotWith (solverCont p) p
-                          , tryEqual = proveEqualWith (solverCont p) p
-                          , errorUnknownPred = const mzero
-                          }
+-- | Continuations which, when passed to 'proveWith', will allow statements to be proven with no
+-- additional behavior and no interprative overhead.
+solverCont :: SolverCont Identity
+solverCont = SolverCont { tryPredicate = provePredicateWith solverCont
+                        , retryPredicate = provePredicateWith solverCont
+                        , tryUnifiable = proveUnifiableWith solverCont
+                        , tryIdentical = proveIdenticalWith solverCont
+                        , tryNot = proveNotWith solverCont
+                        , tryEqual = proveEqualWith solverCont
+                        , errorUnknownPred = const mzero
+                        }
 
 -- | Run the minimal, zero-overhead version of the algorithm by supplying the appropriate
 -- continuations to 'proveWith'.
-prove :: Program -> Goal -> Solver ProofResult
-prove p = proveWith (solverCont p) p
+prove :: Goal -> Solver ProofResult
+prove = proveWith solverCont
 
 -- | Produce a proof of the predicate from the given 'HornClause'. The clause's positive literal
 -- should match with the predicate; that is, it should have the same name and type. If the positive
 -- literal also unifies with the predicate, then the unifier is applied to each negative literal,
 -- and each unified negative literal is proven as a subgoal using the given continuations.
-provePredicateWith :: Monad m =>
-                      SolverCont m -> Program -> Predicate -> HornClause -> SolverT m ProofResult
-provePredicateWith cont program p c = do
+provePredicateWith :: Monad m => SolverCont m -> Predicate -> HornClause -> SolverT m ProofResult
+provePredicateWith cont p c = do
   (gs, u) <- getSubGoals p c
-  case gs of
-    [] -> return (Axiom $ unifyGoal u (PredGoal p), u)
-    _ -> do (subProofs, netU) <- proveSubGoals u gs
-            return (Proof (unifyGoal netU (PredGoal p)) subProofs, netU)
+  (subProofs, netU) <- proveSubGoals u gs
+  return (Resolved (unifyPredicate netU p) subProofs, netU)
   where getSubGoals p' c' = do mgs <- lift $ unify p' c'
                                case mgs of
                                  Just gs -> return gs
                                  Nothing -> mzero
         proveSubGoals u [] = return ([], u)
         proveSubGoals u (g:gs) = do let g' = unifyGoal u g
-                                    (proof, u') <- proveWith cont program g'
+                                    (proof, u') <- proveWith cont g'
                                     (proofs, u'') <- proveSubGoals (u <> u') gs
                                     return (proof:proofs, u'')
 
 -- | Check if the given terms can unify. If so, produce the unifier and a trivial proof of their
 -- unifiability. Use the given continuations when proving subgoals.
 proveUnifiableWith :: (TermEntry a, Monad m) =>
-                      SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
-proveUnifiableWith _ _ t1 t2 = case mgu t1 t2 of
-  Just u -> return (Axiom $ unifyGoal u $ CanUnify t1 t2, u)
+                      SolverCont m -> Term a -> Term a -> SolverT m ProofResult
+proveUnifiableWith _ t1 t2 = case mgu t1 t2 of
+  Just u -> return (Unified (unifyTerm u t1) (unifyTerm u t2), u)
   Nothing -> mzero
 
 -- | Check if the given terms are identical (i.e. they have already been unified). If so, produce a
 -- trivial proof of their equality. Use the given continuations when proving subgoals.
 proveIdenticalWith :: (TermEntry a, Monad m) =>
-                      SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
-proveIdenticalWith _ _ t1 t2 = if t1 == t2
-  then return (Axiom $ Identical t1 t2, mempty)
+                      SolverCont m -> Term a -> Term a -> SolverT m ProofResult
+proveIdenticalWith _ t1 t2 = if t1 == t2
+  then return (Identified t1 t2, mempty)
   else mzero
 
 -- | Succeed if and only if the given 'Goal' fails. No new bindings are created in the process.
-proveNotWith :: Monad m => SolverCont m -> Program -> Goal -> SolverT m ProofResult
-proveNotWith cont program g = ifte (once $ proveWith cont program g)
-                                   (const mzero)
-                                   (return (Axiom $ Not g, mempty))
+proveNotWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
+proveNotWith cont g = ifte (once $ proveWith cont g)
+                           (const mzero)
+                           (return (Negated g, mempty))
 
 -- | Check if the value of the right-hand side unifies with the left-hand side.
 proveEqualWith :: (TermEntry a, Monad m) =>
-                  SolverCont m -> Program -> Term a -> Term a -> SolverT m ProofResult
-proveEqualWith _ _ lhs rhs = case mgu lhs (Constant $ eval rhs) of
-    Just u -> return (Axiom $ Equal (unifyTerm u lhs) (unifyTerm u rhs), u)
+                  SolverCont m -> Term a -> Term a -> SolverT m ProofResult
+proveEqualWith _ lhs rhs = case mgu lhs (Constant $ eval rhs) of
+    Just u -> return (Equated (unifyTerm u lhs) (unifyTerm u rhs), u)
     Nothing -> mzero
   where eval :: Term a -> a
         eval (Constant c) = c
@@ -293,14 +333,13 @@ proveEqualWith _ _ lhs rhs = case mgu lhs (Constant $ eval rhs) of
         eval (Variable _) = error "Arguments are not sufficiently instantiated."
         eval _ = error "Argument must be an arithmetic expression."
 
--- | Produce a proof of the goal from the clauses in the program. This function will either fail,
--- or backtrack over all possible proofs. It will invoke the appropriate continuations in the given
--- 'SolverCont' whenever a relevant event occurs during the course of the proof.
-proveWith :: Monad m => SolverCont m -> Program -> Goal -> SolverT m ProofResult
-proveWith cont program g = case g of
-  PredGoal p -> case findClauses p program of
-    [] -> errorUnknownPred cont p
-    c:cs -> tryPredicate cont p c `mplus` msum (map (retryPredicate cont p) cs)
+-- | Produce a proof of the goal. This function will either fail, or backtrack over all possible
+-- proofs. It will invoke the appropriate continuations in the given 'SolverCont' whenever a
+-- relevant event occurs during the course of the proof.
+proveWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
+proveWith cont g = case g of
+  PredGoal p [] -> errorUnknownPred cont p
+  PredGoal p (c:cs) -> tryPredicate cont p c `mplus` msum (map (retryPredicate cont p) cs)
   CanUnify t1 t2 -> tryUnifiable cont t1 t2
   Identical t1 t2 -> tryIdentical cont t1 t2
   Not g' -> tryNot cont g'

@@ -1,6 +1,3 @@
-{-# LANGUAGE CPP #-}
-{-# OPTIONS_HADDOCK show-extensions #-}
-
 {-|
 Module      : Control.Hspl.Internal.Debugger
 Description : An interactive debugger for HSPL programs.
@@ -144,15 +141,15 @@ type Debugger = SolverT (StateT DebugState IO)
 type DebugCont = SolverCont (StateT DebugState IO)
 
 -- | A 'SolverCont' continuation that also maintains a stack of current goals.
-debugCont :: Program -> [Goal] -> DebugCont
-debugCont program stack = SolverCont { tryPredicate = debugFirstAlternative program stack
-                                     , retryPredicate = debugNextAlternative program stack
-                                     , tryUnifiable = debugUnifiable program stack
-                                     , tryIdentical = debugIdentical program stack
-                                     , tryNot = debugNot program stack
-                                     , tryEqual = debugEqual program stack
-                                     , errorUnknownPred = debugErrorUnknownPred stack
-                                     }
+debugCont :: [Goal] -> DebugCont
+debugCont stack = SolverCont { tryPredicate = debugFirstAlternative stack
+                             , retryPredicate = debugNextAlternative stack
+                             , tryUnifiable = debugUnifiable stack
+                             , tryIdentical = debugIdentical stack
+                             , tryNot = debugNot stack
+                             , tryEqual = debugEqual stack
+                             , errorUnknownPred = debugErrorUnknownPred stack
+                             }
 
 -- | Print a line to the 'output' 'Handle'. The end-of-line character depends on whether we are
 -- running in interactive mode (i.e. whether 'tty' is set). In interactive mode, the end of line is
@@ -203,69 +200,63 @@ ifTarget stack m = do
     Depth d | length stack <= d -> m
     _ -> return ()
 
--- | Get the result that follows from a proof.
-getTheorem :: ProofResult -> Goal
-getTheorem (Proof g _, _) = g
-getTheorem (Axiom g, _) = g
-
 -- | Attempt to prove a subgoal and log 'Call', 'Exit', and 'Fail' messages as appropriate.
-call :: Program -> [Goal] -> (DebugCont -> Program -> a -> Debugger ProofResult) -> a -> Debugger ProofResult
-call program stack cont g = do
+call :: [Goal] -> (DebugCont -> a -> Debugger ProofResult) -> a -> Debugger ProofResult
+call stack cont g = do
   ifTarget stack $ prompt stack Call $ show (head stack)
-  ifte (cont (debugCont program stack) program g)
-    (\result -> ifTarget stack (prompt stack Exit (show $ getTheorem result)) >> return result)
+  ifte (cont (debugCont stack) g)
+    (\result -> ifTarget stack (prompt stack Exit (show $ getSolution result)) >> return result)
     (ifTarget stack (prompt stack Fail $ show (head stack)) >> mzero)
 
--- | Same as 'call', but for 2-ary provers.
-call2 :: Program -> [Goal] -> (DebugCont -> Program -> a -> b -> Debugger ProofResult) -> a -> b -> Debugger ProofResult
-call2 program stack cont a b =
-  call program stack (\c p (x, y) -> cont c p x y) (a, b)
+-- | Same as call, but for 2-ary provers.
+call2 :: [Goal] -> (DebugCont -> a -> b -> Debugger ProofResult) -> a -> b -> Debugger ProofResult
+call2 stack cont a b = call stack (\c (x, y) -> cont c x y) (a, b)
 
 -- | Continuation hook for proving a predicate which matches a given clause.
-debugPredicate :: MsgType -> Program -> [Goal] -> Predicate -> HornClause -> Debugger ProofResult
-debugPredicate mtype program s p c = do
-  let stack = PredGoal p : s
+debugPredicate :: MsgType -> [Goal] -> Predicate -> HornClause -> Debugger ProofResult
+debugPredicate mtype s p c = do
+  let stack = PredGoal p [] : s
   ifTarget stack $ prompt stack mtype $ show p
-  ifte (provePredicateWith (debugCont program stack) program p c)
-    (\result -> ifTarget stack (prompt stack Exit (show $ getTheorem result)) >> return result)
+  ifte (provePredicateWith (debugCont stack) p c)
+    (\result -> ifTarget stack (prompt stack Exit (show $ getSolution result)) >> return result)
     (ifTarget stack (prompt stack Fail $ show p) >> mzero)
 
 -- | Continuation hook for trying the first alternative clause which matches the goal.
-debugFirstAlternative :: Program -> [Goal] -> Predicate -> HornClause -> Debugger ProofResult
+debugFirstAlternative :: [Goal] -> Predicate -> HornClause -> Debugger ProofResult
 debugFirstAlternative = debugPredicate Call
 
 -- | Continuation hook for trying additional alternative clauses which match the goal.
-debugNextAlternative :: Program -> [Goal] -> Predicate -> HornClause -> Debugger ProofResult
+debugNextAlternative :: [Goal] -> Predicate -> HornClause -> Debugger ProofResult
 debugNextAlternative = debugPredicate Redo
 
 -- | Continaution hook for proving a 'CanUnify' goal.
-debugUnifiable :: TermEntry a => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
-debugUnifiable program s t1 t2 =
+debugUnifiable :: TermEntry a => [Goal] -> Term a -> Term a -> Debugger ProofResult
+debugUnifiable s t1 t2 =
   let stack = CanUnify t1 t2 : s
-  in call2 program stack proveUnifiableWith t1 t2
+  in call2 stack proveUnifiableWith t1 t2
 
 -- | Continaution hook for proving an 'Identical' goal.
-debugIdentical :: TermEntry a => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
-debugIdentical program s t1 t2 =
+debugIdentical :: TermEntry a => [Goal] -> Term a -> Term a -> Debugger ProofResult
+debugIdentical s t1 t2 =
   let stack = Identical t1 t2 : s
-  in call2 program stack proveIdenticalWith t1 t2
+  in call2 stack proveIdenticalWith t1 t2
 
 -- | Continuation hook for proving a 'Not' goal.
-debugNot :: Program -> [Goal] -> Goal -> Debugger ProofResult
-debugNot program s g =
+debugNot :: [Goal] -> Goal -> Debugger ProofResult
+debugNot s g =
   let stack = Not g : s
-  in call program stack proveNotWith g
+  in call stack proveNotWith g
 
 -- | Continuation hook for proving an 'Equal' goal.
-debugEqual :: (TermEntry a) => Program -> [Goal] -> Term a -> Term a -> Debugger ProofResult
-debugEqual program s lhs rhs =
+debugEqual :: (TermEntry a) => [Goal] -> Term a -> Term a -> Debugger ProofResult
+debugEqual s lhs rhs =
   let stack = Equal lhs rhs : s
-  in call2 program stack proveEqualWith lhs rhs
+  in call2 stack proveEqualWith lhs rhs
 
 -- | Continuation hook invoked when a goal with no matching clauses is encountered.
 debugErrorUnknownPred :: [Goal] -> Predicate -> Debugger a
 debugErrorUnknownPred s p@(Predicate name _) = do
-  let stack = PredGoal p : s
+  let stack = PredGoal p [] : s
   -- Since there are no clauses, there will be no corresponding 'Call' message, rather we will fail
   -- immediately. To make the output a little more intuitive, we explicitly log a 'Call' here.
   ifTarget stack $ prompt stack Call $ show (head stack)
@@ -273,18 +264,17 @@ debugErrorUnknownPred s p@(Predicate name _) = do
     "Unknown predicate \"" ++ name ++ " :: " ++ show (predType p) ++ "\""
   mzero
 
--- | Run the debugger with the given configuration on the given program with the given goal. The
--- result of this function is a computaion in the 'IO' monad which, when executed, will run the
--- debugger.
-debug :: DebugConfig -> Program -> Predicate -> IO [ProofResult]
-debug config p g = do
+-- | Run the debugger with the given configuration and goal. The result of this function is a
+-- computaion in the 'IO' monad which, when executed, will run the debugger.
+debug :: DebugConfig -> Goal -> IO [ProofResult]
+debug config g = do
   inputH <- if inputFile config == "stdin"
               then return stdin
               else openFile (inputFile config) ReadMode
   outputH <- if outputFile config == "stdout"
               then return stdout
               else openFile (outputFile config) WriteMode
-  let st = observeAllSolverT $ proveWith (debugCont p []) p (PredGoal g)
+  let st = observeAllSolverT $ proveWith (debugCont []) g
   results <- evalStateT st DS { currentTarget = Any
                               , lastCommand = Step
                               , input = inputH
@@ -300,5 +290,5 @@ debug config p g = do
 -- of 'debug' to 'unsafePerformIO'. Because of this, it should never be used in production. The
 -- intended use for this function is to import the module containing the HSPL program into a REPL
 -- and run 'unsafeDebug' from there.
-unsafeDebug :: Program -> Predicate -> [ProofResult]
-unsafeDebug p g = unsafePerformIO $ debug debugConfig p g
+unsafeDebug :: Goal -> [ProofResult]
+unsafeDebug = unsafePerformIO . debug debugConfig

@@ -23,26 +23,21 @@ See "Control.Hspl.Examples" for some sample programs.
 -}
 module Control.Hspl (
   -- * Types
-    Hspl
-  , Term
+    Term
   , Goal
   , Clause
+  , Predicate
   -- * Building HSPL programs
-  , HsplBuilder
-  , ClauseBuilder
-  , hspl
+  , GoalWriter
+  , ClauseWriter (..)
   -- ** Defining predicates
-  , def
+  , predicate
+  , match
   , (|-)
   , (?)
-  -- *** Typed predicates
-  -- | Predicates can be foward declared with a type annotation to allow the compiler to infer types
-  -- whenever the predicate is applied.
-  , PredDecl
-  , decl
   -- ** Special predicates
   -- | Some predicates have special semantics. These can appear as goals on the right-hand side of
-  -- '|-', but they can never be the object of a 'def' statement on the left-hand side.
+  -- '|-'.
   , (|=|)
   , (|\=|)
   , (|==|)
@@ -50,10 +45,11 @@ module Control.Hspl (
   , lnot
   , is
   -- * Running HSPL programs
-  , ProofResult
   , runHspl
   , runHspl1
   , runHsplN
+  -- ** Inspecting results
+  , ProofResult
   , searchProof
   , getUnifier
   , getAllUnifiers
@@ -93,6 +89,9 @@ module Control.Hspl (
   , ($$)
   ) where
 
+#if __GLASGOW_HASKELL__ < 710
+import Control.Applicative
+#endif
 import Control.Monad.Writer
 import Data.Data
 import Data.Tuple.Curry
@@ -109,143 +108,117 @@ import           Control.Hspl.Internal.Solver ( ProofResult
                                               , getAllSolutions
                                               )
 
--- | The type encapsulating an HSPL program.
-type Hspl = Ast.Program
-
 -- | A clause is a logical disjunction of one or more predicates. Each definition of a predicate
 -- (see 'def') generates one 'Clause' in the resulting 'Hspl' program.
 type Clause = Ast.HornClause
 
--- | A monad for appending 'Clause's to an 'Hspl' program.
-type HsplBuilder = Writer [Clause]
-
 -- | A monad for appending 'Goal's to the definition of a 'Clause'.
-type ClauseBuilder = Writer [Goal]
+type GoalWriter = Writer [Goal]
 
--- | Overloaded functions for constructing predicates in various contexts.
-class PredApp a b c | a b -> c where
-  -- | Predicate application. @pred? term@ is a goal that succeeds if the predicate @pred@ applied
-  -- to @term@ is true.
-  (?) :: a -> b -> c
+-- | A monad for appending alternative 'Clause's to a 'Predicate'. This monad creates a list of
+-- functions waiting for a predicate name. When applied to a string, they produce clauses whose
+-- positive literals has that name.
+newtype ClauseWriter t a = CW { unCW :: Writer [String -> Clause] a }
 
-instance TermData a => PredApp String a (ClauseBuilder ()) where
-  name? arg = tell [PredGoal $ Ast.predicate name arg]
+instance Functor (ClauseWriter t) where
+  fmap f m = CW $ fmap f $ unCW m
 
-instance (TermData b, TermEntry a, a ~ HSPLType b) => PredApp (PredDecl a) b (ClauseBuilder ()) where
-  name? arg = unDecl name ? arg
+instance Applicative (ClauseWriter t) where
+  pure = CW . pure
+  f <*> g = CW $ unCW f <*> unCW g
 
-instance (TermData b, TermEntry a, a ~ HSPLType b) => PredApp (PredDef a) b (HsplBuilder ()) where
-  name? arg = tell [Ast.HornClause (Ast.predicate (unDef name) arg) []]
+instance Monad (ClauseWriter t) where
+  m >>= f = CW $ unCW m >>= unCW . f
+  return = pure
 
-instance (TermData a) => PredApp UntypedPredDef a (HsplBuilder ()) where
-  name? arg = tell [Ast.HornClause (Ast.predicate (unUDef name) arg) []]
+instance MonadWriter [String -> Clause] (ClauseWriter t) where
+  tell = CW . tell
+  listen = CW . listen . unCW
+  pass = CW . pass . unCW
 
--- | The type of a forward declaration of a predicate. 'PredDecl's are created using 'decl' and are
--- suitable only for applying a predicate with '(?)'.
-newtype PredDecl a = Decl { unDecl :: String }
+-- | Predicate application. @pred? term@ is a goal that succeeds if the predicate @pred@ applied
+-- to @term@ is true.
+(?) :: (TermData b, TermEntry a, a ~ HSPLType b) => Predicate a -> b -> GoalWriter ()
+p? arg = tell [Ast.PredGoal (Ast.predicate (predName p) arg) (definitions p)]
 
--- | Give a forward declaration of a predicate. This is never required; however, using 'decl' with
--- a type annotation can allow for more effective use of type inference. For example, if we define
+-- | A declaration of a predicate with a given name and set of alternatives. Parameterized by the
+-- type of the argument to which the predicate can be applied.
+data Predicate a = Predicate { predName :: String, definitions :: [Clause] }
+
+-- | Declare and define a new predicate with a given name. This function takes a block containing
+-- one or more definitions ('match' statements). For example, we define a predicate called "odd"
+-- which succeeds when the argument is an odd 'Int':
 --
 -- @
---  cons = decl "cons" :: PredDecl (Int, [Int], [Int])
+--  odd = predicate "odd" $ do
+--    match(1 :: Int)
+--    match(int "x") |- do
+--      int "y" `is` int "x" |-| (2 :: Int)
+--      odd? int "y"
 -- @
 --
--- Then the predicate application
+-- It is worth saying a few words about the type of this function. It is polymorphic in the type of
+-- the argument to which the predicate can be applied. If no type annotation is given, the compiler
+-- will attempt to infer this type from the type of the 'match' statements in the definition. If a
+-- type annotation is given, then the type of variables in the 'match' statements can be inferred,
+-- allowing the use of 'auto' or 'v'.
+--
+-- If the GHC extension @ScopedTypeVariables@ is used, type annotations can also be used to declare
+-- generic predicates, like so:
 --
 -- @
---  cons? (v"x", v"xs", v"x" <:> v"xs")
+--  elem :: forall a. TermEntry a => Predicate (a, [a])
+--  elem = predicate "elem" $ do
+--    let va x = Var "x" :: Var a
+--    match (va "x", va "x" <:> v "xs")
+--    match (va "y", va "x" <:> v"xs") |- elem? (v"y", v"xs")
 -- @
 --
--- is equivalent to
---
--- @
---  "cons"? (int "x", int \* "xs", int "x" <:> int \* "xs")
--- @
-decl :: String -> PredDecl a
-decl = Decl
+-- Note that the generic type must be an instance of 'TermEntry'.
+predicate :: String -> ClauseWriter t b -> Predicate t
+predicate name gs = Predicate name (map ($name) $ execWriter $ unCW gs)
 
--- | The type of a predicate definition with a particular name. 'PredDef's are created using 'def'
--- and are suitable only for defining a predicate with '(?)' and '(|-)'.
-newtype PredDef a = Def { unDef :: String }
+-- | Make a statement about when a 'Predicate' holds for inputs of a particular form. A 'match'
+-- statement succeeds when the input can unify with the argument to 'match'. When attempting to
+-- prove a predicate, HSPL will first find all definitions of the predicate which match the goal,
+-- and then try to prove any subgoals of the 'match' statement (which can be specified using '|-').
+match :: (TermData a, b ~ HSPLType a) => a -> ClauseWriter b ()
+match t = tell [\p -> Ast.HornClause (Ast.predicate p $ toTerm t) []]
 
--- | The type of a predicate definition with unkown type. The type of the predicate will be inferred
--- from the type of the argument to which it is applied.
-newtype UntypedPredDef = UDef { unUDef :: String }
-
--- | Overloaded functions for predicate definitions.
-class Definition a b | a -> b where
-  -- | Define a new predicate. The predicate has a name and an argument, which is pattern matched
-  -- whenever a goal with a matching name is encountered. The definition may be empty, in which case
-  -- the predicate succeeds whenever pattern matching succeeds. Otherwise, the definition consists of
-  -- the '|-' operator followed by a @do@ block containing a sequence of predicate applications. If
-  -- pattern matching on the argument succeeds, then each line of the @do@ block is tried as a
-  -- subgoal; if all subgoals succeed, the predicate succeeds.
-  --
-  -- In terms of first-order logic, the relationship between the predicate and the definition is one
-  -- of implication; the conjunction of all of the goals in the definition implies the predicate.
-  --
-  -- Example:
-  --
-  -- @
-  --  def "mortal"? int "x" |- do
-  --    "human"? int "x"
-  -- @
-  --
-  -- This defines a predicate @mortal(X)@, which is true if @human(X)@ is true; in other words,
-  -- this definition defines the relationship @human(X) => mortal(X)@.
-  --
-  -- This function is polymorphic in its first argument (the name of the predicate to define).
-  -- If that argument is a 'String', as above, then the type of the argument to the predicate is
-  -- ambiguous and must be deduced from the argument itself.
-  --
-  -- If, however, the first argument to 'def' is a 'PredDecl' (result of 'decl') then the argument
-  -- to the predicate must have the corresponding type, and the Haskell compiler can infer that
-  -- type. The following declaration is equivalent to the previous example:
-  --
-  -- @
-  --  mortal = decl "mortal" :: PredDecl Int
-  --  def mortal? auto "x" |- do
-  --    "human"? int "x"
-  -- @
-  def :: a -> b
-
-instance Definition (PredDecl a) (PredDef a) where
-  def = Def . unDecl
-
-instance Definition String UntypedPredDef where
-  def = UDef
-
--- | Indicates the beginning of the definition of a predicate.
+-- | Indicates the beginning of a list of subgoals in a predicate definition. Whenever the 'match'
+-- statement on the left-hand side of '|-' succeeds, the solver attempts to prove all subgoals on
+-- the right-hand side. If it is successful, then the overall predicate succeeds.
 infixr 0 |-
-(|-) :: HsplBuilder () -> ClauseBuilder a -> HsplBuilder ()
+(|-) :: ClauseWriter t a -> GoalWriter b -> ClauseWriter t ()
 p |- gs =
-  let [Ast.HornClause goal []] = execWriter p
+  let [f] = execWriter $ unCW p
       goals = execWriter gs
-  in tell [Ast.HornClause goal goals]
+      addGoals name = let Ast.HornClause prd ogGoals = f name
+                      in Ast.HornClause prd (ogGoals ++ goals)
+  in tell [addGoals]
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
-(|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
+(|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
 t1 |=| t2 = tell [Ast.CanUnify (toTerm t1) (toTerm t2)]
 
 -- | Negation of '|=|'. The predicate @t1 |\\=| t2@ succeeds if and only if @t1 |=| t2@ fails. No
 -- new bindings are created.
-(|\=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
+(|\=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
 t1 |\=| t2 = lnot $ t1 |=| t2
 
 -- | Test if two terms are unified. This predicate succeeds if and only if the two terms are
 -- identical under the current unfier. No new bindings are created.
-(|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
+(|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
 t1 |==| t2 = tell [Ast.Identical (toTerm t1) (toTerm t2)]
 
 -- | Negation of '|==|'. The predicate @t1 |\\==| t2@ succeeds if and only if @t1 |==| t2@ fails.
 -- No new bindings are created.
-(|\==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
+(|\==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
 t1 |\==| t2 = lnot $ t1 |==| t2
 
 -- | Logical negation. @lnot p@ is a predicate which is true if and only if the predicate @p@ is
 -- false. @lnot@ does not create any new bindings.
-lnot :: ClauseBuilder a -> ClauseBuilder ()
+lnot :: GoalWriter a -> GoalWriter ()
 lnot p = case execWriter p of
   [g] -> tell [Not g]
   _ -> error "lnot must be applied to exactly one predicate."
@@ -256,7 +229,7 @@ lnot p = case execWriter p of
 -- expression. An expression may contain constants, instantiated variables, and combinations thereof
 -- formed using '|+|', '|-|', etc.
 infix 1 `is`
-is :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> ClauseBuilder ()
+is :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
 is a b = tell [Equal (toTerm a) (toTerm b)]
 
 -- | Addition. Create a term representing the sum of two terms.
@@ -298,28 +271,24 @@ infixl 9 |%|
          a -> b -> Term (HSPLType a)
 a |%| b = Ast.Modulus (toTerm a) (toTerm b)
 
--- | Construct an HSPL program.
-hspl :: HsplBuilder a -> Hspl
-hspl builder = Ast.addClauses (execWriter builder) Ast.emptyProgram
-
 -- | Query an HSPL program for a given goal. The 'ProofResult's returned can be inspected using
 -- functions like `getAllSolutions`, `searchProof`, etc.
-runHspl :: Hspl -> ClauseBuilder a -> [ProofResult]
-runHspl program gs = case execWriter gs of
-  [PredGoal goal] -> Solver.runHspl program goal
+runHspl :: GoalWriter a -> [ProofResult]
+runHspl gs = case execWriter gs of
+  [g@(PredGoal _ _)] -> Solver.runHspl g
   _ -> error "Please specify exactly one predicate to prove."
 
 -- | Query an HSPL program for a given goal. If a proof is found, stop immediately instead of
 -- backtracking to look for additional solutions. If no proof is found, return 'Nothing'.
-runHspl1 :: Hspl -> ClauseBuilder a -> Maybe ProofResult
-runHspl1 program gs = case runHsplN 1 program gs of
+runHspl1 :: GoalWriter a -> Maybe ProofResult
+runHspl1 gs = case runHsplN 1 gs of
   [] -> Nothing
   (res:_) -> Just res
 
 -- | Query an HSPL program for a given goal. Stop after @n@ solutions are found.
-runHsplN :: Int -> Hspl -> ClauseBuilder a -> [ProofResult]
-runHsplN n program gs = case execWriter gs of
-  [PredGoal goal] -> Solver.runHsplN n program goal
+runHsplN :: Int -> GoalWriter a -> [ProofResult]
+runHsplN n gs = case execWriter gs of
+  [g@(PredGoal _ _)] -> Solver.runHsplN n g
   _ -> error "Please specify exactly one predicate to prove."
 
 {- $types
