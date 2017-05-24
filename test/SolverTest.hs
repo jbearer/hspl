@@ -89,7 +89,8 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       length us `shouldBe` 1
       head us `shouldSatisfy` ('a' // Var "x" `isSubunifierOf`)
   describe "proveUnifiableWith" $ do
-    let runTest t1 t2 =
+    let runTest :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> [ProofResult]
+        runTest t1 t2 =
           observeAllSolver $ proveUnifiableWith solverCont (toTerm t1) (toTerm t2)
     it "should unify terms when possible" $ do
       let (proofs, us) = unzip $ runTest (Var "x" :: Var String) "foo"
@@ -99,7 +100,8 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should fail when terms cannot be unified" $
       runTest "bar" "foo" `shouldBe` []
   describe "proveIdenticalWith" $ do
-    let runTest t1 t2 =
+    let runTest :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> [ProofResult]
+        runTest t1 t2 =
           observeAllSolver $ proveIdenticalWith solverCont (toTerm t1) (toTerm t2)
     it "should fail if the terms are not equal" $
       runTest "foo" "bar" `shouldBe` []
@@ -116,7 +118,8 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       runTest (PredGoal (predicate "foo" ('b', 'a')) [simpleBinary]) `shouldBe`
         [(Negated $ PredGoal (predicate "foo" ('b', 'a')) [simpleBinary], mempty)]
   describe "proveEqualWith" $ do
-    let runTest lhs rhs =
+    let runTest :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> [ProofResult]
+        runTest lhs rhs =
           observeAllSolver $ proveEqualWith solverCont (toTerm lhs) (toTerm rhs)
     it "should unify a variable with a constant" $ do
       let (proofs, us) = unzip $ runTest (Var "x" :: Var Int) (1 :: Int)
