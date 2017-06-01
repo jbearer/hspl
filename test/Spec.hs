@@ -6,6 +6,7 @@ import qualified SolverTest as Solver
 import qualified DebuggerTest as Debugger
 import qualified HsplTest as Hspl
 import qualified ExamplesTest as Examples
+import qualified TupleTest as Tuple
 
 main :: IO ()
 main = hspec $ do
@@ -15,3 +16,4 @@ main = hspec $ do
   Debugger.test
   Hspl.test
   Examples.test
+  Tuple.test

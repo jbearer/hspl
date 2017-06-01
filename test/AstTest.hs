@@ -1,4 +1,8 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+#if __GLASGOW_HASKELL__ >= 800
+{-# OPTIONS_GHC -fdefer-type-errors #-}
+#endif
 
 module AstTest where
 
@@ -6,6 +10,10 @@ import Data.Data
 
 import Testing
 import Control.Hspl.Internal.Ast
+import Control.Hspl.Internal.Tuple
+#if __GLASGOW_HASKELL__ >= 800
+import Test.ShouldNotTypecheck
+#endif
 
 foo = predicate "foo" ()
 bar = predicate "bar" True
@@ -23,6 +31,12 @@ data U = U
   deriving (Show, Eq, Typeable, Data)
 
 data PseudoU = PU
+  deriving (Show, Eq, Typeable, Data)
+
+data Binary a = Binary a a
+  deriving (Show, Eq, Typeable, Data)
+
+data TwoChars = TwoChars Char Char
   deriving (Show, Eq, Typeable, Data)
 
 test = describeModule "Control.Hspl.Internal.Ast" $ do
@@ -98,13 +112,23 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         Tup (List (Constant 'f') (List (Constant 'o') (List (Constant 'o') Nil)))
                 (List (Constant True) (List (Constant False) Nil))
     it "should provide sufficient generality to represent ADTs" $ do
-      termType (Constructor (\(x, y, z) -> Tree x y z)
-                  (Tup (Constant True)
-                           (Tup (Constructor Leaf $ Constant True)
-                                    (Constructor Leaf $ Constant False)))) `shouldBe`
-        typeOf (Leaf True)
-      termType (Constructor Leaf (Constructor Leaf (Constant True))) `shouldBe`
-        typeOf (Leaf (Leaf True))
+      -- TODO Cannot yet support nested constructors like 'Tree', because the subterms need to be
+      -- 'TermData'. This will be fixed in the next commit.
+      adt Leaf True `shouldBe`
+        Constructor (toConstr $ Leaf True) [ETerm $ toTerm True]
+      adt Leaf ('a', 'b') `shouldBe`
+        Constructor (toConstr $ Leaf True) [ETerm $ toTerm ('a', 'b')]
+      adt Binary ('a', 'b') `shouldBe`
+        Constructor (toConstr $ Binary 'a' 'b') [ETerm $ toTerm 'a', ETerm $ toTerm 'b']
+    it "cannot be constructed from mismatched ADT constructors and arguments" $ do
+#if __GLASGOW_HASKELL__ >= 800
+      shouldNotTypecheck (adt TwoChars 'a')
+      shouldNotTypecheck (adt TwoChars ('a', True))
+      shouldNotTypecheck (adt TwoChars (True, False))
+      shouldNotTypecheck (adt TwoChars ('a', 'b', 'c'))
+#else
+      pendingWith "ShouldNotTypecheck tests require GHC >= 8.0"
+#endif
     it "should allow the representation of arithmetic expressions" $ do
       termType (Sum (toTerm (42 :: Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
         typeOf (42 :: Int)
@@ -130,12 +154,18 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         Tup (Constant True) (Variable (Var "x" :: Var Bool))
       toTerm (True, (Var "x" :: Var Bool, False)) `shouldBe`
         Tup (Constant True) (Tup (Variable $ Var "x") (Constant False))
+      adt Leaf (Var "x" :: Var Bool) `shouldBe`
+        Constructor (toConstr $ Leaf True) [ETerm $ toTerm (Var "x" :: Var Bool)]
+      adt Leaf ('a', Var "x" :: Var Bool) `shouldBe`
+        Constructor (toConstr $ Leaf True) [ETerm $ toTerm ('a', Var "x" :: Var Bool)]
+      adt Binary ('a', Var "x" :: Var Char) `shouldBe`
+        Constructor (toConstr $ Binary 'a' 'b') [ETerm $ toTerm 'a', ETerm $ toTerm (Var "x" :: Var Char)]
     it "should have type corresponding to the enclosed value" $ do
       termType (toTerm True) `shouldBe` typeOf True
       termType (toTerm ('a', True, ())) `shouldBe` typeOf ('a', True, ())
       termType (toTerm ('a', (True, ()))) `shouldBe` typeOf ('a', (True, ()))
       termType (toTerm (Var "x" :: Var (Tree Bool))) `shouldBe` typeOf (Leaf True)
-      termType (Constructor Leaf $ Constant True) `shouldBe` typeOf (Leaf True)
+      termType (adt Leaf True) `shouldBe` typeOf (Leaf True)
     when "containing no variables" $
       it "should reify with the corresponding Haskell value" $ do
         fromTerm (toTerm ()) `shouldBe` Just ()
@@ -144,13 +174,9 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         fromTerm (toTerm (42 :: Int)) `shouldBe` Just (42 :: Int)
         fromTerm (toTerm (True, 'a')) `shouldBe` Just (True, 'a')
         fromTerm (toTerm "foo") `shouldBe` Just "foo"
-        fromTerm (Constructor (\(x, y, z) -> Tree x y z)
-                    (Tup (Constant True)
-                             (Tup (Constructor Leaf $ Constant True)
-                                      (Constructor Leaf $ Constant False)))) `shouldBe`
-          Just (Tree True (Leaf True) (Leaf False))
-        fromTerm (Constructor Leaf (Constructor Leaf (Constant True))) `shouldBe`
-          Just (Leaf (Leaf True))
+        -- TODO No nested trees yet
+        fromTerm (adt Leaf True) `shouldBe` Just (Leaf True)
+        fromTerm (Constructor (toConstr (Nothing :: Maybe Bool)) [] :: Term (Maybe Bool)) `shouldBe` Just Nothing
 
         -- Two tuples with the same AST can reify to different tuples depending on whether the type
         -- is flat or nested.
@@ -171,11 +197,27 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       it "fromTerm should return Nothing" $ do
         fromTerm (toTerm (Var "x" :: Var ())) `shouldBe` (Nothing :: Maybe ())
         fromTerm (toTerm (True, Var "x" :: Var Bool)) `shouldBe` (Nothing :: Maybe (Bool, Bool))
-        fromTerm (Constructor (\(x, y, z) -> Tree x y z)
-                    (Tup (Constant True)
-                             (Tup (Constructor Leaf $ Constant True)
-                                      (Variable $ Var "x")))) `shouldBe` Nothing
+        fromTerm (adt Leaf (Var "x" :: Var Char)) `shouldBe` Nothing
+        -- TODO check for nested ADTs
         fromTerm (Sum (toTerm (42 :: Int)) (toTerm (Var "x" :: Var Int))) `shouldBe` Nothing
+    when "type erased" $
+      it "can be mapped over" $ do
+        termMap show (ETerm $ toTerm "foo") `shouldBe` show (toTerm "foo")
+        termEntryMap show (ETermEntry "foo") `shouldBe` show "foo"
+  describe "AdtConstructor" $ do
+    it "should get the representation of a unit constructor" $
+      constructor U `shouldBe` toConstr U
+    it "should get the representation of a curried constructor" $ do
+      constructor (Leaf :: Char -> Tree Char) `shouldBe` toConstr (Leaf 'a')
+      constructor TwoChars `shouldBe` toConstr (TwoChars 'a' 'b')
+  describe "AdtArgument" $
+    it "should convert a tuple of arguments to a type-erased term list" $ do
+      getArgs (mkTuple 'a' :: Tuple Char One) `shouldBe` [ETerm $ toTerm 'a']
+      getArgs (mkTuple ('a', 'b') :: Tuple (Char, Char) One) `shouldBe` [ETerm $ toTerm ('a', 'b')]
+      getArgs (mkTuple ('a', 'b') :: Tuple (Char, Char) Many) `shouldBe`
+        [ETerm $ toTerm 'a', ETerm $ toTerm 'b']
+      getArgs (mkTuple ('a', 'b', 'c') :: Tuple (Char, Char, Char) Many) `shouldBe`
+        [ETerm $ toTerm 'a', ETerm $ toTerm 'b', ETerm $ toTerm 'c']
   describe "predicates" $ do
     it "should have type corresponding to the type of the argument" $ do
       predType (predicate "foo" ()) `shouldBe` termType (toTerm ())

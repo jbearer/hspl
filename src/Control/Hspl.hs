@@ -1,13 +1,8 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-#if __GLASGOW_HASKELL__ < 710
-{-# LANGUAGE OverlappingInstances #-}
-#endif
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilies #-} -- For equational constraints
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -94,11 +89,16 @@ import Control.Applicative
 #endif
 import Control.Monad.Writer
 import Data.Data
-import Data.Tuple.Curry
-import Data.Tuple.OneTuple
 
 import qualified Control.Hspl.Internal.Ast as Ast
-import           Control.Hspl.Internal.Ast (Var (Var), Term, TermEntry, TermData(..), Goal(..), HSPLType)
+import           Control.Hspl.Internal.Ast ( Var (Var)
+                                           , Term
+                                           , TermEntry
+                                           , TermData(..)
+                                           , Goal(..)
+                                           , HSPLType
+                                           , AdtTerm (..)
+                                           )
 import qualified Control.Hspl.Internal.Solver as Solver
 import           Control.Hspl.Internal.Solver ( ProofResult
                                               , searchProof
@@ -364,37 +364,6 @@ auto = Var
 v :: Typeable a => String -> Var a
 v = auto
 
--- Helper type allowing singleton "tuples" and true tuples to be treated somewhat uniformly
-type family Tuple a where
-  Tuple (a, b, c, d, e, f, g) = (a, b, c, d, e, f, g)
-  Tuple (a, b, c, d, e, f) = (a, b, c, d, e, f)
-  Tuple (a, b, c, d, e) = (a, b, c, d, e)
-  Tuple (a, b, c, d) = (a, b, c, d)
-  Tuple (a, b, c) = (a, b, c)
-  Tuple (a, b) = (a, b)
-  Tuple a = OneTuple a
-
--- Helper class to convert singleton "tuples" and true tuples to a representation with an instance
--- for Curry.
-class ToTuple a where
-  toTuple :: a -> Tuple a
-
-instance {-# OVERLAPPABLE #-} (Tuple a ~ OneTuple a) => ToTuple a where
-  toTuple = OneTuple
-
-instance {-# OVERLAPPING #-} ToTuple (a1, a2) where
-  toTuple = id
-instance {-# OVERLAPPING #-} ToTuple (a1, a2, a3) where
-  toTuple = id
-instance {-# OVERLAPPING #-} ToTuple (a1, a2, a3, a4) where
-  toTuple = id
-instance {-# OVERLAPPING #-} ToTuple (a1, a2, a3, a4, a5) where
-  toTuple = id
-instance {-# OVERLAPPING #-} ToTuple (a1, a2, a3, a4, a5, a6) where
-  toTuple = id
-instance {-# OVERLAPPING #-} ToTuple (a1, a2, a3, a4, a5, a6, a7) where
-  toTuple = id
-
 {- $adts
 Algebraic data types can be used as HSPL terms via the '$$' constructor. See
 'Control.Hspl.Examples.adts' for an example.
@@ -414,9 +383,8 @@ Algebraic data types can be used as HSPL terms via the '$$' constructor. See
 -- subtrees are represented by the variables @"left"@ and @"right"@. Note the classes which must be
 -- derived in order to use ADTs with HSPL: 'Eq', 'Typeable', and 'Data', as well as 'Show' if the
 -- @ShowTerms@ flag is enabled. Deriving these classes requires the extension @DeriveDataTypeable@.
-($$) :: (TermData a, ToTuple (HSPLType a), Curry (Tuple (HSPLType a) -> r) f, TermEntry r) =>
-        f -> a -> Term r
-f $$ x = Ast.Constructor (uncurryN f . toTuple) (toTerm x)
+($$) :: AdtTerm f a r => f -> a -> Term r
+($$) = adt
 
 {- $lists
 Lists can also be used as HSPL terms. Lists consisting entirely of constants or of variables can be

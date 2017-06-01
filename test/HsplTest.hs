@@ -10,7 +10,6 @@ import qualified Control.Hspl.Internal.Solver as Solver
 
 import Control.Monad.Writer
 import Data.Data
-import Data.Tuple.Curry
 
 data Arities = A1 Char
              | A2 Char Char
@@ -116,22 +115,18 @@ test = describeModule "Control.Hspl" $ do
 
   describe "ADT term construction" $ do
     it "should work with constructors of all arities" $ do
-      A1 $$ 'a' `shouldBe` Ast.Constructor A1 (Ast.toTerm 'a')
-      A2 $$ ('a', 'b') `shouldBe` Ast.Constructor (uncurry A2) (Ast.toTerm ('a', 'b'))
-      A3 $$ ('a', 'b', 'c') `shouldBe`
-        Ast.Constructor (uncurryN A3) (Ast.toTerm ('a', 'b', 'c'))
-      A4 $$ ('a', 'b', 'c', 'd') `shouldBe`
-        Ast.Constructor (uncurryN A4) (Ast.toTerm ('a', 'b', 'c', 'd'))
-      A5 $$ ('a', 'b', 'c', 'd', 'e') `shouldBe`
-        Ast.Constructor (uncurryN A5) (Ast.toTerm ('a', 'b', 'c', 'd', 'e'))
+      A1 $$ 'a' `shouldBe` Ast.adt A1 'a'
+      A2 $$ ('a', 'b') `shouldBe` Ast.adt A2 ('a', 'b')
+      A3 $$ ('a', 'b', 'c') `shouldBe` Ast.adt A3 ('a', 'b', 'c')
+      A4 $$ ('a', 'b', 'c', 'd') `shouldBe` Ast.adt A4 ('a', 'b', 'c', 'd')
+      A5 $$ ('a', 'b', 'c', 'd', 'e') `shouldBe` Ast.adt A5 ('a', 'b', 'c', 'd', 'e')
       A6 $$ ('a', 'b', 'c', 'd', 'e', 'f') `shouldBe`
-        Ast.Constructor (uncurryN A6) (Ast.toTerm ('a', 'b', 'c', 'd', 'e', 'f'))
+        Ast.adt A6 ('a', 'b', 'c', 'd', 'e', 'f')
       A7 $$ ('a', 'b', 'c', 'd', 'e', 'f', 'g') `shouldBe`
-        Ast.Constructor (uncurryN A7) (Ast.toTerm ('a', 'b', 'c', 'd', 'e', 'f', 'g'))
+        Ast.adt A7 ('a', 'b', 'c', 'd', 'e', 'f', 'g')
     it "should work with variable arguments" $ do
-      A1 $$ char "x" `shouldBe` Ast.Constructor A1 (Ast.toTerm (Var "x" :: Var Char))
-      A2 $$ ('a', char "x") `shouldBe`
-        Ast.Constructor (uncurry A2) (Ast.toTerm ('a', Var "x" :: Var Char))
+      A1 $$ char "x" `shouldBe` Ast.adt A1 (Var "x" :: Var Char)
+      A2 $$ ('a', char "x") `shouldBe` Ast.adt A2 ('a', Var "x" :: Var Char)
     it "should produce terms which can be reified" $ do
       Ast.fromTerm (A3 $$ ('a', 'b', 'c')) `shouldBe` Just (A3 'a' 'b' 'c')
       Ast.fromTerm (A4 $$ ('a', 'b' ,'c', 'd')) `shouldBe` Just (A4 'a' 'b' 'c' 'd')

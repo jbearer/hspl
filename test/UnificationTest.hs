@@ -1,15 +1,18 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+#if __GLASGOW_HASKELL__ >= 800
 {-# OPTIONS_GHC -fdefer-type-errors #-}
+#endif
 
 module UnificationTest where
 
 import Testing
-import Test.ShouldNotTypecheck
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Unification
+#if __GLASGOW_HASKELL__ >= 800
+import Test.ShouldNotTypecheck
+#endif
 
-import           Control.DeepSeq        (NFData (..))
 import           Control.Exception.Base (evaluate)
 import           Control.Monad.State hiding (when)
 import           Data.Data
@@ -20,24 +23,8 @@ import           Data.Typeable
 data RecursiveType = Base | Rec RecursiveType
   deriving (Show, Eq, Typeable, Data)
 
--- NFData instances for shouldNotTypecheck
-instance NFData (Term a) where
-  rnf (Variable x) = rnf x -- This is all we need to force the type error we're interested in
-  rnf _ = ()
-
-instance NFData (Var a) where
-  rnf (Var s) = rnf s
-
-instance NFData SubMap where
-  rnf (SubMap m) = rnf m
-
-#if __GLASGOW_HASKELL__ < 710
-instance NFData TypeRep where
-  rnf _ = ()
-#endif
-
-instance NFData Unifier where
-  rnf (Unifier m) = rnf m
+data TwoChars = TwoChars Char Char
+  deriving (Show, Eq, Typeable, Data)
 
 renameWithContext :: Renamer -> Int -> Term a -> Term a
 renameWithContext renamer fresh t =
@@ -83,8 +70,8 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           Unifier (M.fromList [ (typeOf ['a'], SubMap $ M.singleton (Var "x") (toTerm ['a', 'b']))
                               , (typeOf 'a', SubMap $ M.singleton (Var "y") (toTerm 'a'))
                               ])
-        (Constructor Just (toTerm (Var "y" :: Var Char)) // Var "x") <> (toTerm 'a' // Var "y") `shouldBe`
-          Unifier (M.fromList [ (typeOf $ Just 'a', SubMap $ M.singleton (Var "x") (Constructor Just $ toTerm 'a'))
+        (adt Just (Var "y" :: Var Char) // Var "x") <> (toTerm 'a' // Var "y") `shouldBe`
+          Unifier (M.fromList [ (typeOf $ Just 'a', SubMap $ M.singleton (Var "x") (adt Just 'a'))
                               , (typeOf 'a', SubMap $ M.singleton (Var "y") (toTerm 'a'))
                               ])
       it "should prefer the lhs when the same variable appears on both sides" $
@@ -99,10 +86,14 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         let t = toTerm (Var "x" :: Var Bool)
         unifyTerm mempty t `shouldBe` t
     it "should not allow terms to replace variables of a different type" $ do
+#if __GLASGOW_HASKELL__ >= 800
       -- This should work
       evaluate $ toTerm True // (Var "x" :: Var Bool)
       -- But this should not
       shouldNotTypecheck $ toTerm True // (Var "x" :: Var Char)
+#else
+      pendingWith "ShouldNotTypecheck tests require GHC >= 8.0"
+#endif
     it "is a subunifier of another if the other contains all of the substitutions of the first" $ do
       'a' // Var "x" `shouldSatisfy` (`isSubunifierOf` ('a' // Var "x" <> True // Var "y"))
       'a' // Var "x" <> True // Var "y" `shouldSatisfy`
@@ -129,7 +120,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         queryVar (toTerm 'a' // Var "x") (Var "x" :: Var Bool) `shouldBe` Ununified
         queryVar (toTerm True // Var "y") (Var "x" :: Var Bool) `shouldBe` Ununified
         queryVar (toTerm True // Var "x") (Var "x" :: Var Bool) `shouldBe` Unified True
-        let t = Constructor Just (toTerm (Var "y" :: Var Bool))
+        let t = adt Just (Var "y" :: Var Bool)
         queryVar (t // Var "x") (Var "x" :: Var (Maybe Bool)) `shouldBe` Partial t
   describe "term unification" $ do
     when "both terms are variables" $
@@ -150,7 +141,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         mgu (toTerm (Var "x" :: Var [Bool]))
             (List (toTerm True) (toTerm (Var "x" :: Var [Bool]))) `shouldBe` Nothing
         mgu (toTerm (Var "x" :: Var RecursiveType))
-            (Constructor Rec (toTerm (Var "x" :: Var RecursiveType))) `shouldBe` Nothing
+            (adt Rec (Var "x" :: Var RecursiveType)) `shouldBe` Nothing
     when "both elements are constants" $ do
       it "should unify equal constants" $ do
         mgu (toTerm True) (toTerm True) `shouldBe` Just mempty
@@ -169,7 +160,11 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         mgu (toTerm ('a', Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char, Var "y" :: Var Char)) `shouldBe`
           Just (toTerm 'a' // Var "x" <> toTerm 'a' // Var "y")
       it "should fail to unify tuples of different lengths" $
+#if __GLASGOW_HASKELL__ >= 800
         shouldNotTypecheck $ mgu (toTerm ('a', 'b')) (toTerm ('a', 'b', Var "x" :: Var Char))
+#else
+        pendingWith "ShouldNotTypecheck tests require GHC >= 8.0"
+#endif
     when "both terms are lists" $ do
       it "should unify the elements in sequence" $
         mgu (toTerm [toTerm 'a', toTerm (Var "x" :: Var Char)])
@@ -190,15 +185,19 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           Nothing
     when "both terms are ADTs" $ do
       it "should unify terms with matching constructors by unifying the arguments" $ do
-        mgu (Constructor Just (toTerm 'a')) (Constructor Just (toTerm $ Var "x")) `shouldBe`
+        mgu (adt Just 'a') (adt Just (Var "x")) `shouldBe`
           Just (toTerm 'a' // Var "x")
-        mgu (Constructor Just (toTerm $ Var "x")) (Constructor Just (toTerm 'a')) `shouldBe`
+        mgu (adt Just (Var "x")) (adt Just 'a') `shouldBe`
           Just (toTerm 'a' // Var "x")
+      it "should apply the unifier of respective arguments to subsequent arguments before unifying them" $
+        mgu (adt TwoChars ('a', Var "x" :: Var Char))
+            (adt TwoChars (Var "x" :: Var Char, Var "y" :: Var Char)) `shouldBe`
+          Just (toTerm 'a' // Var "x" <> toTerm 'a' // Var "y")
       it "should fail to unify terms with different constructors" $ do
-        mgu (Constructor Left (toTerm 'a')) (Constructor Right (toTerm 'a')) `shouldBe` Nothing
-        mgu (Constructor Left (toTerm 'a')) (Constructor Right (toTerm True)) `shouldBe` Nothing
-        mgu (Constructor Left (toTerm (Var "x" :: Var Char)))
-            (Constructor Right (toTerm (Var "y" :: Var Char))) `shouldBe`
+        mgu (adt Left 'a') (adt Right 'a') `shouldBe` Nothing
+        mgu (adt Left 'a') (adt Right True) `shouldBe` Nothing
+        mgu (adt Left (Var "x" :: Var Char))
+            (adt Right (Var "y" :: Var Char)) `shouldBe`
           Nothing
     when "both terms are arithmetic expressions" $ do
       it "should unify terms of the same type of expression by unifying the operands" $ do
@@ -226,10 +225,14 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         mgu (Quotient (toTerm $ Var "x") (toTerm (1.0 :: Double)))
             (Product (toTerm $ Var "x") (toTerm (1.0 :: Double))) `shouldBe` Nothing
     it "should prohibit unification of terms of different types" $ do
+#if __GLASGOW_HASKELL__ >= 800
       -- This should work
       evaluate $ mgu (toTerm True) (toTerm True)
       -- but not this
       shouldNotTypecheck $ mgu (toTerm True) (toTerm 'a')
+#else
+      pendingWith "ShouldNotTypecheck tests require GHC >= 8.0"
+#endif
   describe "term renaming" $ do
     let r = Renamer $ M.fromList [ (typeOf True, VarMap $ M.singleton (Var "x" :: Var Bool) (Fresh 0))
                                  , (typeOf 'a', VarMap $ M.fromList [ (Var "x" :: Var Char, Fresh 1)
@@ -279,12 +282,17 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           toTerm [Fresh 0 :: Var Bool, Fresh 0 :: Var Bool]
         rename (toTerm [Var "q" :: Var Char, Var "q" :: Var Char]) `shouldBe`
           toTerm [Fresh 4 :: Var Char, Fresh 4 :: Var Char]
-    context "of an ADT constructor" $
+    context "of an ADT constructor" $ do
       it "should recursively rename variables in the argument" $ do
-        rename (Constructor Just (toTerm (Var "x" :: Var Char))) `shouldBe`
-          Constructor Just (toTerm (Fresh 1 :: Var Char))
-        rename (Constructor Just (toTerm (Var "x" :: Var Char, Var "q" :: Var Int))) `shouldBe`
-          Constructor Just (toTerm (Fresh 1 :: Var Char, Fresh 4 :: Var Int))
+        rename (adt Just (Var "x" :: Var Char)) `shouldBe`
+          adt Just (Fresh 1 :: Var Char)
+        rename (adt Just (Var "x" :: Var Char, Var "q" :: Var Int)) `shouldBe`
+          adt Just (Fresh 1 :: Var Char, Fresh 4 :: Var Int)
+      it "should rename the same variable with the same replacement" $ do
+        rename (adt TwoChars (Var "x" :: Var Char, Var "x" :: Var Char)) `shouldBe`
+          adt TwoChars (Fresh 1 :: Var Char, Fresh 1 :: Var Char)
+        rename (adt TwoChars (Var "q" :: Var Char, Var "q" :: Var Char)) `shouldBe`
+          adt TwoChars (Fresh 4 :: Var Char, Fresh 4 :: Var Char)
     context "of an arithmetic expression" $ do
       it "should recursively rename variables in each operand" $ do
         rename (Sum (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
@@ -422,9 +430,13 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
                   (List (toTerm (Var "x" :: Var Char)) (toTerm $ Var "xs")) `shouldBe`
           toTerm [toTerm $ Var "x", toTerm 'x', toTerm 'y', toTerm 'z']
     context "to an ADT constructor" $
-      it "should recursively apply the unifier to the argument" $
-        unifyTerm (toTerm 'a' // Var "x") (Constructor Just $ toTerm (Var "x" :: Var Char)) `shouldBe`
-          Constructor Just (toTerm 'a')
+      it "should recursively apply the unifier to the argument" $ do
+        unifyTerm (toTerm 'a' // Var "x")
+                  (adt Just (Var "x" :: Var Char)) `shouldBe`
+          adt Just 'a'
+        unifyTerm (toTerm 'a' // Var "x" <> toTerm 'b' // Var "y")
+                  (adt TwoChars (Var "x" :: Var Char, Var "y" :: Var Char)) `shouldBe`
+          adt TwoChars ('a', 'b')
     context "to an arithmetic expression" $
       it "should recursively apply the unifier to each element" $ do
         unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")

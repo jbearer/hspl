@@ -17,6 +17,7 @@ module Testing (
   , shouldBePermutationOf
   , shouldBeSubsetOf
   , pending
+  , pendingWith
   ) where
 
 import Data.CallStack

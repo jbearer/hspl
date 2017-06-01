@@ -158,7 +158,7 @@ freeIn x (Variable y) = case cast y of
   Just y' -> x == y'
   Nothing -> False
 freeIn _ (Constant _) = False
-freeIn x (Constructor _ t) = freeIn x t
+freeIn x (Constructor _ t) = any (termMap $ freeIn x) t
 freeIn x (Tup t ts) = freeIn x t || freeIn x ts
 freeIn x (List t ts) = freeIn x t || freeIn x ts
 freeIn _ Nil = False
@@ -194,9 +194,17 @@ mgu (Constant c) (Constant c')
   | c == c' = Just mempty
   | otherwise = Nothing
 
-mgu (Constructor f t) (Constructor f' t') = case cast t' of
-  Just t'' -> if constructor f == constructor f' then mgu t t'' else Nothing
-  Nothing -> Nothing
+mgu (Constructor c arg) (Constructor c' arg')
+  | c == c' = mguETermList arg arg'
+  | otherwise = Nothing
+  where mguETermList [] [] = Just mempty
+        mguETermList [] _ = Nothing
+        mguETermList _ [] = Nothing
+        mguETermList (ETerm t : ts) (ETerm t' : ts') = do u <- cast t' >>= mgu t
+                                                          let uts = map (termMap $ ETerm . unifyTerm u) ts
+                                                          let uts' = map (termMap $ ETerm . unifyTerm u) ts'
+                                                          u' <- mguETermList uts uts'
+                                                          return $ u <> u'
 
 mgu (Tup t ts) (Tup t' ts') = mguBinaryTerm (t, ts) (t', ts')
 
@@ -229,7 +237,7 @@ mguBinaryTerm (t1, t2) (t1', t2') = do
 unifyTerm :: Unifier -> Term a -> Term a
 unifyTerm u v@(Variable x) = findVarWithDefault v u x
 unifyTerm _ c@(Constant _) = c
-unifyTerm u (Constructor f t) = Constructor f (unifyTerm u t)
+unifyTerm u (Constructor c ts) = Constructor c $ map (termMap $ ETerm . unifyTerm u) ts
 unifyTerm u (Tup t ts) = Tup (unifyTerm u t) (unifyTerm u ts)
 unifyTerm u (List t ts) = List (unifyTerm u t) (unifyTerm u ts)
 unifyTerm _ Nil = Nil
@@ -364,7 +372,12 @@ renameTerm (Constant c) = return $ Constant c
 renameTerm (Tup t ts) = renameBinaryTerm Tup t ts
 renameTerm (List t ts) = renameBinaryTerm List t ts
 renameTerm Nil = return Nil
-renameTerm (Constructor f t) = liftM (Constructor f) $ renameTerm t
+renameTerm (Constructor c arg) = liftM (Constructor c) $ renameETermList arg
+  where renameETermList [] = return []
+        renameETermList (ETerm t : ts) = do
+          t' <- renameTerm t
+          t'' <- renameETermList ts
+          return $ ETerm t' : t''
 renameTerm (Sum t1 t2) = renameBinaryTerm Sum t1 t2
 renameTerm (Difference t1 t2) = renameBinaryTerm Difference t1 t2
 renameTerm (Product t1 t2) = renameBinaryTerm Product t1 t2

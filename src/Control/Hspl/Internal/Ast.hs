@@ -1,9 +1,14 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+#if __GLASGOW_HASKELL__ < 710
+{-# LANGUAGE OverlappingInstances #-}
+#endif
+{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -38,7 +43,20 @@ module Control.Hspl.Internal.Ast (
   , Term (..)
   , termType
   , fromTerm
-  , constructor
+  -- *** ADT helpers
+  , AdtConstructor (..)
+  , AdtArgument (..)
+  , AdtTerm (..)
+  , reifyAdt
+  -- *** Type erasure
+  -- | It is occasionally useful to deal with 'Term's of many types as if they were the same type.
+  -- These containers and associated utility functions allow for this. Currently, this is used to
+  -- represent a list of arguments to be passed to an algebraic data type constructor when calling
+  -- 'fromTerm' on a 'Constructor' 'Term'.
+  , ErasedTerm (..)
+  , termMap
+  , ErasedTermEntry (..)
+  , termEntryMap
   -- ** Predicates
   , Predicate (..)
   , predicate
@@ -48,19 +66,15 @@ module Control.Hspl.Internal.Ast (
   -- ** Clauses
   , HornClause (..)
   , clauseType
-  -- * Miscellaneous utilites
-  -- ** Tuple construction and deconstruction
-  -- $tuples
-  , Tuple (..)
-  , thead
-  , ttail
-  -- ** Error reporting
-  , wrap
   ) where
 
-import           Data.Data
-import           Data.List
-import           Data.Maybe
+import Control.Monad
+import Control.Monad.State
+import Data.Data
+import Data.List
+import Data.Maybe
+
+import Control.Hspl.Internal.Tuple
 
 {- $typeSystem
 HSPL implements a type system which prevents unification of terms with different types. The HSPL
@@ -224,15 +238,20 @@ Corresponding terms may have any of the following structures:
 > Var "y"
 -}
 data Term a where
-  -- | An application of an ADT constructor to a single argument. This allows representing arbitrary
-  -- ADTs by uncurring the constructors. Note that the first argument /must/ be an ADT constructor,
-  -- any function with the right type will not do. This is checked at runtime. See 'constructor' for
-  -- details.
-  Constructor :: (TermEntry a, TermEntry b) => (a -> b) -> Term a -> Term b
+  -- | An application of an ADT constructor to a list of arguments.
+  --
+  -- Note that the type of the contained term is ambiguous. At reification time, the arguments will
+  -- be dynamically casted to the appropriate types and passed to the constructor, and any cast that
+  -- fails will result in a runtime error.
+  --
+  -- Because of this danger, DO NOT USE THIS CONSTRUCTOR DIRECTLY. Instead use the typesafe 'adt'
+  -- smart constructor to convert an ADT constructor and tuple of arguments to their type-erased
+  -- representations.
+  Constructor :: TermEntry a => Constr -> [ErasedTerm] -> Term a
 
   -- | A product type (i.e. a tuple). We define tuples inductively with a head and a tail, which
   -- allows the simple representation of any tuple with just this one constructor.
-  Tup :: (Tuple a, TermEntry a, TermEntry (Head a), TermEntry (Tail a)) =>
+  Tup :: (TupleCons a, TermEntry a, TermEntry (Head a), TermEntry (Tail a)) =>
          Term (Head a) -> Term (Tail a) -> Term a
 
   -- | A primitive constant.
@@ -272,7 +291,7 @@ data Term a where
 
 #ifdef DEBUG
 instance Show (Term a) where
-  show (Constructor f t) = "Constructor (" ++ show (constructor f) ++ ") (" ++ show t ++ ")"
+  show (Constructor c t) = "Constructor (" ++ show c ++ ") (" ++ show t ++ ")"
   show (Tup t ts) = "Tup (" ++ show t ++ ") (" ++ show ts ++ ")"
   show (List x xs) = "List (" ++ show x ++ ") (" ++ show xs ++ ")"
   show Nil = "Nil"
@@ -290,7 +309,7 @@ instance Show (Term a) where
   show (Modulus t1 t2) = "Modulus (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
 #else
 instance Show (Term a) where
-  show (Constructor f t) = show (constructor f) ++ " (" ++ show t ++ ")"
+  show (Constructor c t) = show c ++ " (" ++ intercalate ", " (map show t) ++ ")"
   show (Tup t ts) = show t ++ ", " ++ show ts
   show (List x Nil) = show x
   show (List x xs) = show x ++ ", " ++ show xs
@@ -310,12 +329,7 @@ instance Show (Term a) where
 #endif
 
 instance Eq (Term a) where
-  (==) (Constructor f t) (Constructor f' t') =
-    let c = constructor f
-        c' = constructor f'
-    in case cast t' of
-      Just t'' -> c == c' && t == t''
-      Nothing -> False
+  (==) (Constructor c t) (Constructor c' t') = c == c' && t == t'
 
   (==) (Tup t ts) (Tup t' ts') = fromMaybe False $ do
     t'' <- cast t'
@@ -338,49 +352,162 @@ instance Eq (Term a) where
 
   (==) _ _ = False
 
--- | Wrap a string to a given line length.
-wrap :: Int -> String -> [String]
--- Implementation sourced from https://gist.github.com/yiannist/4546899
-wrap maxWidth text = reverse (lastLine : accLines)
-  where (accLines, lastLine) = foldl handleWord ([], "") (words text)
-        handleWord (acc, line) word
-          -- 'word' fits fine; append to 'line' and continue.
-          | length line + length word <= maxWidth = (acc, word `append` line)
-          -- 'word' doesn't fit anyway; split awkwardly.
-          | length word > maxWidth                =
-            let (line', extra) = splitAt maxWidth (word `append` line)
-            in  (line' : acc, extra)
-          -- 'line' is full; start with 'word' and continue.
-          | otherwise                             = (line : acc, word)
-        append word ""   = word
-        append word line = line ++ " " ++  word
+-- | Type-erased container for storing 'Term's of any type.
+data ErasedTerm = forall a. TermEntry a => ETerm (Term a)
 
--- | Get a representation of the ADT constructor @f@. This function requires that the constructor
--- of @f x@ can be determined without evaluating @x@. This is possible if @f@ is the constructor
--- itself, or a very simple alias (like @uncurry Constr@).
---
--- However, if @f@ is a function which may
--- use one of several constructors to build the ADT depending on its input, then the input will have
--- to be evaluated to determine the relevant constructor. Because we need to be able to get the
--- constructor for 'Term's which may have HSPL variables as their argument, we cannot afford to rely
--- on evaluating the function. Therefore, using such complex functions as constructors will result
--- in a runtime error.
-constructor :: (Typeable a, Typeable b, Data b) => (a -> b) -> Constr
-constructor f = toConstr $ f $ error $ intercalate "\n" $ wrap 80 $ unwords
-  [ "Constructor " ++ show (typeOf f) ++ " could not be determined."
-  , "The data constructor used in building terms must be knowable without evaluating the term."
-  , "In some cases, this means that using a function a -> b as a constructor for a Term b is not"
-  , "sufficient, because the compiler does not know which constructor will be used when the"
-  , "function is evaluated."
-  , "Possible fix: use the data constructor itself, rather than a function alias."
-  ]
+instance Show ErasedTerm where
+  show (ETerm t) = show t
+
+instance Eq ErasedTerm where
+  (==) (ETerm t) (ETerm t') = maybe False (==t) $ cast t'
+
+-- | Apply a function to the 'Term' contained in an 'ErasedTerm'. The function must be polymorphic
+-- over all possible types that the 'Term' could represent.
+termMap :: (forall t. TermEntry t => Term t -> r) -> ErasedTerm -> r
+termMap f (ETerm t) = f t
+
+-- | Type-erased container for storing all values satisfying the 'TermEntry' constraint.
+data ErasedTermEntry = forall a. TermEntry a => ETermEntry a
+  deriving (Typeable)
+
+-- | Apply a function to the value contained in an 'ErasedTermEntry'. The function must be
+-- polymorphic over all possible 'TermEntry' values.
+termEntryMap :: (forall t. TermEntry t => t -> r) -> ErasedTermEntry -> r
+termEntryMap f (ETermEntry t) = f t
+
+instance Show ErasedTermEntry where
+#ifdef SHOW_TERMS
+  show (ETermEntry t) = show t
+#else
+  show _ = "ETermEntry"
+#endif
+
+-- | The class of types which can be used as the argument to an ADT constructor. It has instances
+-- for all 'Tuple' types. Curried constructors should use an argument which is the type of the tuple
+-- that would be passed to their uncurried counterpart.
+class AdtArgument a where
+  -- | Convert a tuple of arguments to a type-erased list of 'Term's.
+  getArgs :: a -> [ErasedTerm]
+
+-- Singleton tuples
+instance (Typeable a, TermData a) => AdtArgument (Tuple a One) where
+  getArgs (Singleton a) = [ETerm $ toTerm a]
+
+-- Base case: Many tuple of size two
+instance (Typeable a, TermData a, Typeable b, TermData b) => AdtArgument (Tuple (a, b) Many) where
+  getArgs (Tuple (a, b)) = [ETerm $ toTerm a, ETerm $ toTerm b]
+
+-- Tuples of size more than two. Convert the head and recurse on the tail
+instance  {-# OVERLAPPABLE #-} ( TermData a, TupleCons a
+                               , Typeable (Head a), TermData (Head a)
+                               , AdtArgument (Tuple (Tail a) Many)
+                               ) => AdtArgument (Tuple a Many) where
+  getArgs (Tuple a) = ETerm (toTerm $ thead a) : getArgs (Tuple $ ttail a)
+
+-- | The class of types which can be used as an ADT constructor. This includes all curried functions
+-- whose ultimate result type is an ADT. In reality, this class has instances for all curried
+-- function types, since it is not possible to express in the type system whether a particular type
+-- variable is an ADT or not. Attempting to use this class with non-ADT types will fail at runtime.
+class AdtConstructor f where
+  -- | Get a representation of the ADT constructor @f@. This function requires that the constructor
+  -- of @f x@ can be determined without evaluating @x@. This is possible if @f@ is the constructor
+  -- itself, or a very simple alias (like @uncurry Constr@).
+  --
+  -- However, if @f@ is a function which may
+  -- use one of several constructors to build the ADT depending on its input, then the input will have
+  -- to be evaluated to determine the relevant constructor. Because we need to be able to get the
+  -- constructor for 'Term's which may have HSPL variables as their argument, we cannot afford to rely
+  -- on evaluating the function. Therefore, using such complex functions as constructors will result
+  -- in a runtime error.
+  constructor :: f -> Constr
+
+-- Base case: raw value, not a curried function
+instance {-# OVERLAPPABLE #-} Data a => AdtConstructor a where
+  constructor a
+    | isAlgType (dataTypeOf a) = toConstr a
+    | otherwise = error $ "Constructor " ++ show (toConstr a) ++ " is not an ADT constructor. " ++
+                  "Please only use ADT constructors where expected by HSPL."
+
+-- Curried function: apply the function to a single bogus argument (which should never be evaluated)
+-- and recurse on the resulting, smaller function
+instance {-# OVERLAPPING #-} AdtConstructor f => AdtConstructor (a -> f) where
+  constructor f = constructor $ f indeterminate
+    where indeterminate = error $ "ADT constructor could not be determined. The data " ++
+                          "constructor used in building terms must be knowable without " ++
+                          "evaluating the term. In some cases, this means that using a function " ++
+                          "a -> b as a constructor for a Term b is not sufficient, because the " ++
+                          "compiler does not know which constructor will be used when the " ++
+                          "function is evaluated. Possible fix: use the data constructor " ++
+                          "itself, rather than a function alias."
+
+-- | This class provides a smart constructor for creating ADT terms. Unlike the raw 'Constructor'
+-- 'Term' constructor, it is typesafe and will not compile if the argument type does not match the
+-- (uncurried) function type. The only reason that this is a class, as opposed to a standalone
+-- function, is to give clients a succinct way of writing type constraints, without having to
+-- duplicate the monstrous type signature of 'adt'. This class has only one instance, for all types
+-- which satisfy the constraints of 'adt'.
+class AdtTerm f a r | f a -> r where
+  -- | Convert a constructor and a tuple of arguments to a 'Term' representing the corresponding
+  -- ADT. The constructor must be a function from a tuple (or a singleton) to an ADT. The semantics
+  -- of this function are roughly equivalent to uncurrying the given constructor and applying it to
+  -- the tuple of arguments. The only difference is that the tuple may contain variables in place of
+  -- constants of the same type.
+  adt :: f -> a -> Term r
+
+instance forall n f r a. ( n ~ Arity f, r ~ Result f -- Bind shorter names for conciseness
+                         , AdtConstructor f
+                         , Arg f ~ HSPLType a -- Typecheck the argument
+                         , TermEntry r        -- Typecheck the result
+                         , Tupleable a n, AdtArgument (Tuple a n)
+                         ) => AdtTerm f a r where
+  adt f a = Constructor (constructor f) (getArgs (mkTuple a :: Tuple a n))
+
+-- | Reconstruct an algebraic data type from its 'Term' representation. If the list of arguments is
+-- too short or too long for the given constructor, or if any element of the list fails to cast to
+-- the proper type, a runtime error is thrown.
+reifyAdt :: TermEntry r => Constr -> [ErasedTermEntry] -> r
+reifyAdt c l =
+  let (r, (nargs, overflow)) = runState (fromConstrM mreify c) (0, l)
+  in case overflow of
+    [] -> r
+    _ -> argOverflowError nargs
+  where mreify :: forall d. Data d => State (Int, [ErasedTermEntry]) d
+        mreify = do (nargs, args) <- get
+                    case args of
+                      [] -> argUnderflowError
+                      (ETermEntry t : ts) ->
+                        put (nargs + 1, ts) >>
+                        return (fromMaybe (conversionError nargs t) $ cast t)
+        conversionError :: forall a b. ( Typeable a
+                                       , Typeable b
+#ifdef SHOW_TERMS
+                                       , Show a
+#endif
+                                       ) => Int -> a -> b
+        conversionError i a = let term =
+#ifdef SHOW_TERMS
+                                          "(" ++ show a ++ " :: " ++ show (typeOf a) ++ ")"
+#else
+                                          show (typeOf a)
+#endif
+                              in error $ "Cannot convert " ++ term ++ " to type " ++
+                                 show (typeOf (undefined :: b)) ++ " at position " ++ show i ++
+                                 " of the argument list " ++ show l ++ "). " ++
+                                 "This is most likely an HSPL bug."
+        argUnderflowError :: forall a. a
+        argUnderflowError = error $ "Not enough arguments (" ++ show (length l) ++ ") to " ++
+                            "constructor " ++ show c ++ ". This is most likely an HSPL bug."
+        argOverflowError :: forall a. Int -> a
+        argOverflowError n = error $ "Too many arguments to constructor " ++ show c ++ ". " ++
+                             "Expected " ++ show n ++ " but found " ++ show (length l) ++ ". " ++
+                             "This is most likely an HSPL bug."
 
 -- | Convert an HSPL 'Term' back to the Haskell value represented by the term, if possible. If the
 -- term contains no variables, then this function always succeeds. If the term contains any
 -- variables, then the Haskell value cannot be determined and the result is 'Nothing'.
 fromTerm :: TermEntry a => Term a -> Maybe a
 fromTerm term = case term of
-  Constructor f x -> fmap f $ fromTerm x
+  Constructor c arg -> fmap (reifyAdt c) $ forM arg $ \(ETerm t) -> fmap ETermEntry $ fromTerm t
   Tup t ts -> do
     ut <- fromTerm t
     uts <- fromTerm ts
@@ -482,55 +609,3 @@ data HornClause = HornClause Predicate [Goal]
 -- 'Predicate'.
 clauseType :: HornClause -> TypeRep
 clauseType (HornClause p _) = predType p
-
-{- $tuples
-The 'Tuple' class and associated functions make it easier to work with Haskell tuples in the
-HSPL type system, by allowing a single 'Tup' abstract term to account for all tuple types.
--}
-
--- | A class supporting overloaded list-like operations on tuples.
-class Tuple a where
-  -- | The type of the first element of the tuple.
-  type Head a
-
-  -- | The type of the tuple containing all elements but the first.
-  type Tail a
-
-  -- | Prepend an element to a tuple.
-  tcons :: Head a -> Tail a -> a
-
-  -- | Split a tuple into a head and a tail.
-  tuncons :: a -> (Head a, Tail a)
-
--- | Get the first element of a tuple.
-thead :: Tuple a => a -> Head a
-thead t = let (x, _) = tuncons t in x
-
--- | Get the tuple containg all elements but the first.
-ttail :: Tuple a => a -> Tail a
-ttail t = let (_, xs) = tuncons t in xs
-
-instance Tuple (a, b) where
-  type Head (a, b) = a
-  type Tail (a, b) = b
-  tcons a b = (a, b)
-  tuncons (a, b) = (a, b)
-
-#define TUPLE(xs) \
-instance Tuple (x, xs) where \
-  type Head (x, xs) = x; \
-  type Tail (x, xs) = (xs); \
-  tcons x (xs) = (x, xs); \
-  tuncons (x, xs) = (x, (xs)); \
-
-#define X ,
-
-TUPLE(a X b)
-TUPLE(a X b X c)
-TUPLE(a X b X c X d)
-TUPLE(a X b X c X d X e)
-TUPLE(a X b X c X d X e X f)
-TUPLE(a X b X c X d X e X f X g)
-
-#undef TUPLE
-#undef X
