@@ -1,5 +1,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeFamilies #-} -- For equational constraint
 
 -- Abstraction layer on top of HSpec, plus some additional combinators. This is necessary because
 -- versions of HSpec < 2.4 do not include the shouldNotBe expectation, which is used by many tests.
@@ -18,8 +20,11 @@ module Testing (
   , shouldBeSubsetOf
   , pending
   , pendingWith
+  , assertError
   ) where
 
+import Control.DeepSeq (NFData, force)
+import Control.Exception (evaluate, try, ErrorCall (..))
 import Data.CallStack
 import Data.List
 import Test.Hspec hiding (shouldNotBe)
@@ -77,3 +82,11 @@ shouldBeSubsetOf :: (HasCallStack, Show a, Eq a) => [a] -> [a] -> Expectation
 shouldBeSubsetOf xs ys
   | xs `isSubsetOf` ys = success
   | otherwise = failure $ "Expected: " ++ show xs ++ "\nto be a subset of: " ++ show ys
+
+assertError :: (NFData a, Show a) => String -> (() ~ () => a) -> Assertion
+assertError expected expr = do
+  result <- try (evaluate $ force expr)
+  case result of
+    Right r -> assertFailure $ "Expected the expression " ++ show r ++ " to raise an error:\n" ++
+                               expected
+    Left (ErrorCall msg) -> msg `shouldBe` expected

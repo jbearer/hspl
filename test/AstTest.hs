@@ -9,6 +9,7 @@ module AstTest where
 import Data.Data
 
 import Testing
+import Control.DeepSeq (NFData (..))
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Tuple
 #if __GLASGOW_HASKELL__ >= 800
@@ -38,6 +39,40 @@ data Binary a = Binary a a
 
 data TwoChars = TwoChars Char Char
   deriving (Show, Eq, Typeable, Data)
+
+instance NFData TwoChars where
+  rnf (TwoChars c1 c2) = rnf c1 `seq` rnf c2
+
+instance NFData Constr where
+  rnf c = c `seq` ()
+
+indeterminateConstructorError = unwords
+  [ "ADT constructor could not be determined. The data constructor used in building terms must be"
+  , "knowable without evaluating the term. In some cases, this means that using a function a -> b"
+  , "as a constructor for a Term b is not sufficient, because the compiler does not know which"
+  , "constructor will be used when the function is evaluated. Possible fix: use the data"
+  , "constructor itself, rather than a function alias."
+  ]
+
+nonAdtConstructorError c = unwords
+  [ "Constructor " ++ show c ++ " is not an ADT constructor. Please only use ADT constructors where"
+  , "expected by HSPL."
+  ]
+
+reifyAdtTypeError i l term toType = unwords
+  [ "Cannot convert " ++ term ++ " to type " ++ toType ++ " at position " ++ show i ++ " of the"
+  , "argument list " ++ show l ++ "). This is most likely an HSPL bug."
+  ]
+
+reifyAdtUnderflowError c n = unwords
+  [ "Not enough arguments (" ++ show n ++ ") to constructor " ++ show c ++ ". This is most likely"
+  , "an HSPL bug."
+  ]
+
+reifyAdtOverflowError c expected actual = unwords
+  [ "Too many arguments to constructor " ++ show c ++ ". Expected " ++ show expected ++ " but found"
+  , show actual ++ ". This is most likely an HSPL bug."
+  ]
 
 test = describeModule "Control.Hspl.Internal.Ast" $ do
   describe "variables" $ do
@@ -166,7 +201,7 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       termType (toTerm ('a', (True, ()))) `shouldBe` typeOf ('a', (True, ()))
       termType (toTerm (Var "x" :: Var (Tree Bool))) `shouldBe` typeOf (Leaf True)
       termType (adt Leaf True) `shouldBe` typeOf (Leaf True)
-    when "containing no variables" $
+    when "containing no variables" $ do
       it "should reify with the corresponding Haskell value" $ do
         fromTerm (toTerm ()) `shouldBe` Just ()
         fromTerm (toTerm True) `shouldBe` Just True
@@ -193,6 +228,19 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         fromTerm (Quotient (toTerm (10.5 :: Double)) (toTerm (0.25 :: Double))) `shouldBe` Just 42.0
         fromTerm (IntQuotient (toTerm (85 :: Int)) (toTerm (2 :: Int))) `shouldBe` Just 42
         fromTerm (Modulus (toTerm (85 :: Int)) (toTerm (2 :: Int))) `shouldBe` Just 1
+      context "an ADT term" $ do
+        let reify c x = reifyAdt c x :: TwoChars
+        let constr = toConstr $ TwoChars 'a' 'b'
+        it "should fall over when one argument is the wrong type" $ do
+          let terms = [ETermEntry 'a', ETermEntry True]
+          let term = "(" ++ show True ++ " :: " ++ show (typeOf True) ++ ")"
+          assertError (reifyAdtTypeError 1 terms term (show $ typeOf 'a')) $ reify constr terms
+        it "should fall over when given too many arguments" $ do
+          let terms = [ETermEntry 'a', ETermEntry 'b', ETermEntry 'c']
+          assertError (reifyAdtOverflowError constr 2 3) $ reify constr terms
+        it "should fall over when given too few arguments" $ do
+          let terms = [ETermEntry 'a']
+          assertError (reifyAdtUnderflowError constr 1) $ reify constr terms
     when "containing variables" $
       it "fromTerm should return Nothing" $ do
         fromTerm (toTerm (Var "x" :: Var ())) `shouldBe` (Nothing :: Maybe ())
@@ -210,6 +258,12 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
     it "should get the representation of a curried constructor" $ do
       constructor (Leaf :: Char -> Tree Char) `shouldBe` toConstr (Leaf 'a')
       constructor TwoChars `shouldBe` toConstr (TwoChars 'a' 'b')
+    it "should fall over if the constructor cannot be determined" $ do
+      let constr x = if x then Leaf x else Tree x (Leaf x) (Leaf x)
+      assertError indeterminateConstructorError $ constructor constr
+    it "should fall over if the function is not an ADT constructor" $ do
+      let f x = 42 :: Int
+      assertError (nonAdtConstructorError $ toConstr (42 :: Int)) $ constructor f
   describe "AdtArgument" $
     it "should convert a tuple of arguments to a type-erased term list" $ do
       getArgs (mkTuple 'a' :: Tuple Char One) `shouldBe` [ETerm $ toTerm 'a']
