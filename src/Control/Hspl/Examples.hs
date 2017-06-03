@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
@@ -32,9 +33,9 @@ module Control.Hspl.Examples (
   ) where
 
 import Data.Data
+import GHC.Generics
 
 import Control.Hspl
-import Control.Hspl.Internal.Ast (TermEntry)
 
 -- $syllogism
 -- A classic example of modus ponens: all humans are mortal, and Hypatia is human. Therefore,
@@ -65,7 +66,8 @@ human = predicate "human" $
 -- | A contrived example ADT.
 data Widget = Gibber Int
             | Wuzzle String
-  deriving (Show, Eq, Typeable, Data)
+  deriving (Show, Eq, Typeable, Data, Generic)
+instance Termable Widget
 
 -- | Succeeds only for the 'Widget' @Wuzzle "foo"@.
 goodWidget :: Predicate Widget

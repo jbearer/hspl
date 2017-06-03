@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
 #if __GLASGOW_HASKELL__ >= 800
 {-# OPTIONS_GHC -fdefer-type-errors #-}
 #endif
@@ -19,12 +20,15 @@ import           Data.Data
 import qualified Data.Map as M
 import           Data.Monoid hiding (Sum, Product)
 import           Data.Typeable
+import           GHC.Generics
 
 data RecursiveType = Base | Rec RecursiveType
-  deriving (Show, Eq, Typeable, Data)
+  deriving (Show, Eq, Typeable, Data, Generic)
+instance Termable RecursiveType
 
 data TwoChars = TwoChars Char Char
-  deriving (Show, Eq, Typeable, Data)
+  deriving (Show, Eq, Typeable, Data, Generic)
+instance Termable TwoChars
 
 renameWithContext :: Renamer -> Int -> Term a -> Term a
 renameWithContext renamer fresh t =

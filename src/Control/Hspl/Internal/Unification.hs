@@ -141,7 +141,7 @@ compose (Unifier u1) gu2@(Unifier u2) =
   in Unifier $ M.union u1' u2
 
 -- | A unifier representing the replacement of a variable by a term.
-(//) :: (TermData a, TermEntry (HSPLType a)) => a -> Var (HSPLType a) -> Unifier
+(//) :: TermData a => a -> Var (HSPLType a) -> Unifier
 t // x = Unifier $ M.singleton (varType x) $ SubMap (M.singleton x (toTerm t))
 
 -- | @u1 `isSubunifierOf` u2@ if and only if every substitution in @u1@ is also in @u2@.
@@ -197,7 +197,8 @@ mgu (Constant c) (Constant c')
 mgu (Constructor c arg) (Constructor c' arg')
   | c == c' = mguETermList arg arg'
   | otherwise = Nothing
-  where mguETermList [] [] = Just mempty
+  where mguETermList :: [ErasedTerm] -> [ErasedTerm] -> Maybe Unifier
+        mguETermList [] [] = Just mempty
         mguETermList [] _ = Nothing
         mguETermList _ [] = Nothing
         mguETermList (ETerm t : ts) (ETerm t' : ts') = do u <- cast t' >>= mgu t
@@ -373,7 +374,8 @@ renameTerm (Tup t ts) = renameBinaryTerm Tup t ts
 renameTerm (List t ts) = renameBinaryTerm List t ts
 renameTerm Nil = return Nil
 renameTerm (Constructor c arg) = liftM (Constructor c) $ renameETermList arg
-  where renameETermList [] = return []
+  where renameETermList :: Monad m => [ErasedTerm] -> RenamedT m [ErasedTerm]
+        renameETermList [] = return []
         renameETermList (ETerm t : ts) = do
           t' <- renameTerm t
           t'' <- renameETermList ts

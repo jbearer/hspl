@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module HsplTest where
@@ -10,6 +11,7 @@ import qualified Control.Hspl.Internal.Solver as Solver
 
 import Control.Monad.Writer
 import Data.Data
+import GHC.Generics
 
 data Arities = A1 Char
              | A2 Char Char
@@ -18,7 +20,8 @@ data Arities = A1 Char
              | A5 Char Char Char Char Char
              | A6 Char Char Char Char Char Char
              | A7 Char Char Char Char Char Char Char
-  deriving (Show, Eq, Typeable, Data)
+  deriving (Show, Eq, Typeable, Data, Generic)
+instance Termable Arities
 
 foo :: Predicate Char
 foo = predicate "foo" $ match (v"x")
@@ -134,69 +137,69 @@ test = describeModule "Control.Hspl" $ do
   describe "list term construction" $ do
     context "via cons" $ do
       it "should prepend a value to a list variable" $
-        'a' <:> Var "x" `shouldBe` Ast.List (Ast.toTerm 'a') (Ast.toTerm (Var "x" :: Var String))
+        'a' <:> Var "x" `shouldBe` Ast.List (toTerm 'a') (toTerm (Var "x" :: Var String))
       it "should prepend a variable to a list" $
-        char "x" <:> "foo" `shouldBe` Ast.List (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm "foo")
+        char "x" <:> "foo" `shouldBe` Ast.List (toTerm (Var "x" :: Var Char)) (toTerm "foo")
       it "should be right associative" $
         char "x" <:> char "y" <:> "foo" `shouldBe`
-          Ast.List (Ast.toTerm (Var "x" :: Var Char))
-                   (Ast.List (Ast.toTerm (Var "y" :: Var Char)) (Ast.toTerm "foo"))
+          Ast.List (toTerm (Var "x" :: Var Char))
+                   (Ast.List (toTerm (Var "y" :: Var Char)) (toTerm "foo"))
       it "should prepend a variable to a list variable" $
         char "x" <:> char \* "xs" `shouldBe`
-          Ast.List (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm (Var "xs" :: Var String))
+          Ast.List (toTerm (Var "x" :: Var Char)) (toTerm (Var "xs" :: Var String))
     context "via concatenation" $ do
       it "should append a list of variables" $
         "ab" <++> [char "x", char "y"] `shouldBe`
-          Ast.List (Ast.toTerm 'a') (Ast.List
-                   (Ast.toTerm 'b') (Ast.List
-                   (Ast.toTerm (Var "x" :: Var Char)) (Ast.List
-                   (Ast.toTerm (Var "y" :: Var Char))
+          Ast.List (toTerm 'a') (Ast.List
+                   (toTerm 'b') (Ast.List
+                   (toTerm (Var "x" :: Var Char)) (Ast.List
+                   (toTerm (Var "y" :: Var Char))
                    Ast.Nil)))
       it "should prepend a list of variables" $
         [char "x", char "y"] <++> "ab" `shouldBe`
-          Ast.List (Ast.toTerm (Var "x" :: Var Char)) (Ast.List
-                   (Ast.toTerm (Var "y" :: Var Char)) (Ast.List
-                   (Ast.toTerm 'a') (Ast.List
-                   (Ast.toTerm 'b')
+          Ast.List (toTerm (Var "x" :: Var Char)) (Ast.List
+                   (toTerm (Var "y" :: Var Char)) (Ast.List
+                   (toTerm 'a') (Ast.List
+                   (toTerm 'b')
                    Ast.Nil)))
 
   describe "the |=| predicate" $
     it "should create a CanUnify goal from TermData" $ do
-      execWriter ('a' |=| 'b') `shouldBe` [Ast.CanUnify (Ast.toTerm 'a') (Ast.toTerm 'b')]
+      execWriter ('a' |=| 'b') `shouldBe` [Ast.CanUnify (toTerm 'a') (toTerm 'b')]
       execWriter ('a' |=| char "x") `shouldBe`
-        [Ast.CanUnify (Ast.toTerm 'a') (Ast.toTerm (Var "x" :: Var Char))]
+        [Ast.CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))]
       execWriter (char "x" |=| 'a') `shouldBe`
-        [Ast.CanUnify (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm 'a')]
+        [Ast.CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a')]
       execWriter (char "x" |=| char "y") `shouldBe`
-        [Ast.CanUnify (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm (Var "y" :: Var Char))]
+        [Ast.CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))]
   describe "the |\\=| predicate" $
     it "should create a (Not . CanUnify) goal from TermData" $ do
-      execWriter ('a' |\=| 'b') `shouldBe` [Ast.Not $ Ast.CanUnify (Ast.toTerm 'a') (Ast.toTerm 'b')]
+      execWriter ('a' |\=| 'b') `shouldBe` [Ast.Not $ Ast.CanUnify (toTerm 'a') (toTerm 'b')]
       execWriter ('a' |\=| char "x") `shouldBe`
-        [Ast.Not $ Ast.CanUnify (Ast.toTerm 'a') (Ast.toTerm (Var "x" :: Var Char))]
+        [Ast.Not $ Ast.CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))]
       execWriter (char "x" |\=| 'a') `shouldBe`
-        [Ast.Not $ Ast.CanUnify (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm 'a')]
+        [Ast.Not $ Ast.CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a')]
       execWriter (char "x" |\=| char "y") `shouldBe`
-        [Ast.Not $ Ast.CanUnify (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm (Var "y" :: Var Char))]
+        [Ast.Not $ Ast.CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))]
 
   describe "the |==| predicate" $
     it "should create an Identical goal from TermData" $ do
-      execWriter ('a' |==| 'b') `shouldBe` [Ast.Identical (Ast.toTerm 'a') (Ast.toTerm 'b')]
+      execWriter ('a' |==| 'b') `shouldBe` [Ast.Identical (toTerm 'a') (toTerm 'b')]
       execWriter ('a' |==| char "x") `shouldBe`
-        [Ast.Identical (Ast.toTerm 'a') (Ast.toTerm (Var "x" :: Var Char))]
+        [Ast.Identical (toTerm 'a') (toTerm (Var "x" :: Var Char))]
       execWriter (char "x" |==| 'a') `shouldBe`
-        [Ast.Identical (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm 'a')]
+        [Ast.Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a')]
       execWriter (char "x" |==| char "y") `shouldBe`
-        [Ast.Identical (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm (Var "y" :: Var Char))]
+        [Ast.Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))]
   describe "the |\\==| predicate" $
     it "should create a (Not . Identical) goal from TermData" $ do
-      execWriter ('a' |\==| 'b') `shouldBe` [Ast.Not $ Ast.Identical (Ast.toTerm 'a') (Ast.toTerm 'b')]
+      execWriter ('a' |\==| 'b') `shouldBe` [Ast.Not $ Ast.Identical (toTerm 'a') (toTerm 'b')]
       execWriter ('a' |\==| char "x") `shouldBe`
-        [Ast.Not $ Ast.Identical (Ast.toTerm 'a') (Ast.toTerm (Var "x" :: Var Char))]
+        [Ast.Not $ Ast.Identical (toTerm 'a') (toTerm (Var "x" :: Var Char))]
       execWriter (char "x" |\==| 'a') `shouldBe`
-        [Ast.Not $ Ast.Identical (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm 'a')]
+        [Ast.Not $ Ast.Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a')]
       execWriter (char "x" |\==| char "y") `shouldBe`
-        [Ast.Not $ Ast.Identical (Ast.toTerm (Var "x" :: Var Char)) (Ast.toTerm (Var "y" :: Var Char))]
+        [Ast.Not $ Ast.Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))]
 
   describe "the lnot predicate" $
     it "should create a Not goal from an inner goal" $
@@ -205,81 +208,81 @@ test = describeModule "Control.Hspl" $ do
   describe "the is predicate" $ do
     it "should create an Equal goal from two terms" $ do
       execWriter ((3 :: Int) `is` (3 :: Int)) `shouldBe`
-        [Ast.Equal (Ast.toTerm (3 :: Int)) (Ast.toTerm (3 :: Int))]
+        [Ast.Equal (toTerm (3 :: Int)) (toTerm (3 :: Int))]
       execWriter (int "x" `is` (3 :: Int)) `shouldBe`
-        [Ast.Equal (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (3 :: Int))]
+        [Ast.Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int))]
     it "should have lower precedence than arithmetic operators" $
       execWriter (int "x" `is` (3 :: Int) |+| (2 :: Int)) `shouldBe`
-        [Ast.Equal (Ast.toTerm (Var "x" :: Var Int))
-                   (Ast.Sum (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int)))]
+        [Ast.Equal (toTerm (Var "x" :: Var Int))
+                   (Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int)))]
 
   describe "arithmetic operators" $ do
     it "should create a sum of terms" $ do
       ((3 :: Int) |+| (2 :: Int)) `shouldBe`
-        Ast.Sum (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
+        Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int))
       (int "x" |+| (2 :: Int)) `shouldBe`
-        Ast.Sum (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))
+        Ast.Sum (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int))
     it "should create a difference of terms" $ do
       ((3 :: Int) |-| (2 :: Int)) `shouldBe`
-        Ast.Difference (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
+        Ast.Difference (toTerm (3 :: Int)) (toTerm (2 :: Int))
       (int "x" |-| (2 :: Int)) `shouldBe`
-        Ast.Difference (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))
+        Ast.Difference (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int))
     it "should create a product of terms" $ do
       ((3 :: Int) |*| (2 :: Int)) `shouldBe`
-        Ast.Product (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
+        Ast.Product (toTerm (3 :: Int)) (toTerm (2 :: Int))
       (int "x" |*| (2 :: Int)) `shouldBe`
-        Ast.Product (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))
+        Ast.Product (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int))
     it "should create a quotient of fractionals" $ do
       ((3 :: Double) |/| (2 :: Double)) `shouldBe`
-        Ast.Quotient (Ast.toTerm (3 :: Double)) (Ast.toTerm (2 :: Double))
+        Ast.Quotient (toTerm (3 :: Double)) (toTerm (2 :: Double))
       (double "x" |/| (2 :: Double)) `shouldBe`
-        Ast.Quotient (Ast.toTerm (Var "x" :: Var Double)) (Ast.toTerm (2 :: Double))
+        Ast.Quotient (toTerm (Var "x" :: Var Double)) (toTerm (2 :: Double))
     it "should create a quotient of integrals" $ do
       ((3 :: Int) |\| (2 :: Int)) `shouldBe`
-        Ast.IntQuotient (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
+        Ast.IntQuotient (toTerm (3 :: Int)) (toTerm (2 :: Int))
       (int "x" |\| (2 :: Int)) `shouldBe`
-        Ast.IntQuotient (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))
+        Ast.IntQuotient (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int))
     it "should create a modular expression" $ do
       ((3 :: Int) |%| (2 :: Int)) `shouldBe`
-        Ast.Modulus (Ast.toTerm (3 :: Int)) (Ast.toTerm (2 :: Int))
+        Ast.Modulus (toTerm (3 :: Int)) (toTerm (2 :: Int))
       (int "x" |%| (2 :: Int)) `shouldBe`
-        Ast.Modulus (Ast.toTerm (Var "x" :: Var Int)) (Ast.toTerm (2 :: Int))
+        Ast.Modulus (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int))
     it "should be left-associative" $ do
       (int "x" |+| int "y" |-| int "z") `shouldBe`
-        Ast.Difference (Ast.Sum (Ast.toTerm (Var "x" :: Var Int))
-                                (Ast.toTerm (Var "y" :: Var Int)))
-                       (Ast.toTerm (Var "z" :: Var Int))
+        Ast.Difference (Ast.Sum (toTerm (Var "x" :: Var Int))
+                                (toTerm (Var "y" :: Var Int)))
+                       (toTerm (Var "z" :: Var Int))
       (int "x" |*| int "y" |\| int "z") `shouldBe`
-        Ast.IntQuotient (Ast.Product (Ast.toTerm (Var "x" :: Var Int))
-                                     (Ast.toTerm (Var "y" :: Var Int)))
-                        (Ast.toTerm (Var "z" :: Var Int))
+        Ast.IntQuotient (Ast.Product (toTerm (Var "x" :: Var Int))
+                                     (toTerm (Var "y" :: Var Int)))
+                        (toTerm (Var "z" :: Var Int))
       (double "x" |*| double "y" |/| double "z") `shouldBe`
-        Ast.Quotient (Ast.Product (Ast.toTerm (Var "x" :: Var Double))
-                                  (Ast.toTerm (Var "y" :: Var Double)))
-                     (Ast.toTerm (Var "z" :: Var Double))
+        Ast.Quotient (Ast.Product (toTerm (Var "x" :: Var Double))
+                                  (toTerm (Var "y" :: Var Double)))
+                     (toTerm (Var "z" :: Var Double))
       (int "x" |%| int "y" |%| int "z") `shouldBe`
-        Ast.Modulus (Ast.Modulus (Ast.toTerm (Var "x" :: Var Int))
-                                 (Ast.toTerm (Var "y" :: Var Int)))
-                    (Ast.toTerm (Var "z" :: Var Int))
+        Ast.Modulus (Ast.Modulus (toTerm (Var "x" :: Var Int))
+                                 (toTerm (Var "y" :: Var Int)))
+                    (toTerm (Var "z" :: Var Int))
     it "should give multiplication and division higher precedence than addition and subtraction" $ do
       (int "x" |+| int "y" |*| int "z") `shouldBe`
-        Ast.Sum (Ast.toTerm (Var "x" :: Var Int))
-                (Ast.Product (Ast.toTerm (Var "y" :: Var Int))
-                             (Ast.toTerm (Var "z" :: Var Int)))
+        Ast.Sum (toTerm (Var "x" :: Var Int))
+                (Ast.Product (toTerm (Var "y" :: Var Int))
+                             (toTerm (Var "z" :: Var Int)))
       (int "x" |-| int "y" |\| int "z") `shouldBe`
-        Ast.Difference (Ast.toTerm (Var "x" :: Var Int))
-                       (Ast.IntQuotient (Ast.toTerm (Var "y" :: Var Int))
-                                        (Ast.toTerm (Var "z" :: Var Int)))
+        Ast.Difference (toTerm (Var "x" :: Var Int))
+                       (Ast.IntQuotient (toTerm (Var "y" :: Var Int))
+                                        (toTerm (Var "z" :: Var Int)))
       (double "x" |+| double "y" |/| double "z") `shouldBe`
-        Ast.Sum (Ast.toTerm (Var "x" :: Var Double))
-                (Ast.Quotient (Ast.toTerm(Var "y" :: Var Double))
-                              (Ast.toTerm(Var "z" :: Var Double)))
+        Ast.Sum (toTerm (Var "x" :: Var Double))
+                (Ast.Quotient (toTerm(Var "y" :: Var Double))
+                              (toTerm(Var "z" :: Var Double)))
     it "should give modulus the same precedence as multiplication" $ do
       (int "x" |*| int "y" |%| int "z") `shouldBe`
-        Ast.Modulus (Ast.Product (Ast.toTerm (Var "x" :: Var Int))
-                                 (Ast.toTerm (Var "y" :: Var Int)))
-                    (Ast.toTerm (Var "z" :: Var Int))
+        Ast.Modulus (Ast.Product (toTerm (Var "x" :: Var Int))
+                                 (toTerm (Var "y" :: Var Int)))
+                    (toTerm (Var "z" :: Var Int))
       (int "x" |%| int "y" |*| int "z") `shouldBe`
-        Ast.Product (Ast.Modulus (Ast.toTerm (Var "x" :: Var Int))
-                                 (Ast.toTerm (Var "y" :: Var Int)))
-                    (Ast.toTerm (Var "z" :: Var Int))
+        Ast.Product (Ast.Modulus (toTerm (Var "x" :: Var Int))
+                                 (toTerm (Var "y" :: Var Int)))
+                    (toTerm (Var "z" :: Var Int))

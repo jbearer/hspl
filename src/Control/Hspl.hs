@@ -22,6 +22,11 @@ module Control.Hspl (
   , Goal
   , Clause
   , Predicate
+  , Termable (..)
+  , TermData
+  , TermEntry
+  , SubTerm
+  , NoVariables
   -- * Building HSPL programs
   , GoalWriter
   , ClauseWriter (..)
@@ -94,8 +99,11 @@ import qualified Control.Hspl.Internal.Ast as Ast
 import           Control.Hspl.Internal.Ast ( Var (Var)
                                            , Term
                                            , TermEntry
-                                           , TermData(..)
-                                           , Goal(..)
+                                           , TermData
+                                           , SubTerm
+                                           , Termable (..)
+                                           , NoVariables
+                                           , Goal (..)
                                            , HSPLType
                                            , AdtTerm (..)
                                            )
@@ -138,7 +146,7 @@ instance MonadWriter [String -> Clause] (ClauseWriter t) where
 
 -- | Predicate application. @pred? term@ is a goal that succeeds if the predicate @pred@ applied
 -- to @term@ is true.
-(?) :: (TermData b, TermEntry a, a ~ HSPLType b) => Predicate a -> b -> GoalWriter ()
+(?) :: TermData a => Predicate (HSPLType a) -> a -> GoalWriter ()
 p? arg = tell [Ast.PredGoal (Ast.predicate (predName p) arg) (definitions p)]
 
 -- | A declaration of a predicate with a given name and set of alternatives. Parameterized by the
@@ -182,7 +190,7 @@ predicate name gs = Predicate name (map ($name) $ execWriter $ unCW gs)
 -- statement succeeds when the input can unify with the argument to 'match'. When attempting to
 -- prove a predicate, HSPL will first find all definitions of the predicate which match the goal,
 -- and then try to prove any subgoals of the 'match' statement (which can be specified using '|-').
-match :: (TermData a, b ~ HSPLType a) => a -> ClauseWriter b ()
+match :: TermData a => a -> ClauseWriter (HSPLType a) ()
 match t = tell [\p -> Ast.HornClause (Ast.predicate p $ toTerm t) []]
 
 -- | Indicates the beginning of a list of subgoals in a predicate definition. Whenever the 'match'
@@ -365,8 +373,9 @@ v :: Typeable a => String -> Var a
 v = auto
 
 {- $adts
-Algebraic data types can be used as HSPL terms via the '$$' constructor. See
-'Control.Hspl.Examples.adts' for an example.
+Algebraic data types can be used as normal HSPL terms as long as they are instances of 'Termable'.
+For example, @auto "x" |=| Just 'a'@ is valid HSPL. It is also possible to embed variables as
+subterms in an ADT via the '$$' constructor. See 'Control.Hspl.Examples.adts' for an example.
 -}
 
 -- | Apply an ADT constructor to a term. The constructor is uncurried before application, and the
@@ -374,15 +383,29 @@ Algebraic data types can be used as HSPL terms via the '$$' constructor. See
 --
 -- @
 --  data Tree a = Leaf a | Node a (Tree a) (Tree a)
---    deriving (Show, Eq, Typeable, Data)
+--    deriving (Show, Eq, Typeable, Data, Generic)
+--  instance SubTerm a => Termable Tree a
 --
 --  t = Node $$ ('a', char "left", char "right")
 -- @
 --
 -- Here @t@ is a term representating a @Tree Char@ whose root is @'a'@ and whose left and right
--- subtrees are represented by the variables @"left"@ and @"right"@. Note the classes which must be
--- derived in order to use ADTs with HSPL: 'Eq', 'Typeable', and 'Data', as well as 'Show' if the
--- @ShowTerms@ flag is enabled. Deriving these classes requires the extension @DeriveDataTypeable@.
+-- subtrees are represented by the variables @"left"@ and @"right"@.
+--
+-- Note the classes which must be derived in order to use ADTs with HSPL: 'Eq', 'Typeable', 'Data',
+-- and 'Generic', as well as 'Show' if the @ShowTerms@ flag is enabled. Deriving these classes
+-- requires the extensions @DeriveDataTypeable@ and @DeriveGeneric@. Also note that if the ADT is
+-- parameterized by a type (e.g. @a@) then that type must be an instance of 'SubTerm'.
+--
+-- If Haskell is unable to derive an instance for 'Generic' (for instance, this may happen with some
+-- GADTs) then you can implement 'Termable' yourself, instead of using the defaut implementation.
+-- You must implement one method -- 'toTerm' -- and you can do so using '$$'. For example,
+--
+-- @
+--  instance SubTerm a => Termable Tree a where
+--    toTerm (Leaf a) = Leaf $$ a
+--    toTerm (Tree a l r) = Tree $$ (a, l, r)
+-- @
 ($$) :: AdtTerm f a r => f -> a -> Term r
 ($$) = adt
 

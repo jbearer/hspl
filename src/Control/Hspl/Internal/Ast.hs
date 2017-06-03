@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -12,6 +13,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
@@ -32,8 +34,12 @@ user-defined ADTs, to be used as 'Term's.
 module Control.Hspl.Internal.Ast (
   -- * Type system
   -- $typeSystem
-    TermEntry
-  , TermData (..)
+    HSPLType
+  , Termable (..)
+  , TermData
+  , TermEntry
+  , NoVariables
+  , SubTerm
   -- * AST
   -- $ast
   -- ** Variables
@@ -73,6 +79,10 @@ import Control.Monad.State
 import Data.Data
 import Data.List
 import Data.Maybe
+import GHC.Generics
+#if __GLASGOW_HASKELL__ < 800
+  hiding (Arity)
+#endif
 
 import Control.Hspl.Internal.Tuple
 
@@ -93,6 +103,8 @@ class ( Typeable a
 #ifdef SHOW_TERMS
       , Show a
 #endif
+      , Termable a
+      , NoVariables a
       ) => TermEntry a where {}
 instance ( Typeable a
          , Data a
@@ -100,7 +112,59 @@ instance ( Typeable a
 #ifdef SHOW_TERMS
          , Show a
 #endif
+         , Termable a
+         , NoVariables a
          ) => TermEntry a
+
+-- | The class of types which can be converted to a well-typed 'Term' (well-typed meaning
+-- @HSPLType a@ is a 'TermEntry'. It would be nice to have @TermEntry (HSPLType a)@ be a superclass
+-- of 'Termable'; however, this leads to a non-terminating cycle in the superclasses of 'Termable'
+-- and 'TermEntry'. Breaking it into two classes breaks the cycle.
+--
+-- Conceptually, 'Termable' encodes the behavior of conversion via 'toTerm', while this class
+-- encodes the restrictions on the types which should use that behavior. Consequently, a good rule
+-- of thumb is to use 'TermData' for constraints in type annotations, and to use 'Termable' when
+-- creating an instance for a new term type. Any type which has an instance for 'Termable' and
+-- satisfies the necessary constraints ('Data', 'Eq', etc.) will automatically have an instance for
+-- 'TermData'.
+class (Termable a, TermEntry (HSPLType a)) => TermData a where {}
+instance (Termable a, TermEntry (HSPLType a)) => TermData a
+
+-- | Constraint synonym for @a ~ HSPLType a@.
+class (a ~ HSPLType a) => NoVariables a where {}
+instance (a ~ HSPLType a) => NoVariables a
+
+-- | Constraint for subterms of an ADT when creating a 'Termable' instance. For example,
+--
+-- @
+--  data Tree a = Leaf a | Node a (Tree a) (Tree a)
+--    deriving (Show, Eq, Typeable, Data, Generic)
+--  instance SubTerm a => Termable Tree a
+-- @
+class (TermData a, NoVariables a) => SubTerm a where {}
+instance (TermData a, NoVariables a) => SubTerm a
+
+-- | A map from Haskell types to HSPL types. The purpose of this function is to collapse @Var a@ and
+-- @Term a@ to @a@. Other types have embedded variables and terms collapsed recursively.
+--
+-- 'HSPLType' does not, at this time, completely accomplish this goal. It works for primitives,
+-- tuples, and lists, but not for ADTs; for example, @HSPLType (Maybe (Var a)) ~ Maybe (Var a)@.
+-- Ideally, we would have a generic type function which descends recursively through ADTs. However,
+-- for the time being, this is sufficient; we disallow creation of terms from ADTs with embedded
+-- variables by not providing an instance of 'GenericAdtTerm' for @K1 i (Var a)@.
+type family HSPLType a where
+  HSPLType (Var a) = a
+  HSPLType (Term a) = a
+  HSPLType [a] = [HSPLType a]
+  HSPLType (a1, a2, a3, a4, a5, a6, a7) =
+    (HSPLType a1, HSPLType a2, HSPLType a3, HSPLType a4, HSPLType a5, HSPLType a6, HSPLType a7)
+  HSPLType (a1, a2, a3, a4, a5, a6) =
+    (HSPLType a1, HSPLType a2, HSPLType a3, HSPLType a4, HSPLType a5, HSPLType a6)
+  HSPLType (a1, a2, a3, a4, a5) = (HSPLType a1, HSPLType a2, HSPLType a3, HSPLType a4, HSPLType a5)
+  HSPLType (a1, a2, a3, a4) = (HSPLType a1, HSPLType a2, HSPLType a3, HSPLType a4)
+  HSPLType (a1, a2, a3) = (HSPLType a1, HSPLType a2, HSPLType a3)
+  HSPLType (a1, a2) = (HSPLType a1, HSPLType a2)
+  HSPLType a = a
 
 -- |
 -- The class of types which can be deconstructed and converted to a 'Term'. For example,
@@ -113,32 +177,30 @@ instance ( Typeable a
 --
 -- >>> :t toTerm (True, "foo")
 -- toTerm (True, "Foo") :: Term (Bool, [Char])
-class TermEntry (HSPLType a) => TermData a where
-  -- | A map from Haskell types to HSPL types. This is a many-to-one type function which takes
-  --
-  -- * @Var a@ to @HSPLType a@
-  -- * tuples @(a1, ..., an)@ to @(HSPLType a1, ..., HSPLType an)@
-  -- * @[a]@ to @[HSPLType a]@
-  -- * @Term a@ to @a@
-  type HSPLType a
-
+class Termable a where
   -- | Convert a Haskell value to a 'Term'.
   toTerm :: a -> Term (HSPLType a)
 
+  default toTerm :: (NoVariables a, TermEntry a, Generic a, GenericAdtTerm (Rep a)) => a -> Term a
+  toTerm a
+    | isAlgType (dataTypeOf a) = Constructor (toConstr a) $ genericGetArgs $ from a
+    | otherwise = error $
+#ifdef SHOW_TERMS
+                          "Cannot convert " ++ show a ++ " to Term: " ++
+#endif
+                          "Expected algebraic data type, but found " ++ show (typeOf a) ++ "."
+
 -- Variables
-instance TermEntry a => TermData (Var a) where
-  type HSPLType (Var a) = a
+instance TermEntry a => Termable (Var a) where
   toTerm = Variable
 
 -- Terms can trivially be converted to Terms
-instance TermEntry a => TermData (Term a) where
-  type HSPLType (Term a) = a
+instance TermEntry a => Termable (Term a) where
   toTerm = id
 
 -- Primitives (Haskell types which are not deconstructed further). We can always add more of these.
 #define HSPLPrimitive(a) \
-instance TermData a where \
-  type HSPLType a = a; \
+instance Termable a where \
   toTerm = Constant
 
 HSPLPrimitive(())
@@ -151,35 +213,54 @@ HSPLPrimitive(Double)
 #undef HSPLPrimitive
 
 -- Tuples
-instance (TermData a, TermData b) => TermData (a, b) where
-  type HSPLType (a, b) = (HSPLType a, HSPLType b)
+instance (TermData a, TermData b) => Termable (a, b) where
   toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
-instance (TermData a, TermData b, TermData c) => TermData (a, b, c) where
-  type HSPLType (a, b, c) = (HSPLType a, HSPLType b, HSPLType c)
+instance (TermData a, TermData b, TermData c) => Termable (a, b, c) where
   toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
-instance (TermData a, TermData b, TermData c, TermData d) => TermData (a, b, c, d) where
-  type HSPLType (a, b, c, d) = (HSPLType a, HSPLType b, HSPLType c, HSPLType d)
+instance (TermData a, TermData b, TermData c, TermData d) => Termable (a, b, c, d) where
   toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
-instance (TermData a, TermData b, TermData c, TermData d, TermData e) => TermData (a, b, c, d, e) where
-  type HSPLType (a, b, c, d, e) = (HSPLType a, HSPLType b, HSPLType c, HSPLType d, HSPLType e)
+instance (TermData a, TermData b, TermData c, TermData d, TermData e) => Termable (a, b, c, d, e) where
   toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
-instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f) => TermData (a, b, c, d, e, f) where
-  type HSPLType (a, b, c, d, e, f) = (HSPLType a, HSPLType b, HSPLType c, HSPLType d, HSPLType e, HSPLType f)
+instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f) => Termable (a, b, c, d, e, f) where
   toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
-instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f, TermData g) => TermData (a, b, c, d, e, f, g) where
-  type HSPLType (a, b, c, d, e, f, g) = (HSPLType a, HSPLType b, HSPLType c, HSPLType d, HSPLType e, HSPLType f, HSPLType g)
+instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f, TermData g) => Termable (a, b, c, d, e, f, g) where
   toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
 
 -- Lists
-instance (TermData a, TermEntry (HSPLType a)) => TermData [a] where
-  type HSPLType [a] = [HSPLType a]
+instance TermData a => Termable [a] where
   toTerm [] = Nil
   toTerm (x:xs) = List (toTerm x) (toTerm xs)
+
+-- Standard ADTs
+instance (NoVariables a, TermData a) => Termable (Maybe a)
+instance (NoVariables a, TermData a, NoVariables b, TermData b) => Termable (Either a b)
+
+class GenericAdtTerm f where
+  genericGetArgs :: f a -> [ErasedTerm]
+
+instance GenericAdtTerm V1 where
+  genericGetArgs _ = undefined
+
+instance GenericAdtTerm U1 where
+  genericGetArgs _ = []
+
+instance GenericAdtTerm f => GenericAdtTerm (M1 i c f) where
+  genericGetArgs (M1 x) = genericGetArgs x
+
+instance (TermData c, NoVariables c) => GenericAdtTerm (K1 i c) where
+  genericGetArgs (K1 c) = [ETerm $ toTerm c]
+
+instance (GenericAdtTerm f, GenericAdtTerm g) => GenericAdtTerm (f :*: g) where
+  genericGetArgs (f :*: g) = genericGetArgs f ++ genericGetArgs g
+
+instance (GenericAdtTerm f, GenericAdtTerm g) => GenericAdtTerm (f :+: g) where
+  genericGetArgs (L1 f) = genericGetArgs f
+  genericGetArgs (R1 f) = genericGetArgs f
 
 {- $ast
 HSPL's abstract syntax is an abstract representation of first-order predicate logic, comprised of

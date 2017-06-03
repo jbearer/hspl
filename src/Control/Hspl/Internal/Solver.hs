@@ -117,6 +117,9 @@ searchProof (proof, _) goal = searchProof' proof (runRenamed $ renameGoal goal)
         matchGoal (Equal t1 t2) (Equal t1' t2') = matchBinary Equal (t1, t2) (t1', t2')
         matchGoal (Not g) (Not g') = fmap Not $ matchGoal g g'
         matchGoal _ _ = Nothing
+
+        matchBinary :: (TermEntry a, TermEntry b, TermEntry c, TermEntry d) =>
+                       (Term a -> Term b -> Goal) -> (Term a, Term b) -> (Term c, Term d) -> Maybe Goal
         matchBinary constr (t1, t2) (t1', t2') =
           let t = toTerm (t1, t2)
               t' = toTerm (t1', t2')
