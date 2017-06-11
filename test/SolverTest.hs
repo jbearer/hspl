@@ -3,10 +3,20 @@
 module SolverTest where
 
 import Testing
+import Control.DeepSeq (NFData (..))
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Unification hiding (Unified)
 import Data.Monoid hiding (Sum, Product)
+
+instance NFData Proof where
+  rnf (Equated t1 t2) = t1 `seq` t2 `seq` ()
+
+  -- Add more as needed
+  rnf _ = ()
+
+instance NFData Unifier where
+  rnf (Unifier m) = m `seq` ()
 
 member = [
           -- x is a member of x:xs
@@ -130,8 +140,22 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       let (proofs, us) = unzip $ runTest (5 :: Int) (Sum (toTerm (3 :: Int)) (toTerm (2 :: Int)))
       proofs `shouldBe` [Equated (toTerm (5 :: Int)) (Sum (toTerm (3 :: Int)) (toTerm (2 :: Int)))]
       us `shouldBe` [mempty]
+    it "should evaluate arithmetic sub-expressions" $ do
+      let lhs = toTerm $ Just (5 :: Int)
+      let rhs = adt Just $ Sum (toTerm (3 :: Int)) (toTerm (2 :: Int))
+      let (proofs, us) = unzip $ runTest lhs rhs
+      proofs `shouldBe` [Equated lhs rhs]
+      us `shouldBe` [mempty]
+    it "should evaluate and unify sub-expressions" $ do
+      let rhs = toTerm $ adt Just $ Sum (toTerm (3 :: Int)) (toTerm (2 :: Int))
+      let (proofs, us) = unzip $ runTest (adt Just (Var "x" :: Var Int)) rhs
+      proofs `shouldBe` [Equated (toTerm $ Just (5 :: Int)) rhs]
+      us `shouldBe` [(5 :: Int) // Var "x"]
     it "should fail when the left-hand side does not unify with the result of the right" $
       runTest (5 :: Int) (Product (toTerm (3 :: Int)) (toTerm (2 :: Int))) `shouldBe` []
+    it "should error when the right-hand side contains uninstantiated variables" $
+      assertError "Variables are not sufficiently instantiated." $
+        runTest (Var "x" :: Var Int) (Sum (toTerm (42 :: Int)) (toTerm (Var "y" :: Var Int)))
   describe "a proof search" $ do
     it "should traverse every branch of the proof" $ do
       let p = predicate "p" ()

@@ -322,19 +322,13 @@ proveNotWith cont g = ifte (once $ proveWith cont g)
 -- | Check if the value of the right-hand side unifies with the left-hand side.
 proveEqualWith :: (TermEntry a, Monad m) =>
                   SolverCont m -> Term a -> Term a -> SolverT m ProofResult
-proveEqualWith _ lhs rhs = case mgu lhs (Constant $ eval rhs) of
+proveEqualWith _ lhs rhs = case mgu lhs (eval rhs) of
     Just u -> return (Equated (unifyTerm u lhs) (unifyTerm u rhs), u)
     Nothing -> mzero
-  where eval :: Term a -> a
-        eval (Constant c) = c
-        eval (Sum t1 t2) = eval t1 + eval t2
-        eval (Difference t1 t2) = eval t1 - eval t2
-        eval (Product t1 t2) = eval t1 * eval t2
-        eval (Quotient t1 t2) = eval t1 / eval t2
-        eval (IntQuotient t1 t2) = eval t1 `div` eval t2
-        eval (Modulus t1 t2) = eval t1 `mod` eval t2
-        eval (Variable _) = error "Arguments are not sufficiently instantiated."
-        eval _ = error "Argument must be an arithmetic expression."
+  where eval :: TermEntry a => Term a -> Term a
+        eval t = case fromTerm t of
+          Just t' -> toTerm t'
+          Nothing -> error "Variables are not sufficiently instantiated."
 
 -- | Produce a proof of the goal. This function will either fail, or backtrack over all possible
 -- proofs. It will invoke the appropriate continuations in the given 'SolverCont' whenever a
