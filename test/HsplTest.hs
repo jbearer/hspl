@@ -7,6 +7,7 @@ module HsplTest where
 import Testing
 import Control.Hspl
 import qualified Control.Hspl.Internal.Ast as Ast
+import           Control.Hspl.Internal.Ast (Goal (..))
 import qualified Control.Hspl.Internal.Solver as Solver
 
 import Control.Monad.Writer
@@ -26,54 +27,53 @@ instance Termable Arities
 foo :: Predicate Char
 foo = predicate "foo" $ match (v"x")
 
-fooDefs = [Ast.HornClause (Ast.predicate "foo" (Var "x" :: Var Char)) []]
+fooDefs = [Ast.HornClause (Ast.predicate "foo" (Var "x" :: Var Char)) Top]
 
 bar :: Predicate (Char, Char)
 bar = predicate "bar" $ match (v"x", v"y")
 
-barDefs = [Ast.HornClause (Ast.predicate "bar" (Var "x" :: Var Char, Var "y" :: Var Char)) []]
+barDefs = [Ast.HornClause (Ast.predicate "bar" (Var "x" :: Var Char, Var "y" :: Var Char)) Top]
 
 generic :: Ast.TermEntry a => Predicate a
 generic = predicate "generic" $ match (v"x")
 
 genericDefs :: forall a. Ast.TermEntry a => a -> [Ast.HornClause]
-genericDefs _ = [Ast.HornClause (Ast.predicate "generic" (Var "x" :: Var a)) []]
+genericDefs _ = [Ast.HornClause (Ast.predicate "generic" (Var "x" :: Var a)) Top]
 
 test = describeModule "Control.Hspl" $ do
   describe "predicate application" $ do
+    let exec = execWriter . unGW
     it "should convert a Predicate and a TermData to a Goal" $ do
-      execWriter (foo? 'a') `shouldBe` [Ast.PredGoal (Ast.predicate "foo" 'a') fooDefs]
-      execWriter (foo? (Var "x" :: Var Char)) `shouldBe`
-        [Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs]
-      execWriter (bar? ('a', Var "x" :: Var Char)) `shouldBe`
-        [Ast.PredGoal (Ast.predicate "bar" ('a', Var "x" :: Var Char)) barDefs]
+      exec (foo? 'a') `shouldBe` Ast.PredGoal (Ast.predicate "foo" 'a') fooDefs
+      exec (foo? (Var "x" :: Var Char)) `shouldBe`
+        Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs
+      exec (bar? ('a', Var "x" :: Var Char)) `shouldBe`
+        Ast.PredGoal (Ast.predicate "bar" ('a', Var "x" :: Var Char)) barDefs
     it "should handle generic predicates" $ do
-      execWriter (generic? 'a') `shouldBe`
-        [Ast.PredGoal (Ast.predicate "generic" 'a') $ genericDefs 'a']
-      execWriter (generic? "a") `shouldBe`
-        [Ast.PredGoal (Ast.predicate "generic" "a") $ genericDefs "a"]
-      execWriter (generic? (1 :: Int)) `shouldBe`
-        [Ast.PredGoal (Ast.predicate "generic" (1 :: Int)) $ genericDefs (1 :: Int)]
+      exec (generic? 'a') `shouldBe` Ast.PredGoal (Ast.predicate "generic" 'a') (genericDefs 'a')
+      exec (generic? "a") `shouldBe` Ast.PredGoal (Ast.predicate "generic" "a") (genericDefs "a")
+      exec (generic? (1 :: Int)) `shouldBe`
+        Ast.PredGoal (Ast.predicate "generic" (1 :: Int)) (genericDefs (1 :: Int))
   describe "pattern matching" $ do
     let name = "dummy"
     let run w = map ($name) $ execWriter $ unCW w
     it "should build a clause from a pattern and a GoalWriter" $ do
       run (match (Var "x" :: Var Char) |- foo? (Var "x" :: Var Char)) `shouldBe`
         [Ast.HornClause (Ast.predicate name (Var "x" :: Var Char))
-                        [Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs]]
+                        (Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs)]
       run (match 'a' |- foo? (Var "x" :: Var Char)) `shouldBe`
         [Ast.HornClause (Ast.predicate name 'a')
-                        [Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs]]
+                        (Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs)]
     it "should build unit clauses" $
-      run (match 'a') `shouldBe` [Ast.HornClause (Ast.predicate name 'a') []]
+      run (match 'a') `shouldBe` [Ast.HornClause (Ast.predicate name 'a') Top]
   describe "program execution" $ do
     let human = predicate "human" $ do { match "hypatia"; match "fred" }
-    let humanDefs = [ Ast.HornClause (Ast.predicate "human" "hypatia") []
-                    , Ast.HornClause (Ast.predicate "human" "fred") []
+    let humanDefs = [ Ast.HornClause (Ast.predicate "human" "hypatia") Top
+                    , Ast.HornClause (Ast.predicate "human" "fred") Top
                     ]
     let mortal = predicate "mortal" $ match (string "x") |- human? string "x"
     let mortalDefs = [Ast.HornClause (Ast.predicate "mortal" (Var "x" :: Var String))
-                                     [Ast.PredGoal (Ast.predicate "human" (Var "x" :: Var String)) humanDefs]]
+                                     (Ast.PredGoal (Ast.predicate "human" (Var "x" :: Var String)) humanDefs)]
     it "should obtain all solutions when requested" $
       runHspl (mortal? v"x") `shouldBe`
         Solver.runHspl
@@ -163,58 +163,70 @@ test = describeModule "Control.Hspl" $ do
                    (toTerm 'b')
                    Ast.Nil)))
 
-  describe "the |=| predicate" $
+  describe "the |=| predicate" $ do
+    let exec = execWriter . unGW
     it "should create a CanUnify goal from TermData" $ do
-      execWriter ('a' |=| 'b') `shouldBe` [Ast.CanUnify (toTerm 'a') (toTerm 'b')]
-      execWriter ('a' |=| char "x") `shouldBe`
-        [Ast.CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))]
-      execWriter (char "x" |=| 'a') `shouldBe`
-        [Ast.CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a')]
-      execWriter (char "x" |=| char "y") `shouldBe`
-        [Ast.CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))]
-  describe "the |\\=| predicate" $
+      exec ('a' |=| 'b') `shouldBe` CanUnify (toTerm 'a') (toTerm 'b')
+      exec ('a' |=| char "x") `shouldBe` CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))
+      exec (char "x" |=| 'a') `shouldBe` CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a')
+      exec (char "x" |=| char "y") `shouldBe`
+        CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))
+  describe "the |\\=| predicate" $ do
+    let exec = execWriter . unGW
     it "should create a (Not . CanUnify) goal from TermData" $ do
-      execWriter ('a' |\=| 'b') `shouldBe` [Ast.Not $ Ast.CanUnify (toTerm 'a') (toTerm 'b')]
-      execWriter ('a' |\=| char "x") `shouldBe`
-        [Ast.Not $ Ast.CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))]
-      execWriter (char "x" |\=| 'a') `shouldBe`
-        [Ast.Not $ Ast.CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a')]
-      execWriter (char "x" |\=| char "y") `shouldBe`
-        [Ast.Not $ Ast.CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))]
+      exec ('a' |\=| 'b') `shouldBe` Not (CanUnify (toTerm 'a') (toTerm 'b'))
+      exec ('a' |\=| char "x") `shouldBe` Not (CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char)))
+      exec (char "x" |\=| 'a') `shouldBe` Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
+      exec (char "x" |\=| char "y") `shouldBe`
+        Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
 
-  describe "the |==| predicate" $
+  describe "the |==| predicate" $ do
+    let exec = execWriter . unGW
     it "should create an Identical goal from TermData" $ do
-      execWriter ('a' |==| 'b') `shouldBe` [Ast.Identical (toTerm 'a') (toTerm 'b')]
-      execWriter ('a' |==| char "x") `shouldBe`
-        [Ast.Identical (toTerm 'a') (toTerm (Var "x" :: Var Char))]
-      execWriter (char "x" |==| 'a') `shouldBe`
-        [Ast.Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a')]
-      execWriter (char "x" |==| char "y") `shouldBe`
-        [Ast.Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))]
-  describe "the |\\==| predicate" $
+      exec ('a' |==| 'b') `shouldBe` Identical (toTerm 'a') (toTerm 'b')
+      exec ('a' |==| char "x") `shouldBe` Identical (toTerm 'a') (toTerm (Var "x" :: Var Char))
+      exec (char "x" |==| 'a') `shouldBe` Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a')
+      exec (char "x" |==| char "y") `shouldBe`
+        Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))
+  describe "the |\\==| predicate" $ do
+    let exec = execWriter . unGW
     it "should create a (Not . Identical) goal from TermData" $ do
-      execWriter ('a' |\==| 'b') `shouldBe` [Ast.Not $ Ast.Identical (toTerm 'a') (toTerm 'b')]
-      execWriter ('a' |\==| char "x") `shouldBe`
-        [Ast.Not $ Ast.Identical (toTerm 'a') (toTerm (Var "x" :: Var Char))]
-      execWriter (char "x" |\==| 'a') `shouldBe`
-        [Ast.Not $ Ast.Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a')]
-      execWriter (char "x" |\==| char "y") `shouldBe`
-        [Ast.Not $ Ast.Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))]
+      exec ('a' |\==| 'b') `shouldBe` Not (Identical (toTerm 'a') (toTerm 'b'))
+      exec ('a' |\==| char "x") `shouldBe` Not (Identical (toTerm 'a') (toTerm (Var "x" :: Var Char)))
+      exec (char "x" |\==| 'a') `shouldBe` Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
+      exec (char "x" |\==| char "y") `shouldBe`
+        Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
+
+  describe "the is predicate" $ do
+    let exec = execWriter . unGW
+    it "should create an Equal goal from two terms" $ do
+      exec ((3 :: Int) `is` (3 :: Int)) `shouldBe` Equal (toTerm (3 :: Int)) (toTerm (3 :: Int))
+      exec (int "x" `is` (3 :: Int)) `shouldBe` Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int))
+    it "should have lower precedence than arithmetic operators" $
+      exec (int "x" `is` (3 :: Int) |+| (2 :: Int)) `shouldBe`
+        Equal (toTerm (Var "x" :: Var Int)) (Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int)))
 
   describe "the lnot predicate" $
     it "should create a Not goal from an inner goal" $
-      execWriter (lnot $ foo? 'a') `shouldBe` [Ast.Not $ Ast.PredGoal (Ast.predicate "foo" 'a') fooDefs]
+      execWriter (unGW (lnot $ foo? 'a')) `shouldBe` Not (PredGoal (Ast.predicate "foo" 'a') fooDefs)
 
-  describe "the is predicate" $ do
-    it "should create an Equal goal from two terms" $ do
-      execWriter ((3 :: Int) `is` (3 :: Int)) `shouldBe`
-        [Ast.Equal (toTerm (3 :: Int)) (toTerm (3 :: Int))]
-      execWriter (int "x" `is` (3 :: Int)) `shouldBe`
-        [Ast.Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int))]
-    it "should have lower precedence than arithmetic operators" $
-      execWriter (int "x" `is` (3 :: Int) |+| (2 :: Int)) `shouldBe`
-        [Ast.Equal (toTerm (Var "x" :: Var Int))
-                   (Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int)))]
+  describe "the ||| predicate" $ do
+    let exec = execWriter . unGW
+    it "should create an Or goal from two goals" $
+      exec (foo? 'a' ||| foo? 'b') `shouldBe`
+        Or (PredGoal (Ast.predicate "foo" 'a') fooDefs) (PredGoal (Ast.predicate "foo" 'b') fooDefs)
+    it "should permit nested expressions" $
+      exec (foo? 'a' ||| do {foo? 'b'; foo? 'c'}) `shouldBe`
+        Or (PredGoal (Ast.predicate "foo" 'a') fooDefs)
+           (And (PredGoal (Ast.predicate "foo" 'b') fooDefs)
+                (PredGoal (Ast.predicate "foo" 'c') fooDefs))
+
+  describe "the true predicate" $
+    it "should create a Top goal" $
+      execWriter (unGW true) `shouldBe` Top
+  describe "the false predicate" $
+    it "should create a Bottom goal" $
+      execWriter (unGW false) `shouldBe` Bottom
 
   describe "arithmetic operators" $ do
     it "should create a sum of terms" $ do

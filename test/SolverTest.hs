@@ -23,77 +23,42 @@ member = [
           HornClause (predicate "member" ( Var "x" :: Var Int
                                           , List (toTerm (Var "x" :: Var Int))
                                                  (toTerm (Var "_" :: Var [Int]))))
-                      []
+                      Top
           -- x is a member of _:xs if x is a member of xs
          , HornClause (predicate "member" ( Var "x" :: Var Int
                                           , List (toTerm (Var "_" :: Var Int))
                                                  (toTerm (Var "xs" :: Var [Int]))))
-                      [PredGoal (predicate "member" (Var "x" :: Var Int, Var "xs" :: Var [Int])) member]
+                      (PredGoal (predicate "member" (Var "x" :: Var Int, Var "xs" :: Var [Int])) member)
          ]
 
 -- All humans are mortal
 mortal = HornClause (predicate "mortal" (Var "x" :: Var String))
-                    [PredGoal (predicate "human" (Var "x" :: Var String)) human]
+                    (PredGoal (predicate "human" (Var "x" :: Var String)) human)
 human = [
           -- Hypatia is human
-          HornClause (predicate "human" "hypatia") []
+          HornClause (predicate "human" "hypatia") Top
           -- So is Fred
-        , HornClause (predicate "human" "fred") []
+        , HornClause (predicate "human" "fred") Top
         ]
 
-simpleBinary = HornClause (predicate "foo" ('a', 'b')) []
-
-subGoals = HornClause ( predicate "subGoals" (Var "x" :: Var Char, Var "y" :: Var Char))
-                      [ PredGoal (predicate "subGoal1" (Var "x" :: Var Char)) subGoal1
-                      , PredGoal (predicate "subGoal2" (Var "y" :: Var Char)) subGoal2
-                      ]
-subGoal1 = [HornClause (predicate "subGoal1" 'a') []]
-subGoal2 = [HornClause (predicate "subGoal2" 'b') []]
+simpleBinary = HornClause (predicate "foo" ('a', 'b')) Top
 
 simpleSubGoal = HornClause (predicate "foo" 'a')
-                           [PredGoal (predicate "bar" 'a')
-                                     [HornClause (predicate "bar" 'a') []]
-                           ]
-
--- This program illustrates a potential bug in a naive impementation. There should be no solutions
--- to foo(X). The unifier ['a'/X] which results from proving bar(X) should be applied to the next
--- subgoal, giving baz('a'), which clearly has no solutions. A naive implementation fails to apply
--- the intermediate unifier to the second subgoal, giving the erronious solution foo('b').
-unifierTrap = HornClause ( predicate "foo" (Var "x" :: Var Char))
-                         [ PredGoal (predicate "bar" (Var "x" :: Var Char))
-                                    [HornClause (predicate "bar" 'a') []]
-                         , PredGoal (predicate "baz" (Var "x" :: Var Char))
-                                    [HornClause (predicate "baz" 'b') []]
-                         ]
+                           (PredGoal (predicate "bar" 'a') [HornClause (predicate "bar" 'a') Top])
 
 test = describeModule "Control.Hspl.Internal.Solver" $ do
   describe "provePredicateWith" $ do
     let runTest p c = observeAllSolver $ provePredicateWith solverCont p c
     it "should prove an axiom" $
       runTest (predicate "foo" ('a', 'b')) simpleBinary `shouldBe`
-        [(Resolved (predicate "foo" ('a', 'b')) [], mempty)]
-    it "should prove a result that follows from subgoals" $ do
-      let (proofs, us) =
-            unzip $ runTest (predicate "subGoals" (Var "x" :: Var Char, Var "y" :: Var Char)) subGoals
+        [(Resolved (predicate "foo" ('a', 'b')) ProvedTop, mempty)]
+    it "should prove a result that follows from a subgoal" $ do
+      let (proofs, _) =
+            unzip $ runTest (predicate "mortal" "hypatia") mortal
       proofs `shouldBe`
-        [Resolved ( predicate "subGoals" ('a', 'b'))
-                  [ Resolved (predicate "subGoal1" 'a') []
-                  , Resolved (predicate "subGoal2" 'b') []
-                  ]
+        [Resolved (predicate "mortal" "hypatia")
+                  (Resolved (predicate "human" "hypatia") ProvedTop)
         ]
-      length us `shouldBe` 1
-      head us `shouldSatisfy` (('a' // Var "x" <> 'b' // Var "y") `isSubunifierOf`)
-    it "should successively apply the unifier to subgoals" $
-      runTest (predicate "foo" (Var "x" :: Var Char)) unifierTrap `shouldBe` []
-    it "should unify the goal with the clause" $ do
-      let (proofs, _) = unzip $ runTest (predicate "subGoals" ('a', 'b')) subGoals
-      proofs `shouldBe`
-        [Resolved ( predicate "subGoals" ('a', 'b'))
-                  [ Resolved (predicate "subGoal1" 'a') []
-                  , Resolved (predicate "subGoal2" 'b') []
-                  ]
-        ]
-      runTest (predicate "subGoals" 'b') subGoals `shouldBe` []
     it "should return unifications made in the goal" $ do
       let (_, us) = unzip $ runTest (predicate "foo" (Var "x" :: Var Char)) simpleSubGoal
       length us `shouldBe` 1
@@ -120,13 +85,6 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should succeed, but not create new bindings, if the terms are identical" $
       runTest "foo" "foo" `shouldBe`
         [(Identified (toTerm "foo") (toTerm "foo"), mempty)]
-  describe "proveNotWith" $ do
-    let runTest g = observeAllSolver $ proveNotWith solverCont g
-    it "should fail if the inner goal succeeds" $
-      runTest (PredGoal (predicate "foo" ('a', 'b')) [simpleBinary]) `shouldBe` []
-    it "should succeed if the inner goal fails" $
-      runTest (PredGoal (predicate "foo" ('b', 'a')) [simpleBinary]) `shouldBe`
-        [(Negated $ PredGoal (predicate "foo" ('b', 'a')) [simpleBinary], mempty)]
   describe "proveEqualWith" $ do
     let runTest :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> [ProofResult]
         runTest lhs rhs =
@@ -156,49 +114,168 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should error when the right-hand side contains uninstantiated variables" $
       assertError "Variables are not sufficiently instantiated." $
         runTest (Var "x" :: Var Int) (Sum (toTerm (42 :: Int)) (toTerm (Var "y" :: Var Int)))
+  describe "proveNotWith" $ do
+    let runTest g = observeAllSolver $ proveNotWith solverCont g
+    it "should fail if the inner goal succeeds" $
+      runTest (PredGoal (predicate "foo" ('a', 'b')) [simpleBinary]) `shouldBe` []
+    it "should succeed if the inner goal fails" $
+      runTest (PredGoal (predicate "foo" ('b', 'a')) [simpleBinary]) `shouldBe`
+        [(Negated $ PredGoal (predicate "foo" ('b', 'a')) [simpleBinary], mempty)]
+  describe "proveAndWith" $ do
+    let runTest g1 g2 = observeAllSolver $ proveAndWith solverCont g1 g2
+    it "should succeed when both subgoals succeed" $ do
+      let (proofs, _) = unzip $ runTest (Identical (toTerm 'a') (toTerm 'a'))
+                                        (Identical (toTerm 'b') (toTerm 'b'))
+      proofs `shouldBe` [ProvedAnd (Identified (toTerm 'a') (toTerm 'a'))
+                                   (Identified (toTerm 'b') (toTerm 'b'))]
+    it "should fail when the left subgoal fails" $
+      runTest (Identical (toTerm 'a') (toTerm 'b')) (Identical (toTerm 'c') (toTerm 'c')) `shouldBe`
+        []
+    it "should fail when the right subgoal fails" $
+      runTest (Identical (toTerm 'a') (toTerm 'a')) (Identical (toTerm 'b') (toTerm 'c')) `shouldBe`
+        []
+    it "should return any unifications made in either goal" $ do
+      let (_, us) = unzip $ runTest (CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char)))
+                                    (CanUnify (toTerm (Var "y" :: Var Bool)) (toTerm True))
+      length us `shouldBe` 1
+      head us `shouldSatisfy` (('a' // Var "x" <> True // Var "y") `isSubunifierOf`)
+    it "should apply unifications made while proving the left-hand side to the right-hand side" $
+      runTest (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
+              (CanUnify (toTerm 'b') (toTerm (Var "x" :: Var Char))) `shouldBe` []
+  describe "an Or goal" $ do
+    let runTest g1 g2 = observeAllSolver $ proveWith solverCont (Or g1 g2)
+    it "should succeed when only the left goal succeeds" $ do
+      -- Left goal succeeds once, right goal fails
+      let (proofs, _) = unzip $ runTest (PredGoal (predicate "mortal" "hypatia") [mortal])
+                                        (PredGoal (predicate "fake" ()) [])
+      proofs `shouldBe` [ProvedLeft (Resolved (predicate "mortal" "hypatia")
+                                              (Resolved (predicate "human" "hypatia") ProvedTop))
+                                    (PredGoal (predicate "fake" ()) [])]
+      -- Left goals succeeds multiple times, right goal fails
+      let (proofs, us) = unzip $ runTest (PredGoal (predicate "mortal" (Var "x" :: Var String)) [mortal])
+                                         (PredGoal (predicate "fake" ()) [])
+      proofs `shouldBePermutationOf` [ ProvedLeft (Resolved (predicate "mortal" "hypatia")
+                                                            (Resolved (predicate "human" "hypatia") ProvedTop))
+                                                  (PredGoal (predicate "fake" ()) [])
+                                     , ProvedLeft (Resolved (predicate "mortal" "fred")
+                                                            (Resolved (predicate "human" "fred") ProvedTop))
+                                                  (PredGoal (predicate "fake" ()) [])
+                                     ]
+      length us `shouldBe` 2
+      if "hypatia" // Var "x" `isSubunifierOf` head us
+        then last us `shouldSatisfy` ("fred" // Var "x" `isSubunifierOf`)
+        else do head us `shouldSatisfy` ("fred" // Var "x" `isSubunifierOf`)
+                last us `shouldSatisfy` ("hypatia" // Var "x" `isSubunifierOf`)
+    it "should succeed when only the right goal succeeds" $ do
+      -- Right goal succeeds once, left goal fails
+      let (proofs, _) = unzip $ runTest (PredGoal (predicate "fake" ()) [])
+                                        (PredGoal (predicate "mortal" "hypatia") [mortal])
+      proofs `shouldBe` [ProvedRight (PredGoal (predicate "fake" ()) [])
+                                     (Resolved (predicate "mortal" "hypatia")
+                                               (Resolved (predicate "human" "hypatia") ProvedTop))]
+      -- Right goals succeeds multiple times, left goal fails
+      let (proofs, us) = unzip $ runTest (PredGoal (predicate "fake" ()) [])
+                                         (PredGoal (predicate "mortal" (Var "x" :: Var String)) [mortal])
+      proofs `shouldBePermutationOf` [ ProvedRight (PredGoal (predicate "fake" ()) [])
+                                                   (Resolved (predicate "mortal" "hypatia")
+                                                             (Resolved (predicate "human" "hypatia") ProvedTop))
+                                     , ProvedRight (PredGoal (predicate "fake" ()) [])
+                                                   (Resolved (predicate "mortal" "fred")
+                                                             (Resolved (predicate "human" "fred") ProvedTop))
+                                     ]
+      length us `shouldBe` 2
+      if "hypatia" // Var "x" `isSubunifierOf` head us
+        then last us `shouldSatisfy` ("fred" // Var "x" `isSubunifierOf`)
+        else do head us `shouldSatisfy` ("fred" // Var "x" `isSubunifierOf`)
+                last us `shouldSatisfy` ("hypatia" // Var "x" `isSubunifierOf`)
+    it "should succeed once for each subgoal that succeeds" $ do
+      let (proofs, _) = unzip $ runTest (PredGoal (predicate "mortal" "hypatia") [mortal])
+                                        (PredGoal (predicate "mortal" "fred") [mortal])
+      proofs `shouldBe` [ ProvedLeft (Resolved (predicate "mortal" "hypatia")
+                                               (Resolved (predicate "human" "hypatia") ProvedTop))
+                                     (PredGoal (predicate "mortal" "fred") [mortal])
+                        , ProvedRight (PredGoal (predicate "mortal" "hypatia") [mortal])
+                                      (Resolved (predicate "mortal" "fred")
+                                                (Resolved (predicate "human" "fred") ProvedTop))
+                        ]
+    it "should fail when both goals fail" $
+      runTest (PredGoal (predicate "fake" ()) []) (PredGoal (predicate "fake" ()) []) `shouldBe` []
+  describe "proveTopWith" $
+    it "should always succeed" $
+      observeAllSolver (proveTopWith solverCont) `shouldBe` [(ProvedTop, mempty)]
+  describe "proveBottomWith" $
+    it "should always fail" $
+      observeAllSolver (proveBottomWith solverCont) `shouldBe` []
   describe "a proof search" $ do
+    let search p = searchProof (p, mempty)
     it "should traverse every branch of the proof" $ do
       let p = predicate "p" ()
       let q = predicate "q" ()
       let r = predicate "r" ()
-      let wideProof = (Resolved p [Resolved p [], Resolved q [], Resolved r []], mempty)
-      let deepProof = (Resolved p [Resolved q [Resolved r []]], mempty)
-      searchProof (Resolved p [], mempty) (PredGoal p []) `shouldBe` [PredGoal p []]
-      searchProof wideProof (PredGoal p []) `shouldBe` [PredGoal p [], PredGoal p []]
-      searchProof wideProof (PredGoal q []) `shouldBe` [PredGoal q []]
-      searchProof wideProof (PredGoal r []) `shouldBe` [PredGoal r []]
-      searchProof deepProof (PredGoal p []) `shouldBe` [PredGoal p []]
-      searchProof deepProof (PredGoal q []) `shouldBe` [PredGoal q []]
-      searchProof deepProof (PredGoal r []) `shouldBe` [PredGoal r []]
+      let deepProof = Resolved p (Resolved q (Resolved r ProvedTop))
+      search (Resolved p ProvedTop) (PredGoal p []) `shouldBe` [PredGoal p []]
+      search deepProof (PredGoal p []) `shouldBe` [PredGoal p []]
+      search deepProof (PredGoal q []) `shouldBe` [PredGoal q []]
+      search deepProof (PredGoal r []) `shouldBe` [PredGoal r []]
     it "should find subgoals which unify with the query" $
-      searchProof (Resolved (predicate "p" (Var "x" :: Var Char, 'b'))
-                            [Resolved (predicate "p" ('a', Var "x" :: Var Char)) []], mempty)
-                  (PredGoal (predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char)) [])
+      search (Resolved (predicate "p" (Var "x" :: Var Char, 'b'))
+                       (Resolved (predicate "p" ('a', Var "x" :: Var Char)) ProvedTop))
+             (PredGoal (predicate "p" (Var "x" :: Var Char, Var "y" :: Var Char)) [])
         `shouldBePermutationOf`
         [ PredGoal (predicate "p" (Var "x" :: Var Char, 'b')) []
         , PredGoal (predicate "p" ('a', Var "x" :: Var Char)) []
         ]
+    it "should unify a goal with a proven conjunction" $ do
+      let leftProof = Identified (toTerm 'a') (toTerm 'a')
+      let rightProof = Identified (toTerm 'b') (toTerm 'b')
+      let leftGoal = getSolution (leftProof, mempty)
+      let rightGoal = getSolution (rightProof, mempty)
+      search (ProvedAnd leftProof rightProof) (And leftGoal rightGoal) `shouldBe` [And leftGoal rightGoal]
+    it "should recursively search the proof of a conjunction" $ do
+      let leftProof = Identified (toTerm 'a') (toTerm 'a')
+      let rightProof = Identified (toTerm 'b') (toTerm 'b')
+      let leftGoal = getSolution (leftProof, mempty)
+      let rightGoal = getSolution (rightProof, mempty)
+      search (ProvedAnd leftProof rightProof) leftGoal `shouldBe` [leftGoal]
+      search (ProvedAnd leftProof rightProof) rightGoal `shouldBe` [rightGoal]
+    it "should unify a goal with a proven disjunction" $ do
+      let unprovenGoal = Identical (toTerm 'a') (toTerm 'b')
+      let provenGoal = Equal (toTerm 'a') (toTerm 'a')
+      let subProof = Equated (toTerm 'a') (toTerm 'a')
+      search (ProvedLeft subProof unprovenGoal) (Or provenGoal unprovenGoal) `shouldBe`
+        [Or provenGoal unprovenGoal]
+      search (ProvedRight unprovenGoal subProof) (Or unprovenGoal provenGoal) `shouldBe`
+        [Or unprovenGoal provenGoal]
+    it "should recursively search the proof of a disjunction" $ do
+      let unprovenGoal = Identical (toTerm 'a') (toTerm 'b')
+      let p = predicate "p" 'a'
+      let subProof = Resolved p ProvedTop
+      let provenGoal = getSolution (subProof, mempty)
+      search (ProvedLeft subProof unprovenGoal) provenGoal `shouldBe` [provenGoal]
+      search (ProvedRight unprovenGoal subProof) provenGoal `shouldBe` [provenGoal]
+    it "should not unify a goal with the unproven goal in a proof of a disjunction" $ do
+      let unprovenGoal = Identical (toTerm 'a') (toTerm 'b')
+      let subProof = Equated (toTerm 'a') (toTerm 'a')
+      search (ProvedLeft subProof unprovenGoal) unprovenGoal `shouldBe` []
+      search (ProvedRight unprovenGoal subProof) unprovenGoal `shouldBe` []
     it "should work for all types of goals" $ do
-      searchProof (Identified (toTerm 'a') (toTerm 'a'), mempty)
-                  (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+      search (Identified (toTerm 'a') (toTerm 'a'))
+             (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
         [Identical (toTerm 'a') (toTerm 'a')]
-      searchProof (Unified (toTerm 'a') (toTerm 'a'), mempty)
-                  (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+      search (Unified (toTerm 'a') (toTerm 'a'))
+             (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
         [CanUnify (toTerm 'a') (toTerm 'a')]
-      searchProof (Equated (toTerm (3 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int))), mempty)
-                  (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
+      search (Equated (toTerm (3 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int))))
+             (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
         [Equal (toTerm (3 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))]
-      searchProof (Negated $ Identical (toTerm 'a') (toTerm 'b'), mempty)
-                  (Not $ Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
-        `shouldBe`
+      search (Negated $ Identical (toTerm 'a') (toTerm 'b'))
+             (Not $ Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
         [Not (Identical (toTerm 'a') (toTerm 'b'))]
+      search ProvedTop Top `shouldBe` [Top]
   describe "the \"get solutions\" feature" $ do
     it "should return the theorem at the root of a proof tree" $ do
       getSolution (Resolved (predicate "p" ())
-                            [ Resolved (predicate "q" ())
-                                       [Resolved (predicate "r" ()) []]
-                            , Resolved (predicate "s" ()) []
-                            ], mempty) `shouldBe`
+                            (Resolved (predicate "s" ()) ProvedTop), mempty) `shouldBe`
         PredGoal (predicate "p" ()) []
       getSolution (Unified (toTerm 'a') (toTerm 'a'), mempty) `shouldBe`
         CanUnify (toTerm 'a') (toTerm 'a')
@@ -206,41 +283,51 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         Identical (toTerm 'a') (toTerm 'a')
       getSolution (Equated (toTerm (1 :: Int)) (toTerm (1 :: Int)), mempty) `shouldBe`
         Equal (toTerm (1 :: Int)) (toTerm (1 :: Int))
+      getSolution (ProvedAnd (Equated (toTerm 'a') (toTerm 'a'))
+                              (Identified (toTerm 'b') (toTerm 'b')), mempty) `shouldBe`
+        And (Equal (toTerm 'a') (toTerm 'a')) (Identical (toTerm 'b') (toTerm 'b'))
+      getSolution (ProvedLeft (Equated (toTerm 'a') (toTerm 'a'))
+                              (Identical (toTerm 'a') (toTerm 'b')), mempty) `shouldBe`
+        Or (Equal (toTerm 'a') (toTerm 'a')) (Identical (toTerm 'a') (toTerm 'b'))
+      getSolution (ProvedRight (Identical (toTerm 'a') (toTerm 'b'))
+                               (Equated (toTerm 'a') (toTerm 'a')), mempty) `shouldBe`
+        Or (Identical (toTerm 'a') (toTerm 'b')) (Equal (toTerm 'a') (toTerm 'a'))
+      getSolution (ProvedTop, mempty) `shouldBe` Top
     it "should get all solutions from a forest of proof tress" $
-      getAllSolutions [ (Resolved (predicate "p" ()) [], mempty)
-                      , (Resolved (predicate "q" ()) [], mempty)] `shouldBe`
+      getAllSolutions [ (Resolved (predicate "p" ()) ProvedTop, mempty)
+                      , (Resolved (predicate "q" ()) ProvedTop, mempty)] `shouldBe`
         [PredGoal (predicate "p" ()) [], PredGoal (predicate "q" ()) []]
   describe "the \"get unifiers\" feature" $ do
     it "should return the unifier from a solution" $ do
       let u = toTerm 'a' // Var "x" <> toTerm True // Var "y"
-      getUnifier (Resolved (predicate "foo" ()) [], u) `shouldBe` u
+      getUnifier (Resolved (predicate "foo" ()) ProvedTop, u) `shouldBe` u
     it "should return all unifiers from a solution forest" $ do
       let u1 = toTerm 'a' // Var "x"
       let u2 = toTerm True // Var "y"
-      getAllUnifiers [ (Resolved (predicate "foo" ()) [], u1)
-                     , (Resolved (predicate "bar" ()) [], u2)
+      getAllUnifiers [ (Resolved (predicate "foo" ()) ProvedTop, u1)
+                     , (Resolved (predicate "bar" ()) ProvedTop, u2)
                      ] `shouldBe`
         [u1, u2]
   describe "the HSPL solver" $ do
     it "should return all proofs of the query" $ do
       let (proofs, _) = unzip $ runHspl $ PredGoal (predicate "mortal" "hypatia") [mortal]
       proofs `shouldBe` [Resolved (predicate "mortal" "hypatia")
-                                  [Resolved (predicate "human" "hypatia") []]
+                                  (Resolved (predicate "human" "hypatia") ProvedTop)
                         ]
       let (proofs2, _) = unzip $ runHspl $ PredGoal (predicate "mortal" (Var "x" :: Var String)) [mortal]
       proofs2 `shouldBePermutationOf`
         [ Resolved (predicate "mortal" "hypatia")
-                   [Resolved (predicate "human" "hypatia") []]
+                   (Resolved (predicate "human" "hypatia") ProvedTop)
         , Resolved (predicate "mortal" "fred")
-                   [Resolved (predicate "human" "fred") []]
+                   (Resolved (predicate "human" "fred") ProvedTop)
         ]
     it "should return the requested number of proofs" $ do
       let (proofs, _) = unzip $ runHsplN 1 $ PredGoal (predicate "mortal" (Var "x" :: Var String)) [mortal]
       proofs `shouldBeSubsetOf`
         [ Resolved (predicate "mortal" "hypatia")
-                   [Resolved (predicate "human" "hypatia") []]
+                   (Resolved (predicate "human" "hypatia") ProvedTop)
         , Resolved (predicate "mortal" "fred")
-                   [Resolved (predicate "human" "fred") []]
+                   (Resolved (predicate "human" "fred") ProvedTop)
         ]
       length proofs `shouldBe` 1
     it "should indicate when variables have been substituted" $ do

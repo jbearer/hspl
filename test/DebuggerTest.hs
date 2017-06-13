@@ -8,6 +8,7 @@ import Control.Hspl.Internal.Debugger
 import Control.Hspl.Internal.Solver
 
 import Data.List
+import Data.Monoid hiding (Sum)
 import Data.Time.Clock
 import System.Directory
 import System.FilePath
@@ -69,15 +70,6 @@ expectIdenticalFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
                         Int -> a -> b -> String
 expectIdenticalFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ show (Identical (toTerm t1) (toTerm t2))
 
-expectNotCall :: Int -> Goal -> String
-expectNotCall d g = "(" ++ show d ++ ") Call: " ++ show (Not g)
-
-expectNotExit :: Int -> Goal -> String
-expectNotExit d g = "(" ++ show d ++ ") Exit: " ++ show (Not g)
-
-expectNotFail :: Int -> Goal -> String
-expectNotFail d g = "(" ++ show d ++ ") Fail: " ++ show (Not g)
-
 expectEqualCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
 expectEqualCall d a b = "(" ++ show d ++ ") Call: " ++ show (Equal (toTerm a) (toTerm b))
 
@@ -87,28 +79,68 @@ expectEqualExit d a b = "(" ++ show d ++ ") Exit: " ++ show (Equal (toTerm a) (t
 expectEqualFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
 expectEqualFail d a b = "(" ++ show d ++ ") Fail: " ++ show (Equal (toTerm a) (toTerm b))
 
+expectNotCall :: Int -> Goal -> String
+expectNotCall d g = "(" ++ show d ++ ") Call: " ++ show (Not g)
+
+expectNotExit :: Int -> Goal -> String
+expectNotExit d g = "(" ++ show d ++ ") Exit: " ++ show (Not g)
+
+expectNotFail :: Int -> Goal -> String
+expectNotFail d g = "(" ++ show d ++ ") Fail: " ++ show (Not g)
+
+expectAndCall :: Int -> Goal -> Goal -> String
+expectAndCall d g1 g2 = "(" ++ show d ++ ") Call: " ++ show (And g1 g2)
+
+expectAndExit :: Int -> Goal -> Goal -> String
+expectAndExit d g1 g2 = "(" ++ show d ++ ") Exit: " ++ show (And g1 g2)
+
+expectAndFail :: Int -> Goal -> Goal -> String
+expectAndFail d g1 g2 = "(" ++ show d ++ ") Fail: " ++ show (And g1 g2)
+
+expectOrCall :: Int -> Goal -> Goal -> String
+expectOrCall d g1 g2 = "(" ++ show d ++ ") Call: " ++ show (Or g1 g2)
+
+expectOrRedo :: Int -> Goal -> Goal -> String
+expectOrRedo d g1 g2 = "(" ++ show d ++ ") Redo: " ++ show (Or g1 g2)
+
+expectOrExit :: Int -> Goal -> Goal -> String
+expectOrExit d g1 g2 = "(" ++ show d ++ ") Exit: " ++ show (Or g1 g2)
+
+expectOrFail :: Int -> Goal -> Goal -> String
+expectOrFail d g1 g2 = "(" ++ show d ++ ") Fail: " ++ show (Or g1 g2)
+
+expectTop :: Int -> [String]
+expectTop d = [ "(" ++ show d ++ ") Call: " ++ show Top
+              , "(" ++ show d ++ ") Exit: " ++ show Top
+              ]
+
+expectBottom :: Int -> [String]
+expectBottom d = [ "(" ++ show d ++ ") Call: " ++ show Bottom
+                 , "(" ++ show d ++ ") Fail: " ++ show Bottom
+                 ]
+
 -- deep(X) :- foo(X).
 -- foo(X) :- bar(X).
 -- bar(a).
 deep = [ HornClause (predicate "deep" (Var "x" :: Var Char))
-                    [PredGoal (predicate "foo" (Var "x" :: Var Char))
+                    (PredGoal (predicate "foo" (Var "x" :: Var Char))
                               [HornClause (predicate "foo" (Var "x" :: Var Char))
-                                                [PredGoal (predicate "bar" (Var "x" :: Var Char))
-                                                          [HornClause (predicate "bar" 'a') []]]]]
+                                                (PredGoal (predicate "bar" (Var "x" :: Var Char))
+                                                          [HornClause (predicate "bar" 'a') Top])])
        ]
 
 -- wide(X, Y, Z) :- foo(X), bar(Y), baz(Z).
 -- foo(a).
 -- bar(b).
 -- baz(c).
-wide = [ HornClause ( predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char))
-                    [ PredGoal (predicate "foo" (Var "x" :: Var Char))
-                               [HornClause (predicate "foo" 'a') []]
-                    , PredGoal (predicate "bar" (Var "y" :: Var Char))
-                               [HornClause (predicate "bar" 'b') []]
-                    , PredGoal (predicate "baz" (Var "z" :: Var Char))
-                               [HornClause (predicate "baz" 'c') []]
-                    ]
+wide = [ HornClause (  predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char))
+                    (  PredGoal (predicate "foo" (Var "x" :: Var Char))
+                                [HornClause (predicate "foo" 'a') Top]
+                    <> PredGoal (predicate "bar" (Var "y" :: Var Char))
+                                [HornClause (predicate "bar" 'b') Top]
+                    <> PredGoal (predicate "baz" (Var "z" :: Var Char))
+                                [HornClause (predicate "baz" 'c') Top]
+                    )
        ]
 
 -- foo(X) :-
@@ -116,10 +148,10 @@ wide = [ HornClause ( predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char
 --   baz(a) % Predicate that fails on input 'a'
 -- baz(b).
 backtracking = [ HornClause (predicate "foo" (Var "x" :: Var Char))
-                            [PredGoal (predicate "bar" (Var "x" :: Var Char)) []]
+                            (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
                , HornClause (predicate "foo" (Var "x" :: Var Char))
-                            [PredGoal (predicate "baz" 'a')
-                                      [HornClause (predicate "baz" 'b') []]]
+                            (PredGoal (predicate "baz" 'a')
+                                      [HornClause (predicate "baz" 'b') Top])
                ]
 
 test = describeModule "Control.Hspl.Internal.Debugger" $ do
@@ -169,6 +201,14 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     let identicalFailTrace = [ expectIdenticalCall 1 (Var "x" :: Var String) "foo"
                              , expectIdenticalFail 1 (Var "x" :: Var String) "foo"
                              ]
+    let equalGoal = Equal (toTerm (Var "x" :: Var Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+    let equalTrace = [ expectEqualCall 1 (Var "x" :: Var Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                     , expectEqualExit 1 (3 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                     ]
+    let equalFailGoal = Equal (toTerm (2 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+    let equalFailTrace = [ expectEqualCall 1 (2 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                         , expectEqualFail 1 (2 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+                         ]
     let notGoal = Not $ CanUnify (toTerm "bar") (toTerm "foo")
     let notTrace = [ expectNotCall 1 $ CanUnify (toTerm "bar") (toTerm "foo")
                    , expectCanUnifyCall 2 "bar" "foo"
@@ -181,40 +221,97 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                        , expectCanUnifyExit 2 "foo"
                        , expectNotFail 1 $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
                        ]
-    let equalGoal = Equal (toTerm (Var "x" :: Var Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-    let equalTrace = [ expectEqualCall 1 (Var "x" :: Var Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                     , expectEqualExit 1 (3 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                     ]
-    let equalFailGoal = Equal (toTerm (2 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-    let equalFailTrace = [ expectEqualCall 1 (2 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                         , expectEqualFail 1 (2 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                         ]
+    let andGoal = And (CanUnify (toTerm "foo") (toTerm (Var "x" :: Var String)))
+                      (Identical (toTerm "foo") (toTerm (Var "x" :: Var String)))
+    let andTrace = [ expectCanUnifyCall 1 "foo" (Var "x" :: Var String)
+                   , expectCanUnifyExit 1 "foo"
+                   , expectIdenticalCall 1 "foo" "foo"
+                   , expectIdenticalExit 1 "foo"
+                   ]
+    let andFailLeftGoal = And (CanUnify (toTerm "foo") (toTerm "bar"))
+                              (Identical (toTerm "foo") (toTerm "foo"))
+    let andFailLeftTrace = [ expectCanUnifyCall 1 "foo" "bar"
+                           , expectCanUnifyFail 1 "foo" "bar"
+                           ]
+    let andFailRightGoal = And (Identical (toTerm "foo") (toTerm "foo"))
+                               (CanUnify (toTerm "foo") (toTerm "bar"))
+    let andFailRightTrace = [ expectIdenticalCall 1 "foo" "foo"
+                            , expectIdenticalExit 1 "foo"
+                            , expectCanUnifyCall 1 "foo" "bar"
+                            , expectCanUnifyFail 1 "foo" "bar"
+                            ]
+    let orLeftGoal = Or (CanUnify (toTerm "foo") (toTerm "foo"))
+                        (CanUnify (toTerm "foo") (toTerm "bar"))
+    let orLeftTrace = [ expectOrCall 1 (CanUnify (toTerm "foo") (toTerm "foo"))
+                                       (CanUnify (toTerm "foo") (toTerm "bar"))
+                      , expectCanUnifyCall 2 "foo" "foo"
+                      , expectCanUnifyExit 2 "foo"
+                      , expectOrExit 1 (CanUnify (toTerm "foo") (toTerm "foo"))
+                                       (CanUnify (toTerm "foo") (toTerm "bar"))
+                      , expectOrRedo 1 (CanUnify (toTerm "foo") (toTerm "foo"))
+                                       (CanUnify (toTerm "foo") (toTerm "bar"))
+                      , expectCanUnifyCall 2 (toTerm "foo") (toTerm "bar")
+                      , expectCanUnifyFail 2 (toTerm "foo") (toTerm "bar")
+                      , expectOrFail 1 (CanUnify (toTerm "foo") (toTerm "foo"))
+                                       (CanUnify (toTerm "foo") (toTerm "bar"))
+                      ]
+    let orRightGoal = Or (CanUnify (toTerm "bar") (toTerm "foo"))
+                         (CanUnify (toTerm "foo") (toTerm "foo"))
+    let orRightTrace = [ expectOrCall 1 (CanUnify (toTerm "bar") (toTerm "foo"))
+                                        (CanUnify (toTerm "foo") (toTerm "foo"))
+                       , expectCanUnifyCall 2 "bar" "foo"
+                       , expectCanUnifyFail 2 "bar" "foo"
+                       , expectOrFail 1 (CanUnify (toTerm "bar") (toTerm "foo"))
+                                        (CanUnify (toTerm "foo") (toTerm "foo"))
+                       , expectOrRedo 1 (CanUnify (toTerm "bar") (toTerm "foo"))
+                                        (CanUnify (toTerm "foo") (toTerm "foo"))
+                       , expectCanUnifyCall 2 "foo" "foo"
+                       , expectCanUnifyExit 2 "foo"
+                       , expectOrExit 1 (CanUnify (toTerm "bar") (toTerm "foo"))
+                                        (CanUnify (toTerm "foo") (toTerm "foo"))
+                       ]
+    let orFailGoal = Or (CanUnify (toTerm "bar") (toTerm "foo"))
+                        (CanUnify (toTerm "foo") (toTerm "baz"))
+    let orFailTrace = [ expectOrCall 1 (CanUnify (toTerm "bar") (toTerm "foo"))
+                                       (CanUnify (toTerm "foo") (toTerm "baz"))
+                      , expectCanUnifyCall 2 "bar" "foo"
+                      , expectCanUnifyFail 2 "bar" "foo"
+                      , expectOrFail 1 (CanUnify (toTerm "bar") (toTerm "foo"))
+                                       (CanUnify (toTerm "foo") (toTerm "baz"))
+                      , expectOrRedo 1 (CanUnify (toTerm "bar") (toTerm "foo"))
+                                       (CanUnify (toTerm "foo") (toTerm "baz"))
+                      , expectCanUnifyCall 2 "foo" "baz"
+                      , expectCanUnifyFail 2 "foo" "baz"
+                      , expectOrFail 1 (CanUnify (toTerm "bar") (toTerm "foo"))
+                                       (CanUnify (toTerm "foo") (toTerm "baz"))
+                      ]
     let run g t c = runTest g (map (const c) [1..length t]) t
 
     it "should prompt after every step of computation" $ do
-      run deepGoal deepTrace "step"
-      run wideGoal wideTrace "step"
-      run backtrackingGoal backtrackingTrace "step"
-      run canUnifyGoal canUnifyTrace "step"
-      run canUnifyFailGoal canUnifyFailTrace "step"
-      run identicalGoal identicalTrace "step"
-      run identicalFailGoal identicalFailTrace "step"
-      run notGoal notTrace "step"
-      run notFailGoal notFailTrace "step"
-      run equalGoal equalTrace "step"
-      run equalFailGoal equalFailTrace "step"
+      let go g t = run g t "step"
+      go deepGoal deepTrace
+      go wideGoal wideTrace
+      go backtrackingGoal backtrackingTrace
+      go canUnifyGoal canUnifyTrace
+      go canUnifyFailGoal canUnifyFailTrace
+      go identicalGoal identicalTrace
+      go identicalFailGoal identicalFailTrace
+      go equalGoal equalTrace
+      go equalFailGoal equalFailTrace
+      go notGoal notTrace
+      go notFailGoal notFailTrace
+      go andGoal andTrace
+      go andFailLeftGoal andFailLeftTrace
+      go andFailRightGoal andFailRightTrace
+      go orLeftGoal orLeftTrace
+      go orRightGoal orRightTrace
+      go orFailGoal orFailTrace
+      go Top (expectTop 1)
+      go Bottom (expectBottom 1)
     it "should have a one-character alias" $ do
-      run deepGoal deepTrace "s"
-      run wideGoal wideTrace "s"
-      run backtrackingGoal backtrackingTrace "s"
-      run canUnifyGoal canUnifyTrace "s"
-      run canUnifyFailGoal canUnifyFailTrace "s"
-      run identicalGoal identicalTrace "s"
-      run identicalFailGoal identicalFailTrace "s"
-      run notGoal notTrace "s"
-      run notFailGoal notFailTrace "s"
-      run equalGoal equalTrace "s"
-      run equalFailGoal equalFailTrace "s"
+      let go g t = run g t "s"
+      go deepGoal deepTrace
+      go wideGoal wideTrace
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do

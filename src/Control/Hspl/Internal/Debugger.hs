@@ -146,8 +146,13 @@ debugCont stack = SolverCont { tryPredicate = debugFirstAlternative stack
                              , retryPredicate = debugNextAlternative stack
                              , tryUnifiable = debugUnifiable stack
                              , tryIdentical = debugIdentical stack
-                             , tryNot = debugNot stack
                              , tryEqual = debugEqual stack
+                             , tryNot = debugNot stack
+                             , tryAnd = debugAnd stack
+                             , tryOrLeft = debugOrLeft stack
+                             , tryOrRight = debugOrRight stack
+                             , tryTop = debugTop stack
+                             , tryBottom = debugBottom stack
                              , errorUnknownPred = debugErrorUnknownPred stack
                              }
 
@@ -200,34 +205,46 @@ ifTarget stack m = do
     Depth d | length stack <= d -> m
     _ -> return ()
 
--- | Attempt to prove a subgoal and log 'Call', 'Exit', and 'Fail' messages as appropriate.
-call :: [Goal] -> (DebugCont -> a -> Debugger ProofResult) -> a -> Debugger ProofResult
-call stack cont g = do
-  ifTarget stack $ prompt stack Call $ show (head stack)
-  ifte (cont (debugCont stack) g)
+-- | Same as callWith, but for unitary provers.
+callWith0 :: MsgType -> [Goal] -> (DebugCont -> Debugger ProofResult) -> Debugger ProofResult
+callWith0 msg stack cont = do
+  ifTarget stack $ prompt stack msg $ show (head stack)
+  ifte (cont $ debugCont stack)
     (\result -> ifTarget stack (prompt stack Exit (show $ getSolution result)) >> return result)
     (ifTarget stack (prompt stack Fail $ show (head stack)) >> mzero)
 
+-- | Attempt to prove a subgoal, logging a message of the given type on entry and either 'Exit' or
+-- 'Fail' as appropriate.
+callWith :: MsgType -> [Goal] -> (DebugCont -> a -> Debugger ProofResult) -> a -> Debugger ProofResult
+callWith msg stack cont g = callWith0 msg stack (\c -> cont c g)
+
+-- | Same as call, but for 2-ary provers.
+callWith2 :: MsgType -> [Goal] -> (DebugCont -> a -> b -> Debugger ProofResult) -> a -> b -> Debugger ProofResult
+callWith2 msg stack cont a b = callWith msg stack (\c (x, y) -> cont c x y) (a, b)
+
+-- | Attempt to prove a subgoal and log 'Call', 'Exit', and 'Fail' messages as appropriate.
+call :: [Goal] -> (DebugCont -> a -> Debugger ProofResult) -> a -> Debugger ProofResult
+call = callWith Call
+
 -- | Same as call, but for 2-ary provers.
 call2 :: [Goal] -> (DebugCont -> a -> b -> Debugger ProofResult) -> a -> b -> Debugger ProofResult
-call2 stack cont a b = call stack (\c (x, y) -> cont c x y) (a, b)
+call2 = callWith2 Call
 
--- | Continuation hook for proving a predicate which matches a given clause.
-debugPredicate :: MsgType -> [Goal] -> Predicate -> HornClause -> Debugger ProofResult
-debugPredicate mtype s p c = do
-  let stack = PredGoal p [] : s
-  ifTarget stack $ prompt stack mtype $ show p
-  ifte (provePredicateWith (debugCont stack) p c)
-    (\result -> ifTarget stack (prompt stack Exit (show $ getSolution result)) >> return result)
-    (ifTarget stack (prompt stack Fail $ show p) >> mzero)
+-- | Same as call, but for unitary provers.
+call0 :: [Goal] -> (DebugCont -> Debugger ProofResult) -> Debugger ProofResult
+call0 = callWith0 Call
 
 -- | Continuation hook for trying the first alternative clause which matches the goal.
 debugFirstAlternative :: [Goal] -> Predicate -> HornClause -> Debugger ProofResult
-debugFirstAlternative = debugPredicate Call
+debugFirstAlternative s p c =
+  let stack = PredGoal p [] : s
+  in callWith2 Call stack provePredicateWith p c
 
 -- | Continuation hook for trying additional alternative clauses which match the goal.
 debugNextAlternative :: [Goal] -> Predicate -> HornClause -> Debugger ProofResult
-debugNextAlternative = debugPredicate Redo
+debugNextAlternative s p c =
+  let stack = PredGoal p [] : s
+  in callWith2 Redo stack provePredicateWith p c
 
 -- | Continaution hook for proving a 'CanUnify' goal.
 debugUnifiable :: TermEntry a => [Goal] -> Term a -> Term a -> Debugger ProofResult
@@ -241,17 +258,43 @@ debugIdentical s t1 t2 =
   let stack = Identical t1 t2 : s
   in call2 stack proveIdenticalWith t1 t2
 
+-- | Continuation hook for proving an 'Equal' goal.
+debugEqual :: (TermEntry a) => [Goal] -> Term a -> Term a -> Debugger ProofResult
+debugEqual s lhs rhs =
+  let stack = Equal lhs rhs : s
+  in call2 stack proveEqualWith lhs rhs
+
 -- | Continuation hook for proving a 'Not' goal.
 debugNot :: [Goal] -> Goal -> Debugger ProofResult
 debugNot s g =
   let stack = Not g : s
   in call stack proveNotWith g
 
--- | Continuation hook for proving an 'Equal' goal.
-debugEqual :: (TermEntry a) => [Goal] -> Term a -> Term a -> Debugger ProofResult
-debugEqual s lhs rhs =
-  let stack = Equal lhs rhs : s
-  in call2 stack proveEqualWith lhs rhs
+debugAnd :: [Goal] -> Goal -> Goal -> Debugger ProofResult
+-- No 'call' here, we don't trace the 'And' itself. To the user, proving a conjunction just loooks
+-- like proving each subgoal in sequence.
+debugAnd s = proveAndWith (debugCont s)
+
+-- | Continuation hook for proving one branch of an 'Or' goal.
+debugOrLeft :: [Goal] -> Goal -> Goal -> Debugger ProofResult
+debugOrLeft s g1 g2 =
+  let stack = Or g1 g2 : s
+  in call2 stack proveOrLeftWith g1 g2
+
+debugOrRight :: [Goal] -> Goal -> Goal -> Debugger ProofResult
+debugOrRight s g1 g2 =
+  let stack = Or g1 g2 : s
+  in callWith2 Redo stack proveOrRightWith g1 g2
+
+debugTop :: [Goal] -> Debugger ProofResult
+debugTop s =
+  let stack = Top : s
+  in call0 stack proveTopWith
+
+debugBottom :: [Goal] -> Debugger ProofResult
+debugBottom s =
+  let stack = Bottom : s
+  in call0 stack proveBottomWith
 
 -- | Continuation hook invoked when a goal with no matching clauses is encountered.
 debugErrorUnknownPred :: [Goal] -> Predicate -> Debugger a

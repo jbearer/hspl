@@ -258,24 +258,28 @@ unifyGoal :: Unifier -> Goal -> Goal
 unifyGoal u (PredGoal p cs) = PredGoal (unifyPredicate u p) cs
 unifyGoal u (CanUnify t1 t2) = CanUnify (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Identical t1 t2) = Identical (unifyTerm u t1) (unifyTerm u t2)
-unifyGoal u (Not g) = Not $ unifyGoal u g
 unifyGoal u (Equal t1 t2) = Equal (unifyTerm u t1) (unifyTerm u t2)
+unifyGoal u (Not g) = Not $ unifyGoal u g
+unifyGoal u (And g1 g2) = And (unifyGoal u g1) (unifyGoal u g2)
+unifyGoal u (Or g1 g2) = Or (unifyGoal u g1) (unifyGoal u g2)
+unifyGoal _ Top = Top
+unifyGoal _ Bottom = Bottom
 
 -- | Apply a 'Unifier' to all 'Predicate's in a 'HornClause'.
 unifyClause :: Unifier -> HornClause -> HornClause
-unifyClause u (HornClause p n) = HornClause (unifyPredicate u p) (map (unifyGoal u) n)
+unifyClause u (HornClause p n) = HornClause (unifyPredicate u p) (unifyGoal u n)
 
 -- | Unify a 'Predicate' with a 'HornClause' with a matching positive literal. Assuming the
--- predicate unifies with the positive literal of the clause, the 'mgu' is applied to each negative
--- literal and the resulting disjunction is returned. Before unification, the 'HornClause' is
--- renamed apart so that it does not share any free variables with the goal.
-unify :: Monad m => Predicate -> HornClause -> UnificationT m (Maybe ([Goal], Unifier))
+-- predicate unifies with the positive literal of the clause, the 'mgu' is applied to the negative
+-- literal and the resulting goal is returned. Before unification, the 'HornClause' is renamed apart
+-- so that it does not share any free variables with the goal.
+unify :: Monad m => Predicate -> HornClause -> UnificationT m (Maybe (Goal, Unifier))
 unify (Predicate name arg) c@(HornClause (Predicate name' _) _) =
   assert (name == name') $ do
-    HornClause (Predicate _ arg') negs <- renameClause c
+    HornClause (Predicate _ arg') neg <- renameClause c
     case cast arg' >>= mgu arg of
       Nothing -> return Nothing
-      Just u -> return $ Just (map (unifyGoal u) negs, u)
+      Just u -> return $ Just (unifyGoal u neg, u)
 
 -- | The status of a variable in a given 'Unifier'. At any given time, a variable occupies a state
 -- represented by one of the constructors.
@@ -404,8 +408,18 @@ renameGoal :: Monad m => Goal -> RenamedT m Goal
 renameGoal (PredGoal p cs) = renamePredicate p >>= \p' -> return (PredGoal p' cs)
 renameGoal (CanUnify t1 t2) = renameBinaryGoal CanUnify t1 t2
 renameGoal (Identical t1 t2) = renameBinaryGoal Identical t1 t2
-renameGoal (Not g) = liftM Not $ renameGoal g
 renameGoal (Equal t1 t2) = renameBinaryGoal Equal t1 t2
+renameGoal (Not g) = liftM Not $ renameGoal g
+renameGoal (And g1 g2) = do
+  g1' <- renameGoal g1
+  g2' <- renameGoal g2
+  return $ And g1' g2'
+renameGoal (Or g1 g2) = do
+  g1' <- renameGoal g1
+  g2' <- renameGoal g2
+  return $ Or g1' g2'
+renameGoal Top = return Top
+renameGoal Bottom = return Bottom
 
 -- | Helper function for renaming variables in a 'Goal' with two 'Term' arguments.
 renameBinaryGoal :: Monad m => (Term a -> Term b -> Goal) -> Term a -> Term b -> RenamedT m Goal
@@ -418,5 +432,5 @@ renameBinaryGoal constr t1 t2 = do
 renameClause :: Monad m => HornClause -> UnificationT m HornClause
 renameClause (HornClause p n) = evalStateT rename (Renamer M.empty)
   where rename = do rp <- renamePredicate p
-                    rn <- forM n renameGoal
+                    rn <- renameGoal n
                     return $ HornClause rp rn

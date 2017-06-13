@@ -43,8 +43,13 @@ module Control.Hspl.Internal.Solver (
   , provePredicateWith
   , proveUnifiableWith
   , proveIdenticalWith
-  , proveNotWith
   , proveEqualWith
+  , proveNotWith
+  , proveAndWith
+  , proveOrLeftWith
+  , proveOrRightWith
+  , proveTopWith
+  , proveBottomWith
   , proveWith
   , prove
   ) where
@@ -63,10 +68,9 @@ import Control.Hspl.Internal.Unification hiding (Unified)
 -- together imply the truth of the node. There are various types of nodes (represented by the
 -- different 'Proof' constructors) corresponding to the various types of 'Goal's.
 data Proof =
-             -- | A proof of a 'PredGoal' by the resolution inference rule. This is the only kind of
-             -- node which has children; the children here correspond to the negative literals of
-             -- the 'HornClause' which was used to prove the 'Predicate'.
-             Resolved Predicate [Proof]
+             -- | A proof of a 'PredGoal' by the resolution inference rule. The 'Predicate' is the
+             -- statement proven, while the 'Proof' is a proof of the predicate's negative literal.
+             Resolved Predicate Proof
              -- | A proof of a 'CanUnify' goal.
            | forall a. TermEntry a => Unified (Term a) (Term a)
              -- | A proof of an 'Identical' goal.
@@ -75,9 +79,19 @@ data Proof =
            | forall a. TermEntry a => Equated (Term a) (Term a)
              -- | A proof of a 'Not' goal.
            | Negated Goal
+             -- | A proof of an 'And' goal. Contains a proof of each subgoal in the conjunction.
+           | ProvedAnd Proof Proof
+             -- | A proof of an 'Or' goal. The 'Proof' is a proof of the left subgoal, and the
+             -- 'Goal' is the unproven right subgoal.
+           | ProvedLeft Proof Goal
+             -- | A proof of an 'Or' goal. The 'Proof' is a proof of the right subgoal, and the
+             -- 'Goal' is the unproven left subgoal.
+           | ProvedRight Goal Proof
+             -- | A (trivial) proof of 'Top'.
+           | ProvedTop
 
 instance Eq Proof where
-  (==) (Resolved p ps) (Resolved p' ps') = p == p' && ps == ps'
+  (==) (Resolved p proof) (Resolved p' proof') = p == p' && proof == proof'
   (==) (Unified t1 t2) (Unified t1' t2') = case cast (t1', t2') of
     Just t' -> (t1, t2) == t'
     Nothing -> False
@@ -88,14 +102,22 @@ instance Eq Proof where
     Just t' -> (t1, t2) == t'
     Nothing -> False
   (==) (Negated g) (Negated g') = g == g'
+  (==) (ProvedAnd p1 p2) (ProvedAnd p1' p2') = p1 == p1' && p2 == p2'
+  (==) (ProvedLeft p g) (ProvedLeft p' g') = p == p' && g == g'
+  (==) (ProvedRight g p) (ProvedRight g' p') = g == g' && p == p'
+  (==) ProvedTop ProvedTop = True
   (==) _ _ = False
 
 instance Show Proof where
-  show (Resolved p ps) = "Resolved (" ++ show p ++ ")" ++ show ps
+  show (Resolved p proof) = "Resolved (" ++ show p ++ ") (" ++ show proof ++ ")"
   show (Unified t1 t2) = "Unified (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
   show (Identified t1 t2) = "Identified (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
   show (Equated t1 t2) = "Equated (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
   show (Negated g) = "Negated (" ++ show g ++ ")"
+  show (ProvedAnd p1 p2) = "ProvedAnd (" ++ show p1 ++ ") (" ++ show p2
+  show (ProvedLeft p g) = "ProvedLeft (" ++ show p ++ ") (" ++ show g ++ ")"
+  show (ProvedRight g p) = "ProvedRight (" ++ show g ++ ") (" ++ show p ++ ")"
+  show ProvedTop = "ProvedTop"
 
 -- | The output of the solver. This is meant to be treated as an opaque data type which can be
 -- inspected via the functions defined in this module.
@@ -104,9 +126,26 @@ type ProofResult = (Proof, Unifier)
 -- | Return the list of all goals or subgoals in the given result which unify with a particular goal.
 searchProof :: ProofResult -> Goal -> [Goal]
 searchProof (proof, _) goal = searchProof' proof (runRenamed $ renameGoal goal)
-  where searchProof' p@(Resolved _ ps) g =
-          maybeToList (matchGoal (getSolution (p, mempty)) g) ++ concatMap (\p' -> searchProof' p' g) ps
+  where
+        -- Proofs with subproof to be search recursively
+        searchProof' p@(Resolved _ subProof) g =
+          maybeToList (matchGoal (getSolution (p, mempty)) g) ++ -- Match the root of the proof tree
+          searchProof' subProof g                                -- Recursively search the subproof
+        searchProof' p@(ProvedAnd p1 p2) g =
+          maybeToList (matchGoal (getSolution (p, mempty)) g) ++ -- Match the root of the proof tree
+          searchProof' p1 g ++                                   -- Recurse on the left subproof
+          searchProof' p2 g                                      -- Recurse on the right subproof
+        searchProof' p@(ProvedLeft p' _) g =
+          maybeToList (matchGoal (getSolution (p, mempty)) g) ++ -- Match the root of the proof tree
+          searchProof' p' g                                      -- Recursively search the subproof
+        searchProof' p@(ProvedRight _ p') g =
+          maybeToList (matchGoal (getSolution (p, mempty)) g) ++ -- Match the root of the proof tree
+          searchProof' p' g                                      -- Recursively search the subproof
+
+        -- Goals with no subproof, just try to match the goal itself
         searchProof' p g = maybeToList (matchGoal (getSolution (p, mempty)) g)
+
+        -- Unify a goal with the query goal and return the unified goal, or Nothing
         matchGoal (PredGoal prd@(Predicate name arg) _) (PredGoal (Predicate name' arg') _)
           | name == name' = case cast arg' >>= mgu arg of
               Just u -> Just $ PredGoal (unifyPredicate u prd) []
@@ -116,6 +155,14 @@ searchProof (proof, _) goal = searchProof' proof (runRenamed $ renameGoal goal)
         matchGoal (Identical t1 t2) (Identical t1' t2') = matchBinary Identical (t1, t2) (t1', t2')
         matchGoal (Equal t1 t2) (Equal t1' t2') = matchBinary Equal (t1, t2) (t1', t2')
         matchGoal (Not g) (Not g') = fmap Not $ matchGoal g g'
+        matchGoal (And g1 g2) (And g1' g2') = do g1'' <- matchGoal g1 g1'
+                                                 g2'' <- matchGoal g2 g2'
+                                                 return $ And g1'' g2''
+        matchGoal (Or g1 g2) (Or g1' g2') = do g1'' <- matchGoal g1 g1'
+                                               g2'' <- matchGoal g2 g2'
+                                               return $ Or g1'' g2''
+        matchGoal Top Top = Just Top
+        matchGoal Bottom Bottom = Just Bottom
         matchGoal _ _ = Nothing
 
         matchBinary :: (TermEntry a, TermEntry b, TermEntry c, TermEntry d) =>
@@ -148,6 +195,10 @@ getSolution (proof, _) = case proof of
   Identified t1 t2 -> Identical t1 t2
   Equated t1 t2 -> Equal t1 t2
   Negated g -> Not g
+  ProvedAnd p1 p2 -> And (getSolution (p1, mempty)) (getSolution (p2, mempty))
+  ProvedLeft p g -> Or (getSolution (p, mempty)) g
+  ProvedRight g p -> Or g (getSolution (p, mempty))
+  ProvedTop -> Top
 
 -- | Get the set of theorems which were proven by each 'Proof' tree in a forest.
 getAllSolutions :: [ProofResult] -> [Goal]
@@ -196,16 +247,32 @@ The basic algorithm is fairly simple. We maintain a set of goals which need to b
 this set consists only of the client's input goal. While the set is not empty, we remove a goal and
 find all clauses in the program whose positive literal is the same predicate (name and type) as the
 current goal. For each such alternative, we attempt to unify the goal with the positive literal. If
-unification succeeds, we apply the unifier to each of the negative literals of the clause and add
-these literals to the set of goals. If unification fails or if there are no matching clauses, the
-goal fails and we backtrack until we reach a choice point, at which we try the next alternative
-goal. If a goal fails and all choice-points have been exhaustively tried, then the whole proof
-fails. If a goal succeeds and there are untried choice-points, we backtrack and generate additional
-proofs if possible.
+unification succeeds, we apply the unifier to the negative literal of the clause and add that
+literal to the set of goals. If unification fails or if there are no matching clauses, the goal
+fails and we backtrack until we reach a choice point, at which we try the next alternative goal. If
+a goal fails and all choice-points have been exhaustively tried, then the whole proof fails. If a
+goal succeeds and there are untried choice-points, we backtrack and generate additional proofs if
+possible.
 
-Non-predicate goals have different semantics. For 'CanUnify' goals, instead of looking for matching
-clauses and adding new subgoals, we simply try to find a unifier for the relevant terms and succeed
-or fail accordingly.
+Non-predicate goals have different semantics:
+
+* For 'CanUnify' goals, instead of looking for matching clauses and adding new subgoals, we simply
+  try to find a unifier for the relevant terms and succeed or fail accordingly.
+* For 'Identical' goals, we compare the terms using the '==' operator for 'Term' and succeed or fail
+  if the result is 'True' or 'False', respectively.
+* For 'Equal' goals, we evaluate the right-hand side using 'fromTerm'. If that succeeds, we convert
+  the now-simplified constant back to its abstract 'Term' representation using 'toTerm', and then
+  attempt to unify that 'Term' with the left-hand side.
+* For 'Not' goals, we attempt to prove the negated goal, and fail if the inner proof succeeds or
+  vice versa.
+* For 'And' goals, we first attempt to prove the left-hand side. If that succeeds, we apply the
+  resulting unifier to the right-hand side and then attempt to prove the unified goal.
+* For 'Or' goals, we introduce a choice-point and nondeterministically attempt to prove both
+  subgoals. If either subgoal succeeds, the proof will succeed at least once. If both succeed, the
+  prover will backtrack over both possible alternatives, succeeding once for each time either
+  subgoal suceeds.
+* For 'Top', we simply emit a trivial proof with an empty 'Unifier'.
+* For 'Bottom', we immediately fail.
 
 There is an additional layer of complexity here. We do not proceed from one step of the algorithm to
 the next directly. Instead, at each intermediate step, we invoke one of the continuation functions
@@ -241,12 +308,6 @@ data SolverCont (m :: * -> *) =
                -- trivial proof of the equality of the terms. The zero-overhead version of this
                -- continuation is 'proveIdenticalWith'.
              , tryIdentical :: forall a. TermEntry a => Term a -> Term a -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove the negation of a goal. No
-               -- new unifications are created. The resulting computation in the 'SolverT' monad
-               -- should either fail with 'mzero' (if the negated goal succeeds at least once) or
-               -- produce a trivial proof of the negation of the goal. The zero-overhead version of
-               -- this continuation is 'proveNotWith'.
-             , tryNot :: Goal -> SolverT m ProofResult
                -- | Continuation to be invoked when attempting to prove equality of arithmetic
                -- expressions. The resulting computation in the 'SolverT' monad should evaluate the
                -- right-hand side as an arithmetic expression and, if successful, attempt to unify
@@ -255,6 +316,40 @@ data SolverCont (m :: * -> *) =
                -- free variables) the program should terminate with a runtime error. The zero-
                -- overhead version of this continuation is 'proveEqualWith'.
              , tryEqual :: forall a. TermEntry a => Term a -> Term a -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove the negation of a goal. No
+               -- new unifications are created. The resulting computation in the 'SolverT' monad
+               -- should either fail with 'mzero' (if the negated goal succeeds at least once) or
+               -- produce a trivial proof of the negation of the goal. The zero-overhead version of
+               -- this continuation is 'proveNotWith'.
+             , tryNot :: Goal -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove the conjunction of two
+               -- goals. The resulting computation in the 'SolverT' monad should succeed, emitting a
+               -- 'ProvedAnd' result with subproofs for each subgoal, if and only if both subgoals
+               -- succeed. Further, it is important that unifications made while proving the left-
+               -- hand side are applied to the right-hand side before proving it. The zero-overhead
+               -- version of this continuation is 'proveAndWith'.
+             , tryAnd :: Goal -> Goal -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove the first subgoal in a
+               -- disjunction. The resulting computation in the 'SolverT' monad should either fail
+               -- with 'mzero', or emit 'ProvedLeft' and 'ProvedRight' proofs for each time the left
+               -- and right subgoals succeed, respectively. The zero-overhead version of this
+               -- continuation is 'proveOrLeftWith'.
+             , tryOrLeft :: Goal -> Goal -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove the second subgoal in a
+               -- disjunction. This continuation should have the same semantics as 'tryOr', modulo
+               -- effects in the underlying monad. The zero-overhead version of this continuation is
+               -- 'proveOrRightWith'.
+             , tryOrRight :: Goal -> Goal -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove 'Top'. This continuation
+               -- should always succeed with 'ProvedTop', perhaps after performing effects in the
+               -- underlying monad. The zero-overhead version of this continuation is
+               -- 'proveTopWith'.
+             , tryTop :: SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove 'Bottom'. This continuation
+               -- should always fail with 'mzero', perhaps after performing effects in the
+               -- underlying monad. The zero-overhead version of this continuation is
+               -- 'proveBottomWith'.
+             , tryBottom :: SolverT m ProofResult
                -- | Continuation to be invoked when a goal fails because there are no matching
                -- clauses. This computation should result in 'mzero', but may perform effects in the
                -- underlying monad first.
@@ -268,8 +363,13 @@ solverCont = SolverCont { tryPredicate = provePredicateWith solverCont
                         , retryPredicate = provePredicateWith solverCont
                         , tryUnifiable = proveUnifiableWith solverCont
                         , tryIdentical = proveIdenticalWith solverCont
-                        , tryNot = proveNotWith solverCont
                         , tryEqual = proveEqualWith solverCont
+                        , tryNot = proveNotWith solverCont
+                        , tryAnd = proveAndWith solverCont
+                        , tryOrLeft = proveOrLeftWith solverCont
+                        , tryOrRight = proveOrRightWith solverCont
+                        , tryTop = proveTopWith solverCont
+                        , tryBottom = proveBottomWith solverCont
                         , errorUnknownPred = const mzero
                         }
 
@@ -284,18 +384,21 @@ prove = proveWith solverCont
 -- and each unified negative literal is proven as a subgoal using the given continuations.
 provePredicateWith :: Monad m => SolverCont m -> Predicate -> HornClause -> SolverT m ProofResult
 provePredicateWith cont p c = do
-  (gs, u) <- getSubGoals p c
-  (subProofs, netU) <- proveSubGoals u gs
-  return (Resolved (unifyPredicate netU p) subProofs, netU)
-  where getSubGoals p' c' = do mgs <- lift $ unify p' c'
-                               case mgs of
-                                 Just gs -> return gs
-                                 Nothing -> mzero
-        proveSubGoals u [] = return ([], u)
-        proveSubGoals u (g:gs) = do let g' = unifyGoal u g
-                                    (proof, u') <- proveWith cont g'
-                                    (proofs, u'') <- proveSubGoals (u <> u') gs
-                                    return (proof:proofs, u'')
+  (g, u) <- getSubGoal p c
+  case g of
+    -- Exit early (without invoking any continuations) if the subgoal is Top. This isn't strictly
+    -- necessary; if we were to invoke the continuation on Top it would just succeed immediately.
+    -- But we want to give any observers the appearance of this goal succeeding immediately, with no
+    -- further calls. It just makes the control flow a bit more intuitive (i.e. more similar to
+    -- Prolog's)
+    Top -> return (Resolved (unifyPredicate u p) ProvedTop, u)
+    _ -> do (subProof, u') <- proveWith cont g
+            let netU = u <> u'
+            return (Resolved (unifyPredicate netU p) subProof, netU)
+  where getSubGoal p' c' = do mg <- lift $ unify p' c'
+                              case mg of
+                                Just g -> return g
+                                Nothing -> mzero
 
 -- | Check if the given terms can unify. If so, produce the unifier and a trivial proof of their
 -- unifiability. Use the given continuations when proving subgoals.
@@ -313,12 +416,6 @@ proveIdenticalWith _ t1 t2 = if t1 == t2
   then return (Identified t1 t2, mempty)
   else mzero
 
--- | Succeed if and only if the given 'Goal' fails. No new bindings are created in the process.
-proveNotWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
-proveNotWith cont g = ifte (once $ proveWith cont g)
-                           (const mzero)
-                           (return (Negated g, mempty))
-
 -- | Check if the value of the right-hand side unifies with the left-hand side.
 proveEqualWith :: (TermEntry a, Monad m) =>
                   SolverCont m -> Term a -> Term a -> SolverT m ProofResult
@@ -330,6 +427,40 @@ proveEqualWith _ lhs rhs = case mgu lhs (eval rhs) of
           Just t' -> toTerm t'
           Nothing -> error "Variables are not sufficiently instantiated."
 
+-- | Succeed if and only if the given 'Goal' fails. No new bindings are created in the process.
+proveNotWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
+proveNotWith cont g = ifte (once $ proveWith cont g)
+                           (const mzero)
+                           (return (Negated g, mempty))
+
+-- | Succeed if and only if both goals succeed in sequence. Unifications made while proving the
+-- first goal will be applied to the second goal before proving it.
+proveAndWith :: Monad m => SolverCont m -> Goal -> Goal -> SolverT m ProofResult
+proveAndWith cont g1 g2 =
+  do (proofLeft, uLeft) <- proveWith cont g1
+     (proofRight, uRight) <- proveWith cont $ unifyGoal uLeft g2
+     return (ProvedAnd proofLeft proofRight, uLeft <> uRight)
+
+-- | Succeed if and only if the first of the given 'Goal's succeeds.
+proveOrLeftWith :: Monad m => SolverCont m -> Goal -> Goal -> SolverT m ProofResult
+proveOrLeftWith cont g1 g2 =
+  do (proof, u) <- proveWith cont g1
+     return (ProvedLeft proof g2, u)
+
+-- | Succeed if and only if the second of the given 'Goal's succeeds.
+proveOrRightWith :: Monad m => SolverCont m -> Goal -> Goal -> SolverT m ProofResult
+proveOrRightWith cont g1 g2 =
+  do (proof, u) <- proveWith cont g2
+     return (ProvedRight g1 proof, u)
+
+-- | Always succeed, creating no new bindings.
+proveTopWith :: Monad m => SolverCont m -> SolverT m ProofResult
+proveTopWith _ = return (ProvedTop, mempty)
+
+-- | Always fail.
+proveBottomWith :: Monad m => SolverCont m -> SolverT m ProofResult
+proveBottomWith _ = mzero
+
 -- | Produce a proof of the goal. This function will either fail, or backtrack over all possible
 -- proofs. It will invoke the appropriate continuations in the given 'SolverCont' whenever a
 -- relevant event occurs during the course of the proof.
@@ -339,5 +470,9 @@ proveWith cont g = case g of
   PredGoal p (c:cs) -> tryPredicate cont p c `mplus` msum (map (retryPredicate cont p) cs)
   CanUnify t1 t2 -> tryUnifiable cont t1 t2
   Identical t1 t2 -> tryIdentical cont t1 t2
-  Not g' -> tryNot cont g'
   Equal t1 t2 -> tryEqual cont t1 t2
+  Not g' -> tryNot cont g'
+  And g1 g2 -> tryAnd cont g1 g2
+  Or g1 g2 -> tryOrLeft cont g1 g2 `mplus` tryOrRight cont g1 g2
+  Top -> tryTop cont
+  Bottom -> tryBottom cont

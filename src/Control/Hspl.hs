@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraints
 {-# OPTIONS_HADDOCK show-extensions #-}
@@ -28,7 +29,7 @@ module Control.Hspl (
   , SubTerm
   , NoVariables
   -- * Building HSPL programs
-  , GoalWriter
+  , GoalWriter (..)
   , ClauseWriter (..)
   -- ** Defining predicates
   , predicate
@@ -38,12 +39,18 @@ module Control.Hspl (
   -- ** Special predicates
   -- | Some predicates have special semantics. These can appear as goals on the right-hand side of
   -- '|-'.
+  --
+  -- *** Unification, identity, equality, and inequality
   , (|=|)
   , (|\=|)
   , (|==|)
   , (|\==|)
-  , lnot
   , is
+  -- *** Logical connectives
+  , lnot
+  , (|||)
+  , true
+  , false
   -- * Running HSPL programs
   , runHspl
   , runHspl1
@@ -92,6 +99,7 @@ module Control.Hspl (
 #if __GLASGOW_HASKELL__ < 710
 import Control.Applicative
 #endif
+import Control.Exception (assert)
 import Control.Monad.Writer
 import Data.Data
 
@@ -121,33 +129,20 @@ import           Control.Hspl.Internal.Solver ( ProofResult
 type Clause = Ast.HornClause
 
 -- | A monad for appending 'Goal's to the definition of a 'Clause'.
-type GoalWriter = Writer [Goal]
+newtype GoalWriter a = GW { unGW :: Writer Goal a }
+  deriving (Functor, Applicative, Monad, MonadWriter Goal)
 
 -- | A monad for appending alternative 'Clause's to a 'Predicate'. This monad creates a list of
 -- functions waiting for a predicate name. When applied to a string, they produce clauses whose
 -- positive literals has that name.
 newtype ClauseWriter t a = CW { unCW :: Writer [String -> Clause] a }
-
-instance Functor (ClauseWriter t) where
-  fmap f m = CW $ fmap f $ unCW m
-
-instance Applicative (ClauseWriter t) where
-  pure = CW . pure
-  f <*> g = CW $ unCW f <*> unCW g
-
-instance Monad (ClauseWriter t) where
-  m >>= f = CW $ unCW m >>= unCW . f
-  return = pure
-
-instance MonadWriter [String -> Clause] (ClauseWriter t) where
-  tell = CW . tell
-  listen = CW . listen . unCW
-  pass = CW . pass . unCW
+  deriving (Functor, Applicative, Monad, MonadWriter [String -> Clause])
 
 -- | Predicate application. @pred? term@ is a goal that succeeds if the predicate @pred@ applied
 -- to @term@ is true.
+infix 9 ?
 (?) :: TermData a => Predicate (HSPLType a) -> a -> GoalWriter ()
-p? arg = tell [Ast.PredGoal (Ast.predicate (predName p) arg) (definitions p)]
+p? arg = tell $ Ast.PredGoal (Ast.predicate (predName p) arg) (definitions p)
 
 -- | A declaration of a predicate with a given name and set of alternatives. Parameterized by the
 -- type of the argument to which the predicate can be applied.
@@ -191,7 +186,7 @@ predicate name gs = Predicate name (map ($name) $ execWriter $ unCW gs)
 -- prove a predicate, HSPL will first find all definitions of the predicate which match the goal,
 -- and then try to prove any subgoals of the 'match' statement (which can be specified using '|-').
 match :: TermData a => a -> ClauseWriter (HSPLType a) ()
-match t = tell [\p -> Ast.HornClause (Ast.predicate p $ toTerm t) []]
+match t = tell [\p -> Ast.HornClause (Ast.predicate p $ toTerm t) Top]
 
 -- | Indicates the beginning of a list of subgoals in a predicate definition. Whenever the 'match'
 -- statement on the left-hand side of '|-' succeeds, the solver attempts to prove all subgoals on
@@ -200,14 +195,14 @@ infixr 0 |-
 (|-) :: ClauseWriter t a -> GoalWriter b -> ClauseWriter t ()
 p |- gs =
   let [f] = execWriter $ unCW p
-      goals = execWriter gs
-      addGoals name = let Ast.HornClause prd ogGoals = f name
-                      in Ast.HornClause prd (ogGoals ++ goals)
-  in tell [addGoals]
+      goal = execWriter $ unGW gs
+      addGoal name = let Ast.HornClause prd ogGoal = f name
+                     in assert (ogGoal == Top) $ Ast.HornClause prd goal
+  in tell [addGoal]
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
 (|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
-t1 |=| t2 = tell [Ast.CanUnify (toTerm t1) (toTerm t2)]
+t1 |=| t2 = tell $ Ast.CanUnify (toTerm t1) (toTerm t2)
 
 -- | Negation of '|=|'. The predicate @t1 |\\=| t2@ succeeds if and only if @t1 |=| t2@ fails. No
 -- new bindings are created.
@@ -217,7 +212,7 @@ t1 |\=| t2 = lnot $ t1 |=| t2
 -- | Test if two terms are unified. This predicate succeeds if and only if the two terms are
 -- identical under the current unfier. No new bindings are created.
 (|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
-t1 |==| t2 = tell [Ast.Identical (toTerm t1) (toTerm t2)]
+t1 |==| t2 = tell $ Ast.Identical (toTerm t1) (toTerm t2)
 
 -- | Negation of '|==|'. The predicate @t1 |\\==| t2@ succeeds if and only if @t1 |==| t2@ fails.
 -- No new bindings are created.
@@ -227,9 +222,27 @@ t1 |\==| t2 = lnot $ t1 |==| t2
 -- | Logical negation. @lnot p@ is a predicate which is true if and only if the predicate @p@ is
 -- false. @lnot@ does not create any new bindings.
 lnot :: GoalWriter a -> GoalWriter ()
-lnot p = case execWriter p of
-  [g] -> tell [Not g]
-  _ -> error "lnot must be applied to exactly one predicate."
+lnot p =
+  let g = execWriter $ unGW p
+  in tell $ Not g
+
+-- | Logical disjunction. @p ||| q@ is a predicate which is true if either @p@ is true or @q@ is
+-- true. @|||@ will backtrack over alternatives, so if both @p@ and @q@ are true, it will produce
+-- multiple solutions.
+infixl 8 |||
+(|||) :: GoalWriter a -> GoalWriter b -> GoalWriter ()
+gw1 ||| gw2 =
+  let g1 = execWriter $ unGW gw1
+      g2 = execWriter $ unGW gw2
+  in tell $ Or g1 g2
+
+-- | A predicate which always succeeds.
+true :: GoalWriter ()
+true = tell Top
+
+-- | A predicate which always fails.
+false :: GoalWriter ()
+false = tell Bottom
 
 -- | Evaluate an arithmetic expression. The right-hand side is evaluated, and the resulting numeric
 -- constant is then unified with the left-hand side. Note that 'is' will cause a run-time error if
@@ -238,7 +251,7 @@ lnot p = case execWriter p of
 -- formed using '|+|', '|-|', etc.
 infix 1 `is`
 is :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
-is a b = tell [Equal (toTerm a) (toTerm b)]
+is a b = tell $ Equal (toTerm a) (toTerm b)
 
 -- | Addition. Create a term representing the sum of two terms.
 infixl 8 |+|
@@ -282,9 +295,9 @@ a |%| b = Ast.Modulus (toTerm a) (toTerm b)
 -- | Query an HSPL program for a given goal. The 'ProofResult's returned can be inspected using
 -- functions like `getAllSolutions`, `searchProof`, etc.
 runHspl :: GoalWriter a -> [ProofResult]
-runHspl gs = case execWriter gs of
-  [g@(PredGoal _ _)] -> Solver.runHspl g
-  _ -> error "Please specify exactly one predicate to prove."
+runHspl gs =
+  let g = execWriter $ unGW gs
+  in Solver.runHspl g
 
 -- | Query an HSPL program for a given goal. If a proof is found, stop immediately instead of
 -- backtracking to look for additional solutions. If no proof is found, return 'Nothing'.
@@ -295,9 +308,9 @@ runHspl1 gs = case runHsplN 1 gs of
 
 -- | Query an HSPL program for a given goal. Stop after @n@ solutions are found.
 runHsplN :: Int -> GoalWriter a -> [ProofResult]
-runHsplN n gs = case execWriter gs of
-  [g@(PredGoal _ _)] -> Solver.runHsplN n g
-  _ -> error "Please specify exactly one predicate to prove."
+runHsplN n gs =
+  let g = execWriter $ unGW gs
+  in Solver.runHsplN n g
 
 {- $types
 HSPL implements a type system which prevents unification of terms with different types. The HSPL

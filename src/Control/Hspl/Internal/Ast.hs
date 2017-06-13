@@ -79,6 +79,7 @@ import Control.Monad.State
 import Data.Data
 import Data.List
 import Data.Maybe
+import Data.Monoid (Monoid (..))
 import GHC.Generics
 #if __GLASGOW_HASKELL__ < 800
   hiding (Arity)
@@ -653,18 +654,30 @@ data Goal =
             -- | A goal which succeeds if the two 'Term's are identical under the current
             -- 'Control.Hspl.Internal.Unification.Unifier'.
           | forall t. TermEntry t => Identical (Term t) (Term t)
-            -- | A goal which succeeds only if the inner 'Goal' fails.
-          | Not Goal
             -- | A goal which succeeds if the right-hand side, after being evaluated as an
             -- arithmetic expression, unifies with the left-hand side.
           | forall t. TermEntry t => Equal (Term t) (Term t)
+            -- | A goal which succeeds only if the inner 'Goal' fails.
+          | Not Goal
+            -- | A goal which succeeds if and only if both subgoals succeed.
+          | And Goal Goal
+            -- | A goal which succeeds if either subgoal succeeds.
+          | Or Goal Goal
+            -- | A goal which always succeeds.
+          | Top
+            -- | A goal which always fails.
+          | Bottom
 
 instance Show Goal where
   show (PredGoal p _) = show p
   show (CanUnify t1 t2) = show t1 ++ " |=| " ++ show t2
   show (Identical t1 t2) = show t1 ++ " |==| " ++ show t2
-  show (Not g) = "lnot (" ++ show g ++ ")"
   show (Equal t1 t2) = show t1 ++ " `is` " ++ show t2
+  show (Not g) = "lnot (" ++ show g ++ ")"
+  show (And g1 g2) = show g1 ++ ", " ++ show g2
+  show (Or g1 g2) = show g1 ++ " ||| " ++ show g2
+  show Top = "true"
+  show Bottom = "false"
 
 instance Eq Goal where
   (==) (PredGoal p cs) (PredGoal p' cs') = p == p' && cs == cs'
@@ -674,16 +687,29 @@ instance Eq Goal where
   (==) (Identical t1 t2) (Identical t1' t2') = case cast (t1', t2') of
     Just t' -> (t1, t2) == t'
     Nothing -> False
-  (==) (Not g) (Not g') = g == g'
   (==) (Equal t1 t2) (Equal t1' t2') = case cast (t1', t2') of
     Just t' -> (t1, t2) == t'
     Nothing -> False
+  (==) (Not g) (Not g') = g == g'
+  (==) (And g1 g2) (And g1' g2') = g1 == g1' && g2 == g2'
+  (==) (Or g1 g2) (Or g1' g2') = g1 == g1' && g2 == g2'
+  (==) Top Top = True
+  (==) Bottom Bottom = True
   (==) _ _ = False
 
+instance Monoid Goal where
+  mappend = And
+  mempty = Top
+
 -- | A 'HornClause' is the logical disjunction of a single positive literal (a 'Predicate') and 0 or
--- or more negated literals. In this implementation, the negative literals are 'Goal's, the
--- conjunction of which implies the the positive literal.
-data HornClause = HornClause Predicate [Goal]
+-- or more negated literals. In this implementation, the negative _literal_ is a single 'Goal',
+-- whose truth implies that of the positive literal. Because a single 'Goal' can be the conjunction
+-- of many goals (see 'And'), this is sufficient to represent all Horn clauses.
+--
+-- We can also represent some clauses which are not strictly Horn clauses, if the negative literal
+-- contains an 'Or' subgoal. However, such clauses can always be rewritten as multiple true Horn
+-- clauses; we just forego that rewriting for performance and simplicity.
+data HornClause = HornClause Predicate Goal
   deriving (Show, Eq)
 
 -- | Determine the HSPL type of a 'HornClause', which is defined to be the type of the positive

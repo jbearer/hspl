@@ -9,6 +9,7 @@
 module AstTest where
 
 import Data.Data
+import Data.Monoid hiding (Sum, Product)
 import GHC.Generics
 
 import Testing
@@ -372,8 +373,8 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       PredGoal (predicate "foo" True) [] `shouldNotEqual` PredGoal (predicate "foo" ()) []
       PredGoal (predicate "foo" True) [] `shouldNotEqual` PredGoal (predicate "foo" False) []
     it "should compare based on the alternatives" $ do
-      let c1 = HornClause (predicate "c1pred" ()) []
-      let c2 = HornClause (predicate "c2pred" ()) []
+      let c1 = HornClause (predicate "c1pred" ()) Top
+      let c2 = HornClause (predicate "c2pred" ()) Top
       PredGoal (predicate "foo" ()) [c1] `shouldEqual` PredGoal (predicate "foo" ()) [c1]
       PredGoal (predicate "foo" ()) [c1] `shouldNotEqual` PredGoal (predicate "foo" ()) [c2]
       PredGoal (predicate "foo" ()) [c1] `shouldNotEqual` PredGoal (predicate "foo" ()) [c1, c2]
@@ -405,10 +406,6 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         Identical (toTerm 'a') (toTerm 'b') `shouldNotEqual` Identical (toTerm True) (toTerm False)
         Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
           Identical (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))
-  describe "Not goals" $
-    it "should compare according to the inner goal" $ do
-      Not (PredGoal (predicate "foo" ()) []) `shouldEqual` Not (PredGoal (predicate "foo" ()) [])
-      Not (PredGoal (predicate "foo" ()) []) `shouldNotEqual` Not (PredGoal (predicate "bar" ()) [])
   describe "Equal goals" $ do
     context "of the same type" $
       it "should compare according to the arguments" $ do
@@ -426,17 +423,53 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
           Equal (toTerm (1.0 :: Double)) (toTerm (2.0 :: Double))
         Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int)) `shouldNotEqual`
           Equal (toTerm (Var "x" :: Var Double)) (toTerm (Var "y" :: Var Double))
+  describe "Not goals" $
+    it "should compare according to the inner goal" $ do
+      Not (PredGoal (predicate "foo" ()) []) `shouldEqual` Not (PredGoal (predicate "foo" ()) [])
+      Not (PredGoal (predicate "foo" ()) []) `shouldNotEqual` Not (PredGoal (predicate "bar" ()) [])
+  describe "And goals" $
+    it "should compare according to the subgoals" $ do
+      And (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldEqual`
+        And (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) [])
+      And (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
+        And (PredGoal (predicate "foo'" ()) []) (PredGoal (predicate "bar" ()) [])
+      And (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
+        And (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar'" ()) [])
+  describe "Or goals" $
+    it "should compare according to the subgoals" $ do
+      Or (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldEqual`
+        Or (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) [])
+      Or (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
+        Or (PredGoal (predicate "foo'" ()) []) (PredGoal (predicate "bar" ()) [])
+      Or (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
+        Or (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar'" ()) [])
+  describe "Top" $ do
+    it "should equal itself" $
+      Top `shouldEqual` Top
+    it "should not equal any other goal" $ do
+      Top `shouldNotEqual` Bottom
+      Top `shouldNotEqual` And Top Top
+  describe "Bottom" $ do
+    it "should equal itself" $
+      Bottom `shouldEqual` Bottom
+    it "should not equal any other goal" $ do
+      Bottom `shouldNotEqual` Top
+      Bottom `shouldNotEqual` And Bottom Bottom
+  describe "goals" $
+    it "should form a monoid under conjunction" $ do
+      mempty `shouldBe` Top
+      mappend Top Bottom `shouldBe` And Top Bottom
   describe "clauses" $ do
     it "should have type corresponding to the type of the positive literal" $ do
-      clauseType (HornClause foo []) `shouldBe` predType foo
-      clauseType (HornClause foo [PredGoal (predicate "P" ()) []]) `shouldBe` predType foo
-      clauseType (HornClause foo [PredGoal (predicate "P" ()) [], PredGoal (predicate "Q" (True, 'a')) []])
+      clauseType (HornClause foo Top) `shouldBe` predType foo
+      clauseType (HornClause foo (PredGoal (predicate "P" ()) [])) `shouldBe` predType foo
+      clauseType (HornClause foo (PredGoal (predicate "P" ()) [] <> PredGoal (predicate "Q" (True, 'a')) []))
         `shouldBe` predType foo
     it "should compare according to the literals" $ do
-      HornClause foo [] `shouldEqual` HornClause foo []
-      HornClause foo [PredGoal bar [], PredGoal baz []] `shouldEqual`
-        HornClause foo [PredGoal bar [], PredGoal baz []]
-      HornClause foo [] `shouldNotEqual` HornClause foo [PredGoal bar []]
-      HornClause foo [PredGoal bar [], PredGoal baz []] `shouldNotEqual`
-        HornClause bar [PredGoal foo [], PredGoal baz []]
-      HornClause (predicate "P" ()) [] `shouldNotEqual` HornClause (predicate "P" True) []
+      HornClause foo Top `shouldEqual` HornClause foo Top
+      HornClause foo (PredGoal bar [] <> PredGoal baz []) `shouldEqual`
+        HornClause foo (PredGoal bar [] <> PredGoal baz [])
+      HornClause foo Top `shouldNotEqual` HornClause foo (PredGoal bar [])
+      HornClause foo (PredGoal bar [] <> PredGoal baz []) `shouldNotEqual`
+        HornClause bar (PredGoal foo [] <> PredGoal baz [])
+      HornClause (predicate "P" ()) Top `shouldNotEqual` HornClause (predicate "P" True) Top
