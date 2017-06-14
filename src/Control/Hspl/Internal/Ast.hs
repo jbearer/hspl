@@ -654,9 +654,12 @@ data Goal =
             -- | A goal which succeeds if the two 'Term's are identical under the current
             -- 'Control.Hspl.Internal.Unification.Unifier'.
           | forall t. TermEntry t => Identical (Term t) (Term t)
-            -- | A goal which succeeds if the right-hand side, after being evaluated as an
-            -- arithmetic expression, unifies with the left-hand side.
+            -- | A goal which succeeds if the right-hand side, after being simplified, unifies with
+            -- the left-hand side.
           | forall t. TermEntry t => Equal (Term t) (Term t)
+            -- | A goal which succeeds if the evaluated left-hand side is less than the evaluated
+            -- right-hand side.
+          | forall t. (TermEntry t, Ord t) => LessThan (Term t) (Term t)
             -- | A goal which succeeds only if the inner 'Goal' fails.
           | Not Goal
             -- | A goal which succeeds if and only if both subgoals succeed.
@@ -673,6 +676,7 @@ instance Show Goal where
   show (CanUnify t1 t2) = show t1 ++ " |=| " ++ show t2
   show (Identical t1 t2) = show t1 ++ " |==| " ++ show t2
   show (Equal t1 t2) = show t1 ++ " `is` " ++ show t2
+  show (LessThan t1 t2) = show t1 ++ " |<| " ++ show t2
   show (Not g) = "lnot (" ++ show g ++ ")"
   show (And g1 g2) = show g1 ++ ", " ++ show g2
   show (Or g1 g2) = show g1 ++ " ||| " ++ show g2
@@ -690,6 +694,9 @@ instance Eq Goal where
   (==) (Equal t1 t2) (Equal t1' t2') = case cast (t1', t2') of
     Just t' -> (t1, t2) == t'
     Nothing -> False
+  (==) (LessThan t1 t2) (LessThan t1' t2') = case cast (t1', t2') of
+    Just t' -> (t1, t2) == t'
+    Nothing -> False
   (==) (Not g) (Not g') = g == g'
   (==) (And g1 g2) (And g1' g2') = g1 == g1' && g2 == g2'
   (==) (Or g1 g2) (Or g1' g2') = g1 == g1' && g2 == g2'
@@ -702,7 +709,7 @@ instance Monoid Goal where
   mempty = Top
 
 -- | A 'HornClause' is the logical disjunction of a single positive literal (a 'Predicate') and 0 or
--- or more negated literals. In this implementation, the negative _literal_ is a single 'Goal',
+-- or more negated literals. In this implementation, the negative /literal/ is a single 'Goal',
 -- whose truth implies that of the positive literal. Because a single 'Goal' can be the conjunction
 -- of many goals (see 'And'), this is sufficient to represent all Horn clauses.
 --

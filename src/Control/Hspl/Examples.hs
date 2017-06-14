@@ -105,7 +105,7 @@ distinct = predicate "distinct" $ do
     distinct? (v"y" :: Var a, v"xs" :: Var [a])
 
 -- $equals
--- Example illustrating the difference between '|=|' and '|==|'.
+-- Example illustrating the difference between 'is' and '|=|'.
 --
 -- >>> getAllSolutions $ runHspl $ isFoo? string "x"
 -- []
@@ -120,7 +120,7 @@ distinct = predicate "distinct" $ do
 -- created.
 isFoo :: Predicate String
 isFoo = predicate "isFoo" $
-  match (v"x") |- v"x" |==| "foo"
+  match (v"x") |- v"x" `is` "foo"
 
 -- | Succeeds if the argument can be unified with the string @"foo"@, and does so.
 couldBeFoo :: Predicate String
@@ -139,4 +139,4 @@ odds = predicate "odds" $ do
   match(1 :: Int)
   match(v"x") |- do
     odds? v"y"
-    v"x" `is` v"y" |+| (2 :: Int)
+    v"x" |==| v"y" |+| (2 :: Int)

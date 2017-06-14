@@ -43,9 +43,14 @@ module Control.Hspl (
   -- *** Unification, identity, equality, and inequality
   , (|=|)
   , (|\=|)
+  , is
+  , isnt
   , (|==|)
   , (|\==|)
-  , is
+  , (|<|)
+  , (|<=|)
+  , (|>|)
+  , (|>=|)
   -- *** Logical connectives
   , lnot
   , (|||)
@@ -210,14 +215,14 @@ t1 |=| t2 = tell $ Ast.CanUnify (toTerm t1) (toTerm t2)
 t1 |\=| t2 = lnot $ t1 |=| t2
 
 -- | Test if two terms are unified. This predicate succeeds if and only if the two terms are
--- identical under the current unfier. No new bindings are created.
-(|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
-t1 |==| t2 = tell $ Ast.Identical (toTerm t1) (toTerm t2)
+-- identical under the current unifier. No new bindings are created.
+is :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
+is t1 t2 = tell $ Ast.Identical (toTerm t1) (toTerm t2)
 
--- | Negation of '|==|'. The predicate @t1 |\\==| t2@ succeeds if and only if @t1 |==| t2@ fails.
+-- | Negation of 'is'. The predicate @t1 `isnt` t2@ succeeds if and only if @t1 `is` t2@ fails.
 -- No new bindings are created.
-(|\==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
-t1 |\==| t2 = lnot $ t1 |==| t2
+isnt :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
+isnt t1 t2 = lnot $ t1 `is` t2
 
 -- | Logical negation. @lnot p@ is a predicate which is true if and only if the predicate @p@ is
 -- false. @lnot@ does not create any new bindings.
@@ -229,7 +234,7 @@ lnot p =
 -- | Logical disjunction. @p ||| q@ is a predicate which is true if either @p@ is true or @q@ is
 -- true. @|||@ will backtrack over alternatives, so if both @p@ and @q@ are true, it will produce
 -- multiple solutions.
-infixl 8 |||
+infixl 1 |||
 (|||) :: GoalWriter a -> GoalWriter b -> GoalWriter ()
 gw1 ||| gw2 =
   let g1 = execWriter $ unGW gw1
@@ -244,14 +249,56 @@ true = tell Top
 false :: GoalWriter ()
 false = tell Bottom
 
--- | Evaluate an arithmetic expression. The right-hand side is evaluated, and the resulting numeric
--- constant is then unified with the left-hand side. Note that 'is' will cause a run-time error if
--- the right-hand side expression contains unbound variables, or is not a valid arithmetic
--- expression. An expression may contain constants, instantiated variables, and combinations thereof
--- formed using '|+|', '|-|', etc.
-infix 1 `is`
-is :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
-is a b = tell $ Equal (toTerm a) (toTerm b)
+-- | Simplify a term and test for equality. The right-hand side is evaluated, and the resulting
+-- constant is then unified with the left-hand side. Note that '|==|' will cause a run-time error if
+-- the right-hand side expression contains unbound variables.
+infix 2 |==|
+(|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
+a |==| b = tell $ Equal (toTerm a) (toTerm b)
+
+-- | Negation of '|==|'. The predicate @t1 |\\==| t2@ succeeds if and only if @t1 |==| t2@ fails. No
+-- new bindings are created. Note that in order to prove @t1 |\\==| t2@, the system will attempt to
+-- prove @t1 |==| t2@ and then negate the result. This means that @t1 |\\==| t2@ will still result
+-- in a runtime error if @t2@ has uninstantiated variables.
+infix 2 |\==|
+(|\==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
+a |\==| b = lnot $ a |==| b
+
+-- | Simplify terms and test for inequality. Both terms are evaluated and the resulting constants
+-- are compared using '<'. No new bindings are created. Note that a runtime error will be raised if
+-- /either/ term contains uninstantiated variables.
+infix 2 |<|
+(|<|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
+         a -> b -> GoalWriter ()
+t1 |<| t2 = tell $ LessThan (toTerm t1) (toTerm t2)
+
+-- | Simplify terms and test for equality or inequality. The right-hand term is evaluated first. It
+-- is then unified with the left-hand side. If unification succeeds, the predicate succeeds and the
+-- inequality check is not performed. This means that, while the right-hand side must not contain
+-- uninstantaited variables, the left-hand side can so long as it unifies with the results of the
+-- right-hand side. However, if unification fails, then the left-hand side /will/ be evaluated in
+-- order to perform the inequality check, at which point a runtime error will be raised if the left-
+-- hand side contains uninstantiated variables.
+infix 2 |<=|
+(|<=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
+         a -> b -> GoalWriter ()
+t1 |<=| t2 = t1 |==| t2 ||| (t1 |\==| t2 >> t1 |<| t2)
+
+-- | Simplify terms and test for inequality. @t1 |>| t2@ is equivalent to @t2 |<| t1@. See '|<|' for
+-- details.
+infix 2 |>|
+(|>|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
+         a -> b -> GoalWriter ()
+t1 |>| t2 = t2 |<| t1
+
+-- | Similar to '|<=|'; however, @t1 |>=| t2@ is /not/ equivalent to @t2 |<=| t1@. The difference is
+-- in the order of evaluation. Like '|<=|', '|>=|' evaluates its right-hand argument first and then
+-- short-circuits if the result unifies with the left-hand side. The left-hand side is only
+-- evaluated if unification fails.
+infix 2 |>=|
+(|>=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
+         a -> b -> GoalWriter ()
+t1 |>=| t2 = t1 |==| t2 ||| (t1 |\==| t2 >> t1 |>| t2)
 
 -- | Addition. Create a term representing the sum of two terms.
 infixl 8 |+|

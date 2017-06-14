@@ -423,6 +423,23 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
           Equal (toTerm (1.0 :: Double)) (toTerm (2.0 :: Double))
         Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int)) `shouldNotEqual`
           Equal (toTerm (Var "x" :: Var Double)) (toTerm (Var "y" :: Var Double))
+  describe "LessThan goals" $ do
+    context "of the same type" $
+      it "should compare according to the arguments" $ do
+        LessThan (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldEqual`
+          LessThan (toTerm (1 :: Int)) (toTerm (2 :: Int))
+        LessThan (toTerm (Var "x" :: Var Int)) (toTerm (1 :: Int)) `shouldEqual`
+          LessThan (toTerm (Var "x" :: Var Int)) (toTerm (1 :: Int))
+        LessThan (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldNotEqual`
+          LessThan (toTerm (1 :: Int)) (toTerm (1 :: Int))
+        LessThan (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int)) `shouldNotEqual`
+          LessThan (toTerm (Var "y" :: Var Int)) (toTerm (2 :: Int))
+    context "of different types" $
+      it "should compare unequal" $ do
+        LessThan (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldNotEqual`
+          LessThan (toTerm (1.0 :: Double)) (toTerm (2.0 :: Double))
+        LessThan (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int)) `shouldNotEqual`
+          LessThan (toTerm (Var "x" :: Var Double)) (toTerm (Var "y" :: Var Double))
   describe "Not goals" $
     it "should compare according to the inner goal" $ do
       Not (PredGoal (predicate "foo" ()) []) `shouldEqual` Not (PredGoal (predicate "foo" ()) [])

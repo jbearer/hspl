@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraints
 
 module SolverTest where
@@ -45,6 +46,8 @@ simpleBinary = HornClause (predicate "foo" ('a', 'b')) Top
 
 simpleSubGoal = HornClause (predicate "foo" 'a')
                            (PredGoal (predicate "bar" 'a') [HornClause (predicate "bar" 'a') Top])
+
+uninstantiatedVariablesError = "Variables are not sufficiently instantiated."
 
 test = describeModule "Control.Hspl.Internal.Solver" $ do
   describe "provePredicateWith" $ do
@@ -112,8 +115,34 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should fail when the left-hand side does not unify with the result of the right" $
       runTest (5 :: Int) (Product (toTerm (3 :: Int)) (toTerm (2 :: Int))) `shouldBe` []
     it "should error when the right-hand side contains uninstantiated variables" $
-      assertError "Variables are not sufficiently instantiated." $
+      assertError uninstantiatedVariablesError $
         runTest (Var "x" :: Var Int) (Sum (toTerm (42 :: Int)) (toTerm (Var "y" :: Var Int)))
+  describe "proveLessThanWith" $ do
+    let runTest :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
+                   a -> b -> [ProofResult]
+        runTest lhs rhs = observeAllSolver $ proveLessThanWith solverCont (toTerm lhs) (toTerm rhs)
+    it "should succeed when the left-hand side is less than the right-hand side" $ do
+      let (proofs, us) = unzip $ runTest 'a' 'b'
+      proofs `shouldBe` [ProvedLessThan 'a' 'b']
+      us `shouldBe` [mempty]
+    it "should simplify terms before comparing" $ do
+      let (proofs, us) = unzip $ runTest (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+                                         (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+      proofs `shouldBe` [ProvedLessThan (5 :: Int) (6 :: Int)]
+      us `shouldBe` [mempty]
+    it "should fail when the left-hand side is not less than the right-hand side" $ do
+      runTest 'b' 'b' `shouldBe` []
+      runTest 'b' 'a' `shouldBe` []
+      runTest (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+              (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int))) `shouldBe` []
+      runTest (Product (toTerm (2 :: Int)) (toTerm (4 :: Int)))
+              (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int))) `shouldBe` []
+    it "should error when the left-hand side contains uninstantiated variables" $
+      assertError uninstantiatedVariablesError $
+        runTest (Var "x" :: Var Char) 'b'
+    it "should error when the right-hand side contains uninstantiated variables" $
+      assertError uninstantiatedVariablesError $
+        runTest 'a' (Var "x" :: Var Char)
   describe "proveNotWith" $ do
     let runTest g = observeAllSolver $ proveNotWith solverCont g
     it "should fail if the inner goal succeeds" $
@@ -268,6 +297,9 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       search (Equated (toTerm (3 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int))))
              (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
         [Equal (toTerm (3 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))]
+      search (ProvedLessThan 'a' 'b')
+             (LessThan (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+        [LessThan (toTerm 'a') (toTerm 'b')]
       search (Negated $ Identical (toTerm 'a') (toTerm 'b'))
              (Not $ Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
         [Not (Identical (toTerm 'a') (toTerm 'b'))]
@@ -283,6 +315,8 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         Identical (toTerm 'a') (toTerm 'a')
       getSolution (Equated (toTerm (1 :: Int)) (toTerm (1 :: Int)), mempty) `shouldBe`
         Equal (toTerm (1 :: Int)) (toTerm (1 :: Int))
+      getSolution (ProvedLessThan 'a' 'b', mempty) `shouldBe`
+        LessThan (toTerm 'a') (toTerm 'b')
       getSolution (ProvedAnd (Equated (toTerm 'a') (toTerm 'a'))
                               (Identified (toTerm 'b') (toTerm 'b')), mempty) `shouldBe`
         And (Equal (toTerm 'a') (toTerm 'a')) (Identical (toTerm 'b') (toTerm 'b'))

@@ -259,6 +259,7 @@ unifyGoal u (PredGoal p cs) = PredGoal (unifyPredicate u p) cs
 unifyGoal u (CanUnify t1 t2) = CanUnify (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Identical t1 t2) = Identical (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Equal t1 t2) = Equal (unifyTerm u t1) (unifyTerm u t2)
+unifyGoal u (LessThan t1 t2) = LessThan (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Not g) = Not $ unifyGoal u g
 unifyGoal u (And g1 g2) = And (unifyGoal u g1) (unifyGoal u g2)
 unifyGoal u (Or g1 g2) = Or (unifyGoal u g1) (unifyGoal u g2)
@@ -409,6 +410,7 @@ renameGoal (PredGoal p cs) = renamePredicate p >>= \p' -> return (PredGoal p' cs
 renameGoal (CanUnify t1 t2) = renameBinaryGoal CanUnify t1 t2
 renameGoal (Identical t1 t2) = renameBinaryGoal Identical t1 t2
 renameGoal (Equal t1 t2) = renameBinaryGoal Equal t1 t2
+renameGoal (LessThan t1 t2) = renameBinaryGoal LessThan t1 t2
 renameGoal (Not g) = liftM Not $ renameGoal g
 renameGoal (And g1 g2) = do
   g1' <- renameGoal g1

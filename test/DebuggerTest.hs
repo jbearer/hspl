@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraints
 
 module DebuggerTest where
@@ -8,7 +9,7 @@ import Control.Hspl.Internal.Debugger
 import Control.Hspl.Internal.Solver
 
 import Data.List
-import Data.Monoid hiding (Sum)
+import Data.Monoid ((<>))
 import Data.Time.Clock
 import System.Directory
 import System.FilePath
@@ -78,6 +79,18 @@ expectEqualExit d a b = "(" ++ show d ++ ") Exit: " ++ show (Equal (toTerm a) (t
 
 expectEqualFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
 expectEqualFail d a b = "(" ++ show d ++ ") Fail: " ++ show (Equal (toTerm a) (toTerm b))
+
+expectLessThanCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
+                      Int -> a -> b -> String
+expectLessThanCall d a b = "(" ++ show d ++ ") Call: " ++ show (LessThan (toTerm a) (toTerm b))
+
+expectLessThanExit :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
+                      Int -> a -> b -> String
+expectLessThanExit d a b = "(" ++ show d ++ ") Exit: " ++ show (LessThan (toTerm a) (toTerm b))
+
+expectLessThanFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
+                      Int -> a -> b -> String
+expectLessThanFail d a b = "(" ++ show d ++ ") Fail: " ++ show (LessThan (toTerm a) (toTerm b))
 
 expectNotCall :: Int -> Goal -> String
 expectNotCall d g = "(" ++ show d ++ ") Call: " ++ show (Not g)
@@ -209,6 +222,19 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     let equalFailTrace = [ expectEqualCall 1 (2 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
                          , expectEqualFail 1 (2 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
                          ]
+    let lessThanGoal = LessThan (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+                                (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+    let lessThanTrace = [ expectLessThanCall 1 (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+                                               (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+                        , expectLessThanExit 1 (5 :: Int) (6 :: Int)
+                        ]
+    let lessThanFailGoal = LessThan (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+                                     (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+    let lessThanFailTrace = [ expectLessThanCall 1 (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+                                                   (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+                            , expectLessThanFail 1 (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+                                                   (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+                            ]
     let notGoal = Not $ CanUnify (toTerm "bar") (toTerm "foo")
     let notTrace = [ expectNotCall 1 $ CanUnify (toTerm "bar") (toTerm "foo")
                    , expectCanUnifyCall 2 "bar" "foo"
@@ -298,6 +324,8 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       go identicalFailGoal identicalFailTrace
       go equalGoal equalTrace
       go equalFailGoal equalFailTrace
+      go lessThanGoal lessThanTrace
+      go lessThanFailGoal lessThanFailTrace
       go notGoal notTrace
       go notFailGoal notFailTrace
       go andGoal andTrace

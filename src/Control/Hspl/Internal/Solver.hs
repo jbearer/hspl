@@ -44,6 +44,7 @@ module Control.Hspl.Internal.Solver (
   , proveUnifiableWith
   , proveIdenticalWith
   , proveEqualWith
+  , proveLessThanWith
   , proveNotWith
   , proveAndWith
   , proveOrLeftWith
@@ -77,6 +78,8 @@ data Proof =
            | forall a. TermEntry a => Identified (Term a) (Term a)
              -- | A proof of an 'Equal' goal.
            | forall a. TermEntry a => Equated (Term a) (Term a)
+             -- | A proof of a 'LessThan' goal.
+           | forall a. (TermEntry a, Ord a) => ProvedLessThan a a
              -- | A proof of a 'Not' goal.
            | Negated Goal
              -- | A proof of an 'And' goal. Contains a proof of each subgoal in the conjunction.
@@ -91,28 +94,31 @@ data Proof =
            | ProvedTop
 
 instance Eq Proof where
-  (==) (Resolved p proof) (Resolved p' proof') = p == p' && proof == proof'
-  (==) (Unified t1 t2) (Unified t1' t2') = case cast (t1', t2') of
-    Just t' -> (t1, t2) == t'
-    Nothing -> False
-  (==) (Identified t1 t2) (Identified t1' t2') = case cast (t1', t2') of
-    Just t' -> (t1, t2) == t'
-    Nothing -> False
-  (==) (Equated t1 t2) (Equated t1' t2') = case cast (t1', t2') of
-    Just t' -> (t1, t2) == t'
-    Nothing -> False
-  (==) (Negated g) (Negated g') = g == g'
-  (==) (ProvedAnd p1 p2) (ProvedAnd p1' p2') = p1 == p1' && p2 == p2'
-  (==) (ProvedLeft p g) (ProvedLeft p' g') = p == p' && g == g'
-  (==) (ProvedRight g p) (ProvedRight g' p') = g == g' && p == p'
-  (==) ProvedTop ProvedTop = True
-  (==) _ _ = False
+  (==) proof1 proof2 = case (proof1, proof2) of
+    (Resolved p proof, Resolved p' proof') -> p == p' && proof == proof'
+    (Unified t1 t2, Unified t1' t2') -> compareBinaryProof (t1, t2) (t1', t2')
+    (Identified t1 t2, Identified t1' t2') -> compareBinaryProof (t1, t2) (t1', t2')
+    (Equated t1 t2, Equated t1' t2') -> compareBinaryProof (t1, t2) (t1', t2')
+    (ProvedLessThan t1 t2, ProvedLessThan t1' t2') -> compareBinaryProof (t1, t2) (t1', t2')
+    (Negated g, Negated g') -> g == g'
+    (ProvedAnd p1 p2, ProvedAnd p1' p2') -> p1 == p1' && p2 == p2'
+    (ProvedLeft p g, ProvedLeft p' g') -> p == p' && g == g'
+    (ProvedRight g p, ProvedRight g' p') -> g == g' && p == p'
+    (ProvedTop, ProvedTop) -> True
+    _ -> False
+    where compareBinaryProof t t' = maybe False (t==) $ cast t'
 
 instance Show Proof where
   show (Resolved p proof) = "Resolved (" ++ show p ++ ") (" ++ show proof ++ ")"
   show (Unified t1 t2) = "Unified (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
   show (Identified t1 t2) = "Identified (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
   show (Equated t1 t2) = "Equated (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+#ifdef SHOW_TERMS
+  show (ProvedLessThan t1 t2) = "ProvedLessThan (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+#else
+  show (ProvedLessThan t1 t2) =
+    "ProvedLessThan (" ++ show (toTerm t1) ++ ") (" ++ show (toTerm t2) ++ ")"
+#endif
   show (Negated g) = "Negated (" ++ show g ++ ")"
   show (ProvedAnd p1 p2) = "ProvedAnd (" ++ show p1 ++ ") (" ++ show p2
   show (ProvedLeft p g) = "ProvedLeft (" ++ show p ++ ") (" ++ show g ++ ")"
@@ -154,6 +160,8 @@ searchProof (proof, _) goal = searchProof' proof (runRenamed $ renameGoal goal)
         matchGoal (CanUnify t1 t2) (CanUnify t1' t2') = matchBinary CanUnify (t1, t2) (t1', t2')
         matchGoal (Identical t1 t2) (Identical t1' t2') = matchBinary Identical (t1, t2) (t1', t2')
         matchGoal (Equal t1 t2) (Equal t1' t2') = matchBinary Equal (t1, t2) (t1', t2')
+        matchGoal (LessThan t1 t2) (LessThan t1' t2') =
+          matchBinary LessThan (toTerm t1, toTerm t2) (toTerm t1', toTerm t2')
         matchGoal (Not g) (Not g') = fmap Not $ matchGoal g g'
         matchGoal (And g1 g2) (And g1' g2') = do g1'' <- matchGoal g1 g1'
                                                  g2'' <- matchGoal g2 g2'
@@ -194,6 +202,7 @@ getSolution (proof, _) = case proof of
   Unified t1 t2 -> CanUnify t1 t2
   Identified t1 t2 -> Identical t1 t2
   Equated t1 t2 -> Equal t1 t2
+  ProvedLessThan t1 t2 -> LessThan (toTerm t1) (toTerm t2)
   Negated g -> Not g
   ProvedAnd p1 p2 -> And (getSolution (p1, mempty)) (getSolution (p2, mempty))
   ProvedLeft p g -> Or (getSolution (p, mempty)) g
@@ -263,6 +272,7 @@ Non-predicate goals have different semantics:
 * For 'Equal' goals, we evaluate the right-hand side using 'fromTerm'. If that succeeds, we convert
   the now-simplified constant back to its abstract 'Term' representation using 'toTerm', and then
   attempt to unify that 'Term' with the left-hand side.
+* For 'LessThan' goals, we evaluate both sides and compare the results using '<'.
 * For 'Not' goals, we attempt to prove the negated goal, and fail if the inner proof succeeds or
   vice versa.
 * For 'And' goals, we first attempt to prove the left-hand side. If that succeeds, we apply the
@@ -308,14 +318,22 @@ data SolverCont (m :: * -> *) =
                -- trivial proof of the equality of the terms. The zero-overhead version of this
                -- continuation is 'proveIdenticalWith'.
              , tryIdentical :: forall a. TermEntry a => Term a -> Term a -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove equality of arithmetic
-               -- expressions. The resulting computation in the 'SolverT' monad should evaluate the
-               -- right-hand side as an arithmetic expression and, if successful, attempt to unify
-               -- the resulting constant with the 'Term' on the left-hand side. If the right-hand
-               -- side does not evaluate to a constant (for example, because it contains one or more
-               -- free variables) the program should terminate with a runtime error. The zero-
-               -- overhead version of this continuation is 'proveEqualWith'.
+               -- | Continuation to be invoked when attempting to prove equality of terms. The
+               -- resulting computation in the 'SolverT' monad should evaluate the right-hand side
+               -- and, if successful, attempt to unify the resulting constant with the 'Term' on the
+               -- left-hand side. If the right-hand side does not evaluate to a constant (for
+               -- example, because it contains one or more free variables) the program should
+               -- terminate with a runtime error. The zero-overhead version of this continuation is
+               -- 'proveEqualWith'.
              , tryEqual :: forall a. TermEntry a => Term a -> Term a -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove one 'Term' is less than
+               -- another. No new unifications are created. The resulting computation in the
+               -- 'SolverT' monad should evaluate both terms and, if successful, succeed if the
+               -- evaluated left-hand side compares less than the evaluated right-hand side. If
+               -- /either/ side does not evaluate to a constant, the program should terminate with a
+               -- runtime error. The zero-overhead version of this continuation is
+               -- 'proveLessThanWith'.
+             , tryLessThan :: forall a. (TermEntry a, Ord a) => Term a -> Term a -> SolverT m ProofResult
                -- | Continuation to be invoked when attempting to prove the negation of a goal. No
                -- new unifications are created. The resulting computation in the 'SolverT' monad
                -- should either fail with 'mzero' (if the negated goal succeeds at least once) or
@@ -364,6 +382,7 @@ solverCont = SolverCont { tryPredicate = provePredicateWith solverCont
                         , tryUnifiable = proveUnifiableWith solverCont
                         , tryIdentical = proveIdenticalWith solverCont
                         , tryEqual = proveEqualWith solverCont
+                        , tryLessThan = proveLessThanWith solverCont
                         , tryNot = proveNotWith solverCont
                         , tryAnd = proveAndWith solverCont
                         , tryOrLeft = proveOrLeftWith solverCont
@@ -427,6 +446,14 @@ proveEqualWith _ lhs rhs = case mgu lhs (eval rhs) of
           Just t' -> toTerm t'
           Nothing -> error "Variables are not sufficiently instantiated."
 
+-- | Check if the left-hand side is less than the right-hand side. No new bindings are created.
+proveLessThanWith :: (TermEntry a, Ord a, Monad m) =>
+                     SolverCont m -> Term a -> Term a -> SolverT m ProofResult
+proveLessThanWith _ lhs rhs = case (fromTerm lhs, fromTerm rhs) of
+  (Just l, Just r) | l < r -> return (ProvedLessThan l r, mempty)
+  (Just _, Just _) -> mzero
+  _ -> error "Variables are not sufficiently instantiated."
+
 -- | Succeed if and only if the given 'Goal' fails. No new bindings are created in the process.
 proveNotWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
 proveNotWith cont g = ifte (once $ proveWith cont g)
@@ -471,6 +498,7 @@ proveWith cont g = case g of
   CanUnify t1 t2 -> tryUnifiable cont t1 t2
   Identical t1 t2 -> tryIdentical cont t1 t2
   Equal t1 t2 -> tryEqual cont t1 t2
+  LessThan t1 t2 -> tryLessThan cont t1 t2
   Not g' -> tryNot cont g'
   And g1 g2 -> tryAnd cont g1 g2
   Or g1 g2 -> tryOrLeft cont g1 g2 `mplus` tryOrRight cont g1 g2

@@ -362,6 +362,13 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       it "should rename variables in both terms the same" $
         rename (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
           Equal (toTerm (Fresh 0 :: Var Int)) (toTerm (Fresh 0 :: Var Int))
+    context "of Equal goals" $ do
+      it "should rename variables in each term" $
+        rename (LessThan (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
+          LessThan (toTerm (Fresh 0 :: Var Int)) (toTerm (Fresh 1 :: Var Int))
+      it "should rename variables in both terms the same" $
+        rename (LessThan (toTerm (Var "x" :: Var Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
+          LessThan (toTerm (Fresh 0 :: Var Int)) (toTerm (Fresh 0 :: Var Int))
     context "of Not goals" $
       it "should rename variables in the inner goal" $
         rename (Not $ PredGoal (predicate "foo" (Var "x" :: Var Bool)) []) `shouldBe`
@@ -519,6 +526,17 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           Equal (toTerm (Var "y" :: Var Int)) (toTerm (1 :: Int))
         unifyGoal u (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
           Equal (toTerm (1 :: Int)) (toTerm (Var "y" :: Var Int))
+    context "to a LessThan goal" $ do
+      it "should unify both terms" $
+        unifyGoal (toTerm (1 :: Int) // Var "x" <> toTerm (2 :: Int) // Var "y")
+          (LessThan (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
+          LessThan (toTerm (1 :: Int)) (toTerm (2 :: Int))
+      it "should leave either term unchanged when the unifier does not apply" $ do
+        let u = toTerm (1 :: Int) // Var "x"
+        unifyGoal u (LessThan (toTerm (Var "y" :: Var Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
+          LessThan (toTerm (Var "y" :: Var Int)) (toTerm (1 :: Int))
+        unifyGoal u (LessThan (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
+          LessThan (toTerm (1 :: Int)) (toTerm (Var "y" :: Var Int))
     context "to a Not goal" $
       it "should unify the inner goal" $
         unifyGoal (toTerm 'a' // Var "x")

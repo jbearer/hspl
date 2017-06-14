@@ -147,6 +147,7 @@ debugCont stack = SolverCont { tryPredicate = debugFirstAlternative stack
                              , tryUnifiable = debugUnifiable stack
                              , tryIdentical = debugIdentical stack
                              , tryEqual = debugEqual stack
+                             , tryLessThan = debugLessThan stack
                              , tryNot = debugNot stack
                              , tryAnd = debugAnd stack
                              , tryOrLeft = debugOrLeft stack
@@ -263,6 +264,12 @@ debugEqual :: (TermEntry a) => [Goal] -> Term a -> Term a -> Debugger ProofResul
 debugEqual s lhs rhs =
   let stack = Equal lhs rhs : s
   in call2 stack proveEqualWith lhs rhs
+
+-- | Continuation hook for proving a 'LessThan' goal.
+debugLessThan :: (TermEntry a, Ord a) => [Goal] -> Term a -> Term a -> Debugger ProofResult
+debugLessThan s lhs rhs =
+  let stack = LessThan lhs rhs : s
+  in call2 stack proveLessThanWith lhs rhs
 
 -- | Continuation hook for proving a 'Not' goal.
 debugNot :: [Goal] -> Goal -> Debugger ProofResult

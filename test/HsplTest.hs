@@ -9,6 +9,7 @@ import Control.Hspl
 import qualified Control.Hspl.Internal.Ast as Ast
 import           Control.Hspl.Internal.Ast (Goal (..))
 import qualified Control.Hspl.Internal.Solver as Solver
+import           Control.Hspl.Internal.Unification ((//))
 
 import Control.Monad.Writer
 import Data.Data
@@ -180,31 +181,90 @@ test = describeModule "Control.Hspl" $ do
       exec (char "x" |\=| char "y") `shouldBe`
         Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
 
-  describe "the |==| predicate" $ do
+  describe "the `is` predicate" $ do
     let exec = execWriter . unGW
     it "should create an Identical goal from TermData" $ do
-      exec ('a' |==| 'b') `shouldBe` Identical (toTerm 'a') (toTerm 'b')
-      exec ('a' |==| char "x") `shouldBe` Identical (toTerm 'a') (toTerm (Var "x" :: Var Char))
-      exec (char "x" |==| 'a') `shouldBe` Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a')
-      exec (char "x" |==| char "y") `shouldBe`
+      exec ('a' `is` 'b') `shouldBe` Identical (toTerm 'a') (toTerm 'b')
+      exec ('a' `is` char "x") `shouldBe` Identical (toTerm 'a') (toTerm (Var "x" :: Var Char))
+      exec (char "x" `is` 'a') `shouldBe` Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a')
+      exec (char "x" `is` char "y") `shouldBe`
         Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))
-  describe "the |\\==| predicate" $ do
+  describe "the `isnt` predicate" $ do
     let exec = execWriter . unGW
     it "should create a (Not . Identical) goal from TermData" $ do
-      exec ('a' |\==| 'b') `shouldBe` Not (Identical (toTerm 'a') (toTerm 'b'))
-      exec ('a' |\==| char "x") `shouldBe` Not (Identical (toTerm 'a') (toTerm (Var "x" :: Var Char)))
-      exec (char "x" |\==| 'a') `shouldBe` Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
-      exec (char "x" |\==| char "y") `shouldBe`
+      exec ('a' `isnt` 'b') `shouldBe` Not (Identical (toTerm 'a') (toTerm 'b'))
+      exec ('a' `isnt` char "x") `shouldBe` Not (Identical (toTerm 'a') (toTerm (Var "x" :: Var Char)))
+      exec (char "x" `isnt` 'a') `shouldBe` Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
+      exec (char "x" `isnt` char "y") `shouldBe`
         Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
 
-  describe "the is predicate" $ do
+  describe "the |==| predicate" $ do
     let exec = execWriter . unGW
     it "should create an Equal goal from two terms" $ do
-      exec ((3 :: Int) `is` (3 :: Int)) `shouldBe` Equal (toTerm (3 :: Int)) (toTerm (3 :: Int))
-      exec (int "x" `is` (3 :: Int)) `shouldBe` Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int))
+      exec ((3 :: Int) |==| (3 :: Int)) `shouldBe` Equal (toTerm (3 :: Int)) (toTerm (3 :: Int))
+      exec (int "x" |==| (3 :: Int)) `shouldBe` Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int))
     it "should have lower precedence than arithmetic operators" $
-      exec (int "x" `is` (3 :: Int) |+| (2 :: Int)) `shouldBe`
+      exec (int "x" |==| (3 :: Int) |+| (2 :: Int)) `shouldBe`
         Equal (toTerm (Var "x" :: Var Int)) (Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int)))
+  describe "the |\\==| predicate" $ do
+    let exec = execWriter . unGW
+    it "should create a (Not . Equal) goal from two terms" $ do
+      exec ((3 :: Int) |\==| (3 :: Int)) `shouldBe`
+        Not (Equal (toTerm (3 :: Int)) (toTerm (3 :: Int)))
+      exec (int "x" |\==| (3 :: Int)) `shouldBe`
+        Not (Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int)))
+    it "should have lower precedence than arithmetic operators" $
+      exec (int "x" |\==| (3 :: Int) |+| (2 :: Int)) `shouldBe`
+        Not (Equal (toTerm (Var "x" :: Var Int)) (Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int))))
+
+  describe "the |<| predicate" $ do
+    let exec = execWriter . unGW
+    it "should create a LessThan goal from two terms" $
+      exec ('a' |<| 'b') `shouldBe` LessThan (toTerm 'a') (toTerm 'b')
+    it "should have lower precedence than arithmetic operators" $
+      exec ((1 :: Int) |<| (2 :: Int) |+| (3 :: Int)) `shouldBe`
+        LessThan (toTerm (1 :: Int)) (Ast.Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+  describe "the |>| predicate" $ do
+    let exec = execWriter . unGW
+    it "should reorder the terms to create a LessThan goal" $
+      exec ('b' |>| 'a') `shouldBe` LessThan (toTerm 'a') (toTerm 'b')
+    it "should have lower precedence than arithmetic operators" $
+      exec ((1 :: Int) |>| (2 :: Int) |+| (3 :: Int)) `shouldBe`
+        LessThan (Ast.Sum (toTerm (2 :: Int)) (toTerm (3 :: Int))) (toTerm (1 :: Int))
+  describe "the |<=| predicate" $ do
+    let exec = execWriter . unGW
+    it "should succeed if the terms are equal" $ do
+      let sols = runHspl $ 'a' |<=| 'a'
+      length sols `shouldBe` 1
+      searchProof (head sols) (Equal (toTerm 'a') (toTerm 'a')) `shouldBe`
+        [Equal (toTerm 'a') (toTerm 'a')]
+    it "should succeed if the left-hand side is less than the right-hand side" $ do
+      let sols = runHspl $ 'a' |<=| 'b'
+      length sols `shouldBe` 1
+      searchProof (head sols) (LessThan (toTerm 'a') (toTerm 'b')) `shouldBe`
+        [LessThan (toTerm 'a') (toTerm 'b')]
+    it "should unify variables on the left-hand side if possible" $
+      getAllUnifiers (runHspl $ char "x" |<=| 'a') `shouldBe` ['a' // Var "x"]
+    it "should have lower precedence than arithmetic operators" $
+      exec ((1 :: Int) |<=| (2 :: Int) |+| (3 :: Int)) `shouldBe`
+        exec ((1 :: Int) |<=| ((2 :: Int) |+| (3 :: Int)))
+  describe "the |>=| predicate" $ do
+    let exec = execWriter . unGW
+    it "should succeed if the terms are equal" $ do
+      let sols = runHspl $ 'a' |>=| 'a'
+      length sols `shouldBe` 1
+      searchProof (head sols) (Equal (toTerm 'a') (toTerm 'a')) `shouldBe`
+        [Equal (toTerm 'a') (toTerm 'a')]
+    it "should succeed if the left-hand side is greater than the right-hand side" $ do
+      let sols = runHspl $ 'b' |>=| 'a'
+      length sols `shouldBe` 1
+      searchProof (head sols) (LessThan (toTerm 'a') (toTerm 'b')) `shouldBe`
+        [LessThan (toTerm 'a') (toTerm 'b')]
+    it "should unify variables on the left-hand side if possible" $
+      getAllUnifiers (runHspl $ char "x" |>=| 'a') `shouldBe` ['a' // Var "x"]
+    it "should have lower precedence than arithmetic operators" $
+      exec ((1 :: Int) |>=| (2 :: Int) |+| (3 :: Int)) `shouldBe`
+        exec ((1 :: Int) |>=| ((2 :: Int) |+| (3 :: Int)))
 
   describe "the lnot predicate" $
     it "should create a Not goal from an inner goal" $
