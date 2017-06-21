@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 #if __GLASGOW_HASKELL__ >= 800
 {-# OPTIONS_GHC -fdefer-type-errors #-}
@@ -71,6 +72,17 @@ instance Termable Sum4
 data Product4 = P4 Char Char Char Char
   deriving (Show, Eq, Typeable, Data, Generic)
 instance Termable Product4
+
+newtype IntFrac = IntFrac { toDouble :: Double }
+  deriving (Num, Fractional, Real, Ord, Enum, Typeable, Data, Show, Eq)
+instance Termable IntFrac where
+  toTerm = Constant
+
+-- This is weird and, well, bad, but it makes parameterizing the tests for numerical operators a lot
+-- easier. Obviously we'll never want to depend on these operations actually behaving nicely.
+instance Integral IntFrac where
+  quotRem (IntFrac d1) (IntFrac d2) = quotRem (floor d1) (floor d2)
+  toInteger (IntFrac d) = floor d
 
 indeterminateConstructorError = unwords
   [ "ADT constructor could not be determined. The data constructor used in building terms must be"
@@ -232,6 +244,10 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         Tup (Constant True) (Variable (Var "x" :: Var Bool))
       toTerm (True, (Var "x" :: Var Bool, False)) `shouldBe`
         Tup (Constant True) (Tup (Variable $ Var "x") (Constant False))
+      toTerm [Var "x" :: Var Char, Var "y" :: Var Char] `shouldBe`
+        List (toTerm (Var "x" :: Var Char)) (
+        List (toTerm (Var "y" :: Var Char))
+        Nil)
     it "should have type corresponding to the enclosed value" $ do
       termType (toTerm True) `shouldBe` typeOf True
       termType (toTerm ('a', True, ())) `shouldBe` typeOf ('a', True, ())
@@ -348,6 +364,85 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
                     , ETerm $ toTerm $ Leaf 'b'
                     , ETerm $ toTerm (Var "x" :: Var (Tree Char))
                     ]
+  describe "alpha equivalence" $ do
+    context "of variables" $
+      it "should succeed" $ do
+        (Var "x" :: Var Char) `shouldBeAlphaEquivalentTo` (Var "y" :: Var Char)
+        (Var "x" :: Var Char) `shouldBeAlphaEquivalentTo` (Fresh 0 :: Var Char)
+        (Fresh 0 :: Var Char) `shouldBeAlphaEquivalentTo` (Var "x" :: Var Char)
+    context "of constants" $ do
+      it "should succeed when they are equal" $
+        Constant 'a' `shouldBeAlphaEquivalentTo` Constant 'a'
+      it "should fail when they are not" $
+        Constant 'a' `shouldNotSatisfy` alphaEquivalent (Constant 'b')
+    context "of tuples" $ do
+      it "should succeed when the tuples are equal" $
+        toTerm ('a', True) `shouldBeAlphaEquivalentTo` toTerm ('a', True)
+      it "should succeed when the tuples are alpha-equivalent" $ do
+        toTerm ('a', Var "x" :: Var Char) `shouldBeAlphaEquivalentTo` toTerm ('a', Var "y" :: Var Char)
+        toTerm (Var "x" :: Var Char, Var "y" :: Var Char) `shouldBeAlphaEquivalentTo`
+          toTerm (Var "y" :: Var Char, Var "x" :: Var Char)
+        toTerm (Var "x" :: Var Char, Var "x" :: Var Char) `shouldBeAlphaEquivalentTo`
+          toTerm (Var "a" :: Var Char, Var "a" :: Var Char)
+      it "should fail when the tuples can be unified but are not alpha-equivalent" $ do
+        toTerm (Var "x" :: Var Char, Var "y" :: Var Char) `shouldNotSatisfy`
+          alphaEquivalent (toTerm (Var "a" :: Var Char, Var "a" :: Var Char))
+        toTerm (Var "x" :: Var Char, Var "x" :: Var Char) `shouldNotSatisfy`
+          alphaEquivalent (toTerm (Var "a" :: Var Char, Var "b" :: Var Char))
+      it "should fail when the tuples are not of the same form" $
+        toTerm ('a', 'b') `shouldNotSatisfy` alphaEquivalent (toTerm ('b', 'c'))
+    context "of lists" $ do
+      it "should succeed when the lists are equal" $
+        toTerm ['a', 'b', 'c'] `shouldBeAlphaEquivalentTo` toTerm ['a', 'b', 'c']
+      it "should succeed when the lists are alpha-equivalent" $ do
+        toTerm ([Var "x", Var "y", Var "z"] :: [Var Char]) `shouldBeAlphaEquivalentTo`
+          toTerm ([Var "a", Var "b", Var "c"] :: [Var Char])
+        toTerm ([Var "x", Var "y"] :: [Var Char]) `shouldBeAlphaEquivalentTo`
+          toTerm ([Var "y", Var "x"] :: [Var Char])
+        toTerm ([Var "x", Var "x"] :: [Var Char]) `shouldBeAlphaEquivalentTo`
+          toTerm ([Var "a", Var "a"] :: [Var Char])
+      it "should fail when the lists can be unified but are not alpha-equivalent" $ do
+        toTerm [Var "x" :: Var Char, Var "y" :: Var Char] `shouldNotSatisfy`
+          alphaEquivalent (toTerm [Var "a" :: Var Char, Var "a" :: Var Char])
+        toTerm [Var "x" :: Var Char, Var "x" :: Var Char] `shouldNotSatisfy`
+          alphaEquivalent (toTerm [Var "a" :: Var Char, Var "b" :: Var Char])
+      it "should fail when the lists are not of the same form" $
+        toTerm ['a', 'b'] `shouldNotSatisfy` alphaEquivalent (toTerm ['b', 'c'])
+    context "of adts" $ do
+      it "should succeed when the terms are equal" $
+        toTerm (Just 'a') `shouldBeAlphaEquivalentTo` toTerm (Just 'a')
+      it "should succeed when the terms are alpha-equivalent" $
+        adt Just (Var "x" :: Var Char) `shouldBeAlphaEquivalentTo` adt Just (Var "y" :: Var Char)
+      it "should fail when the terms are not alpha-equivalent" $
+        adt Just (Var "x" :: Var Char, Var "y" :: Var Char) `shouldNotSatisfy`
+          alphaEquivalent (adt Just (Var "a" :: Var Char, Var "a" :: Var Char))
+      it "should fail when the terms are not equal" $ do
+        toTerm (Left 'a' :: Either Char Char) `shouldNotSatisfy`
+          alphaEquivalent (toTerm (Right 'a' :: Either Char Char))
+        toTerm (Leaf 'a') `shouldNotSatisfy` alphaEquivalent (toTerm $ Leaf 'b')
+    context "of binary operators" $ do
+      let constrs :: [Term IntFrac -> Term IntFrac -> Term IntFrac]
+          constrs = [Sum, Difference, Product, Quotient, IntQuotient, Modulus]
+      let term :: Double -> Term IntFrac
+          term = toTerm . IntFrac
+      let var :: String -> Term IntFrac
+          var = toTerm . Var
+      withParams constrs $ \constr -> do
+        it "should succeed when the terms are equal" $
+          constr (term 1) (term 2) `shouldBeAlphaEquivalentTo` constr (term 1) (term 2)
+        it "should succeed when the terms are alpha-equivalent" $ do
+          constr (var "x") (var "y") `shouldBeAlphaEquivalentTo` constr (var "a") (var "b")
+          constr (var "x") (var "y") `shouldBeAlphaEquivalentTo` constr (var "y") (var "x")
+          constr (var "x") (var "x") `shouldBeAlphaEquivalentTo` constr (var "a") (var "a")
+        it "should fail when the terms can be unified but are not alpha-equivalent" $ do
+          constr (var "x") (var "y") `shouldNotSatisfy` alphaEquivalent (constr (var "a") (var "a"))
+          constr (var "x") (var "x") `shouldNotSatisfy` alphaEquivalent (constr (var "a") (var "b"))
+        it "should fail when the terms are not of the same form" $
+          constr (term 1) (term 2) `shouldNotSatisfy` alphaEquivalent (constr (term 2) (term 3))
+    context "of different kinds of terms" $
+      it "should fail" $
+        toTerm (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int))) `shouldNotSatisfy`
+          alphaEquivalent (Difference (toTerm (1 :: Int)) (toTerm (2 :: Int)))
   describe "predicates" $ do
     it "should have type corresponding to the type of the argument" $ do
       predType (predicate "foo" ()) `shouldBe` termType (toTerm ())

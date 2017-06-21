@@ -1,6 +1,6 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraint
 
 -- Abstraction layer on top of HSpec, plus some additional combinators. This is necessary because
@@ -11,25 +11,31 @@ module Testing (
   , context
   , describeModule
   , when
+  , withParams
   , shouldEqual
   , shouldBe
   , shouldNotEqual
   , shouldNotBe
   , shouldSatisfy
+  , shouldNotSatisfy
   , shouldBePermutationOf
   , shouldBeSubsetOf
   , pending
   , pendingWith
   , assertError
+  , shouldBeAlphaEquivalentTo
   ) where
 
 import Control.DeepSeq (NFData, force)
 import Control.Exception (evaluate, try, ErrorCall (..))
+import Control.Monad (forM_)
 import Data.CallStack
 import Data.List
-import Test.Hspec hiding (shouldNotBe)
+import Test.Hspec hiding (shouldNotBe, shouldNotSatisfy)
 import Test.Hspec (shouldBe)
 import Test.HUnit
+
+import Control.Hspl.Internal.Ast
 
 success :: Expectation
 success = assertBool "" True
@@ -43,6 +49,9 @@ describeModule = describe . ("in the module " ++)
 when :: String -> SpecWith a -> SpecWith a
 when = context . ("when " ++)
 
+withParams :: [a] -> (a -> SpecWith ()) -> SpecWith ()
+withParams = forM_
+
 shouldEqual :: (HasCallStack, Show a, Eq a) => a -> a -> Expectation
 shouldEqual = shouldBe
 
@@ -53,6 +62,9 @@ shouldNotBe x y
 
 shouldNotEqual :: (HasCallStack, Show a, Eq a) => a -> a-> Expectation
 shouldNotEqual = shouldNotBe
+
+shouldNotSatisfy :: (HasCallStack, Show a, Eq a) => a -> (a -> Bool) -> Expectation
+shouldNotSatisfy a f = a `shouldSatisfy` (not . f)
 
 deleteFirst :: Eq a => a -> [a] -> [a]
 deleteFirst _ [] = []
@@ -90,3 +102,6 @@ assertError expected expr = do
     Right r -> assertFailure $ "Expected the expression " ++ show r ++ " to raise an error:\n" ++
                                expected
     Left (ErrorCall msg) -> msg `shouldBe` expected
+
+shouldBeAlphaEquivalentTo :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Assertion
+shouldBeAlphaEquivalentTo a b = toTerm a `shouldSatisfy` alphaEquivalent (toTerm b)

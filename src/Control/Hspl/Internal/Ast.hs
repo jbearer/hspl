@@ -49,6 +49,7 @@ module Control.Hspl.Internal.Ast (
   , Term (..)
   , termType
   , fromTerm
+  , alphaEquivalent
   -- *** ADT helpers
   , AdtConstructor (..)
   , AdtArgument (..)
@@ -78,6 +79,7 @@ import Control.Monad
 import Control.Monad.State
 import Data.Data
 import Data.List
+import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid (Monoid (..))
 import GHC.Generics
@@ -433,6 +435,85 @@ instance Eq (Term a) where
   (==) (Modulus t1 t2) (Modulus t1' t2') = t1 == t1' && t2 == t2'
 
   (==) _ _ = False
+
+-- | Determine if two 'Term's are alpha-equivalent. Terms are alpha-equivalent if there exists an
+-- injective renaming of variables in one term which makes it equal to the other term. For example,
+--
+-- >>> alphaEquivalent (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))
+-- True
+--
+-- >>> alphaEquivalent (toTerm (Var "x" :: Var Char, Var "y" :: Var Char)) (toTerm (Var "a" :: Var Char, Var "a" :: Var Char))
+-- False
+--
+-- >>> alphaEquivalent (toTerm (Var "x" :: Var Char, 'a')) (toTerm (Var "y" :: Var Char, 'b'))
+-- False
+alphaEquivalent :: TermEntry a => Term a -> Term a -> Bool
+alphaEquivalent term1 term2 = isJust $ evalStateT (alpha term1 term2) (M.empty, M.empty)
+  where alpha :: TermEntry a => Term a -> Term a ->
+                 StateT (M.Map ErasedVar ErasedVar, M.Map ErasedVar ErasedVar) Maybe ()
+        alpha (Variable x) (Variable y) = alphaVar x y
+        alpha (Constant c) (Constant c')
+          | c == c' = return ()
+          | otherwise = mzero
+
+        alpha (Constructor c ts) (Constructor c' ts')
+          | c == c' = alphaETermList ts ts'
+          | otherwise = mzero
+
+        alpha (Tup t ts) (Tup t' ts') = alpha t t' >> alpha ts ts'
+
+        alpha (List t ts) (List t' ts') = alpha t t' >> alpha ts ts'
+        alpha Nil Nil = return ()
+
+        alpha (Sum t1 t2) (Sum t1' t2') = alpha t1 t1' >> alpha t2 t2'
+        alpha (Difference t1 t2) (Difference t1' t2') = alpha t1 t1' >> alpha t2 t2'
+        alpha (Product t1 t2) (Product t1' t2') = alpha t1 t1' >> alpha t2 t2'
+        alpha (Quotient t1 t2) (Quotient t1' t2') = alpha t1 t1' >> alpha t2 t2'
+        alpha (IntQuotient t1 t2) (IntQuotient t1' t2') = alpha t1 t1' >> alpha t2 t2'
+        alpha (Modulus t1 t2) (Modulus t1' t2') = alpha t1 t1' >> alpha t2 t2'
+
+        alpha _ _ = mzero
+
+        alphaVar :: TermEntry a => Var a -> Var a ->
+                    StateT (M.Map ErasedVar ErasedVar, M.Map ErasedVar ErasedVar) Maybe ()
+        alphaVar x y = do (ml, mr) <- get
+                          case (M.lookup (EVar x) ml, M.lookup (EVar y) mr) of
+                            -- We haven't seen either of these variables for. Make a note that they
+                            -- correspond to each other so that if we see either of them again,
+                            -- we'll know it better be paired with the other one.
+                            (Nothing, Nothing) ->
+                              put ( M.insert (EVar x) (EVar y) ml, M.insert (EVar y) (EVar x) mr)
+                            -- We've seen both variables before. Check that last time we saw them,
+                            -- they were still paired up with each other.
+                            (Just (EVar y'), Just (EVar x')) ->
+                              case cast (y', x') of
+                                Just (y'', x'') | y'' == y && x'' == x -> return ()
+                                _ -> mzero
+                            -- We've seen one before but not the other. This means that last time we
+                            -- saw it, it was paired with some other variable, not the one it's
+                            -- paired with this time.
+                            _ -> mzero
+
+        alphaETermList :: [ErasedTerm] -> [ErasedTerm] ->
+                          StateT (M.Map ErasedVar ErasedVar, M.Map ErasedVar ErasedVar) Maybe ()
+        alphaETermList [] [] = return ()
+        alphaETermList [] _ = mzero
+        alphaETermList _ [] = mzero
+        alphaETermList (ETerm t : ts) (ETerm t' : ts') = lift (cast t') >>= alpha t >> alphaETermList ts ts'
+
+-- | Type-erased container for storing 'Var's of any type.
+data ErasedVar = forall a. TermEntry a => EVar (Var a)
+
+instance Show ErasedVar where
+  show (EVar v) = show v
+
+instance Eq ErasedVar where
+  (==) (EVar v) (EVar v') = maybe False (==v) $ cast v'
+
+instance Ord ErasedVar where
+  compare (EVar v) (EVar v') = case cast v' of
+    Just v'' -> compare v v''
+    Nothing -> compare (varType v) (varType v')
 
 -- | Type-erased container for storing 'Term's of any type.
 data ErasedTerm = forall a. TermEntry a => ETerm (Term a)
