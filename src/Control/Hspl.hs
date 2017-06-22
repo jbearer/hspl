@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraints
 {-# OPTIONS_HADDOCK show-extensions #-}
 
@@ -96,6 +97,9 @@ module Control.Hspl (
   -- $lists
   , (<:>)
   , (<++>)
+  , helem
+  , hlength
+  , hat
   -- ** ADTs
   -- $adts
   , ($$)
@@ -497,3 +501,39 @@ t <:> ts = Ast.List (toTerm t) (toTerm ts)
 (<++>) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => [a] -> [b] -> Term [HSPLType a]
 [] <++> ts = toTerm ts
 (t:ts) <++> ts' = Ast.List (toTerm t) (ts <++> ts')
+
+-- | @helem? (x, xs)@ succeeds if @x@ is a member of @xs@. There are three primary modes of use:
+-- 1. If both arguments are instantiated, 'helem' can be used to determine if an element is in a
+--    given list.
+-- 2. If the first argument is a variable, but the second argument is instantiated, 'helem' will
+--    nondeterministically bind the variable to each member of the list.
+-- 3. If the first argument is instantiated, but the second argument is a variable, 'helem' will
+--    generate lists, placing the given element at each position in the list. This usage will
+--    succeed infinitely many times.
+helem :: forall a. TermEntry a => Predicate (a, [a])
+helem = predicate "elem" $ do
+  match (v"x", v"x" <:> v"xs")
+  match (v"x", v"y" <:> v"xs") |- helem? (v"x" :: Var a, v"xs")
+
+-- | @hlength? (xs, l)@ succeeds if @l@ is the length of @xs@. If @l@ is a variable, it is bound to
+-- the length of the list.
+hlength :: forall a. TermEntry a => Predicate ([a], Int)
+hlength = predicate "length" $ do
+  match ([] :: [a], 0 :: Int)
+  match (v"x" <:> v"xs", v"l") |- do
+    hlength? (v"xs" :: Var [a], v"l2")
+    int "l" |==| int "l2" |+| (1 :: Int)
+
+-- | @hat? (i, xs, x)@ succeeds if @x@ is the element of @xs@ at position @i@ (counting starts at
+-- 0). There are three primary modes of use:
+-- 1. If @xs@ and @x@ are instantiated, but @i@ is a variable, 'hat' will bind @i@ to the index of
+--    @x@.
+-- 2. If @i@ and @xs@ are instantiated, but @x@ is a variable, 'hat' will bind @x@ to the element of
+--    @xs@ at position @i@.
+-- 3. If neither @i@ nor @x@ are instantiated, 'hat' will enumerate the list @xs@.
+hat :: forall a. TermEntry a => Predicate (Int, [a], a)
+hat = predicate "at" $ do
+  match (0 :: Int, v"x" <:> v"xs", v"x")
+  match (v"i", v"x" <:> v"xs", v"y") |- do
+    hat? (v"j", v"xs" :: Var [a], v"y")
+    int "i" |==| int "j" |+| (1 :: Int)

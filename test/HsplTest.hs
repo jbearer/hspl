@@ -7,9 +7,13 @@ module HsplTest where
 import Testing
 import Control.Hspl
 import qualified Control.Hspl.Internal.Ast as Ast
-import           Control.Hspl.Internal.Ast (Goal (..))
+import           Control.Hspl.Internal.Ast (Goal (..), Var (..))
 import qualified Control.Hspl.Internal.Solver as Solver
-import           Control.Hspl.Internal.Unification ((//))
+import           Control.Hspl.Internal.Unification ( (//)
+                                                   , UnificationStatus (..)
+                                                   , queryVar
+                                                   , isSubunifierOf
+                                                   )
 
 import Control.Monad.Writer
 import Data.Data
@@ -163,6 +167,123 @@ test = describeModule "Control.Hspl" $ do
                    (toTerm 'a') (Ast.List
                    (toTerm 'b')
                    Ast.Nil)))
+
+  describe "the hlength predicate" $ do
+    it "should succeed when given the correct length of a list" $ do
+      length (getAllSolutions $ runHspl $ hlength? ([] :: [Char], 0 :: Int)) `shouldBe` 1
+      length (getAllSolutions $ runHspl $ hlength? (['a', 'b', 'c'], 3 :: Int)) `shouldBe` 1
+    it "should fail when given the incorrect length of a list" $ do
+      getAllSolutions (runHspl $ hlength? ([] :: [Char], 1 :: Int)) `shouldBe` []
+      getAllSolutions (runHspl $ hlength? (['a', 'b', 'c'], 2 :: Int)) `shouldBe` []
+    it "should compute the length of a list" $ do
+      let us = getAllUnifiers (runHspl $ hlength? ([] :: [Char], int "L"))
+      length us `shouldBe` 1
+      queryVar (head us) (int "L") `shouldBe` Unified (0 :: Int)
+
+      let us = getAllUnifiers (runHspl $ hlength? (['a', 'b', 'c'], int "L"))
+      length us `shouldBe` 1
+      queryVar (head us) (int "L") `shouldBe` Unified (3 :: Int)
+    it "should generate lists of increasing length" $ do
+      let us = getAllUnifiers (runHsplN 3 $ hlength? (char \* "xs", int "L"))
+      length us `shouldBe` 3
+
+      queryVar (head us) (char \* "xs") `shouldBe` Unified []
+      queryVar (head us) (int "L") `shouldBe` Unified 0
+
+      case queryVar (us !! 1) (char \* "xs") of
+        Partial t -> t `shouldBeAlphaEquivalentTo` [Fresh 0 :: Var Char]
+        st -> fail $ "Expected [_0], but found " ++ show st
+      queryVar (us !! 1) (int "L") `shouldBe` Unified 1
+
+      case queryVar (us !! 2) (char \* "xs") of
+        Partial t -> t `shouldBeAlphaEquivalentTo` [Fresh 0 :: Var Char, Fresh 1 :: Var Char]
+        st -> fail $ "Expected [_0, _1], but found " ++ show st
+      queryVar (us !! 2) (int "L") `shouldBe` Unified 2
+    it "should generate lists of increasing length from a partial list" $ do
+      let us = getAllUnifiers (runHsplN 3 $ hlength? ('a' <:> v"xs", int "L"))
+      length us `shouldBe` 3
+
+      queryVar (head us) (char \* "xs") `shouldBe` Unified []
+      queryVar (head us) (int "L") `shouldBe` Unified 1
+
+      case queryVar (us !! 1) (char \* "xs") of
+        Partial t -> t `shouldBeAlphaEquivalentTo` [Fresh 0 :: Var Char]
+        st -> fail $ "Expected [_0], but found " ++ show st
+      queryVar (us !! 1) (int "L") `shouldBe` Unified 2
+
+      case queryVar (us !! 2) (char \* "xs") of
+        Partial t -> t `shouldBeAlphaEquivalentTo` [Fresh 0 :: Var Char, Fresh 1 :: Var Char]
+        st -> fail $ "Expected [_0, _1], but found " ++ show st
+      queryVar (us !! 2) (int "L") `shouldBe` Unified 3
+
+  describe "the helem predicate" $ do
+    it "should succeed when given an element of the list" $ do
+      length (getAllSolutions $ runHspl $ helem? ('a', ['a', 'b', 'c'])) `shouldBe` 1
+      length (getAllSolutions $ runHspl $ helem? ('b', ['a', 'b', 'c'])) `shouldBe` 1
+      length (getAllSolutions $ runHspl $ helem? ('c', ['a', 'b', 'c'])) `shouldBe` 1
+      length (getAllSolutions $ runHspl $ helem? ('a', ['a', 'b', 'a', 'c'])) `shouldBe` 2
+    it "should fail when given a value that is not in the list" $ do
+      getAllSolutions (runHspl $ helem? ('a', ['b', 'c', 'd'])) `shouldBe` []
+      getAllSolutions (runHspl $ helem? ('a', [] :: [Char])) `shouldBe` []
+    it "should backtrack over all elements of the list" $ do
+      let us = getAllUnifiers $ runHspl $ helem? (char "x", ['a', 'b', 'c'])
+      length us `shouldBe` 3
+
+      queryVar (us !! 0) (char "x") `shouldBe` Unified 'a'
+      queryVar (us !! 1) (char "x") `shouldBe` Unified 'b'
+      queryVar (us !! 2) (char "x") `shouldBe` Unified 'c'
+    it "should generate lists with the given element" $ do
+      let us = getAllUnifiers $ runHsplN 3 $ helem? ('a', char \* "xs")
+
+      case queryVar (us !! 0) (char \* "xs") of
+        Partial t -> t `shouldBeAlphaEquivalentTo` ('a' <:> Fresh 0)
+        st -> fail $ "Expected ['a' | _0], but got " ++ show st
+      case queryVar (us !! 1) (char \* "xs") of
+        Partial t -> t `shouldBeAlphaEquivalentTo` (Fresh 0 <:> 'a' <:> Fresh 1)
+        st -> fail $ "Expected [_0, 'a' | _1], but found " ++ show st
+      case queryVar (us !! 2) (char \* "xs") of
+        Partial t -> t `shouldBeAlphaEquivalentTo` (Fresh 0 <:> Fresh 1 <:> 'a' <:> Fresh 2)
+        st -> fail $ "Expected [_0, _1, 'a' | _2], but found " ++ show st
+
+  describe "the hat predicate" $ do
+    it "should succeed when given the correct index and element" $ do
+      length (getAllSolutions $ runHspl $ hat? (0 :: Int, ['a', 'b', 'c'], 'a')) `shouldBe` 1
+      length (getAllSolutions $ runHspl $ hat? (1 :: Int, ['a', 'b', 'c'], 'b')) `shouldBe` 1
+      length (getAllSolutions $ runHspl $ hat? (2 :: Int, ['a', 'b', 'c'], 'c')) `shouldBe` 1
+    it "should fail when given the incorrect index and element" $ do
+      getAllSolutions (runHspl $ hat? (0 :: Int, [] :: [Char], 'a')) `shouldBe` []
+      getAllSolutions (runHspl $ hat? (0 :: Int, ['a', 'b'], 'b')) `shouldBe` []
+      getAllSolutions (runHspl $ hat? (1 :: Int, ['a', 'b'], 'a')) `shouldBe` []
+    it "should calculate the index of an element" $ do
+      let us = getAllUnifiers $ runHspl $ hat? (int "i", ['a', 'b', 'a'], 'a')
+      length us `shouldBe` 2
+      head us `shouldSatisfy` ((0 :: Int) // int "i" `isSubunifierOf`)
+      last us `shouldSatisfy` ((2 :: Int) // int "i" `isSubunifierOf`)
+
+      let us = getAllUnifiers $ runHspl $ hat? (int "i", ['a', 'b', 'a'], 'b')
+      length us `shouldBe` 1
+      head us `shouldSatisfy` ((1 :: Int) // int "i" `isSubunifierOf`)
+    it "should calculate the element at a given position" $ do
+      let us = getAllUnifiers $ runHspl $ hat? (0 :: Int, ['a', 'b'], char "c")
+      length us `shouldBe` 1
+      head us `shouldSatisfy` ('a' // char "c" `isSubunifierOf`)
+
+      let us = getAllUnifiers $ runHspl $ hat? (1 :: Int, ['a', 'b'], char "c")
+      length us `shouldBe` 1
+      head us `shouldSatisfy` ('b' // char "c" `isSubunifierOf`)
+    it "should enumerate a list" $ do
+      let us = getAllUnifiers $ runHspl $ hat?(int "i", ['a', 'b'], char "c")
+      length us `shouldBe` 2
+      head us `shouldSatisfy` (((0 :: Int) // int "i" <> 'a' // char "c") `isSubunifierOf`)
+      last us `shouldSatisfy` (((1 :: Int) // int "i" <> 'b' // char "c") `isSubunifierOf`)
+    it "should insert an element in a list" $ do
+      let us = getAllUnifiers $ runHspl $ hat?(0 :: Int, [char "x", char "y"], 'a')
+      length us `shouldBe` 1
+      head us `shouldSatisfy` (('a' // char "x") `isSubunifierOf`)
+
+      let us = getAllUnifiers $ runHspl $ hat?(1 :: Int, [char "x", char "y"], 'a')
+      length us `shouldBe` 1
+      head us `shouldSatisfy` (('a' // char "y") `isSubunifierOf`)
 
   describe "the |=| predicate" $ do
     let exec = execWriter . unGW
