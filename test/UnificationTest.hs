@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
 #if __GLASGOW_HASKELL__ >= 800
 {-# OPTIONS_GHC -fdefer-type-errors #-}
 #endif
@@ -16,6 +17,7 @@ import Test.ShouldNotTypecheck
 
 import           Control.Exception.Base (evaluate)
 import           Control.Monad.State hiding (when)
+import           Control.Monad.Writer (MonadWriter (..), runWriter)
 import           Data.Data
 import qualified Data.Map as M
 import           Data.Monoid hiding (Sum, Product)
@@ -126,6 +128,16 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         queryVar (toTerm True // Var "x") (Var "x" :: Var Bool) `shouldBe` Unified True
         let t = adt Just (Var "y" :: Var Bool)
         queryVar (t // Var "x") (Var "x" :: Var (Maybe Bool)) `shouldBe` Partial t
+    it "should map a generic function" $
+      mapUnifier show (toTerm 'a' // Var "x" <> toTerm True // Var "y") `shouldBePermutationOf`
+        [show (toTerm (Var "x" :: Var Char), toTerm 'a'), show (toTerm (Var "y" :: Var Bool), toTerm True)]
+    it "should loop a monad" $ do
+      let u = toTerm 'a' // Var "x" <> toTerm True // Var "y"
+      let m (v, t) = writer (show v, [show t])
+      let (vs, ts) = runWriter $ forMUnifier u m :: ([String], [String])
+      vs `shouldBePermutationOf`
+        [show $ toTerm (Var "x" :: Var Char), show $ toTerm (Var "y" :: Var Bool)]
+      ts `shouldBePermutationOf` [show $ toTerm 'a', show $ toTerm True]
   describe "term unification" $ do
     when "both terms are variables" $
       it "should keep user-defined variables over fresh variables where possible" $ do

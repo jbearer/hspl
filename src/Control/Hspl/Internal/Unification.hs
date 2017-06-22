@@ -1,6 +1,7 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
@@ -24,6 +25,8 @@ module Control.Hspl.Internal.Unification (
   , updateSubMap
   , compose
   , (//)
+  , mapUnifier
+  , forMUnifier
   -- ** Querying a unifier
   , UnificationStatus (..)
   , findVar
@@ -97,6 +100,22 @@ instance Show Unifier where
 instance Monoid Unifier where
   mempty = Unifier M.empty
   mappend = compose
+
+-- | Apply a function to each variable-term mapping in a unifier. The function must be polymorphic
+-- over all possible types which can be represented by the 'Term'. The results of each function
+-- application are returned in a list.
+mapUnifier :: (forall a. TermEntry a => (Var a, Term a) -> r) -> Unifier -> [r]
+mapUnifier f (Unifier m) = concatMap go (M.elems m)
+  where go (SubMap sm) = map f (M.toList sm)
+
+-- | Lift each variable-term mapping in a unifier into a sequenced monadic computation. The provided
+-- "lifting" function must be polymorphic over all 'TermEntry' types.
+forMUnifier :: Monad m => Unifier -> (forall a. TermEntry a => (Var a, Term a) -> m r) -> m [r]
+forMUnifier u f = reduce $ mapUnifier f u
+  where reduce [] = return []
+        reduce (m:ms) = do x <- m
+                           xs <- reduce ms
+                           return $ x:xs
 
 -- | Find the term which is to replace a given variable. If no variable of the right name /and/ type
 -- exists in the 'Unifier', this returns 'Nothing'.
