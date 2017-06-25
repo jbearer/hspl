@@ -30,6 +30,7 @@ module Control.Hspl.Internal.Debugger (
 
 import           Control.Monad.Logic
 import           Control.Monad.State
+import           Data.List
 import qualified Data.Map as M
 import           System.Console.ANSI
 import           System.IO
@@ -154,7 +155,8 @@ debugCont stack = SolverCont { tryPredicate = debugFirstAlternative stack
                              , tryOrRight = debugOrRight stack
                              , tryTop = debugTop stack
                              , tryBottom = debugBottom stack
-                             , errorUnknownPred = debugErrorUnknownPred stack
+                             , failUnknownPred = debugFailUnknownPred stack
+                             , errorUninstantiatedVariables = debugErrorUninstantiatedVariables stack
                              }
 
 -- | Print a line to the 'output' 'Handle'. The end-of-line character depends on whether we are
@@ -304,8 +306,8 @@ debugBottom s =
   in call0 stack proveBottomWith
 
 -- | Continuation hook invoked when a goal with no matching clauses is encountered.
-debugErrorUnknownPred :: [Goal] -> Predicate -> Debugger a
-debugErrorUnknownPred s p@(Predicate name _) = do
+debugFailUnknownPred :: [Goal] -> Predicate -> Debugger ProofResult
+debugFailUnknownPred s p@(Predicate name _) = do
   let stack = PredGoal p [] : s
   -- Since there are no clauses, there will be no corresponding 'Call' message, rather we will fail
   -- immediately. To make the output a little more intuitive, we explicitly log a 'Call' here.
@@ -313,6 +315,15 @@ debugErrorUnknownPred s p@(Predicate name _) = do
   ifTarget stack $ prompt stack Error $
     "Unknown predicate \"" ++ name ++ " :: " ++ show (predType p) ++ "\""
   mzero
+
+-- | Continuation hook resulting in a runtime error when attempting to evaluate a 'Term' containing
+-- ununified variables.
+debugErrorUninstantiatedVariables :: [Goal] -> a
+debugErrorUninstantiatedVariables stack =
+  let annotatedStack =
+        ["(" ++ show d ++ ") " ++ show g | (d, g) <- zip ([1..] :: [Int]) (reverse stack)]
+  in error $ "Variables are not sufficiently instantiated.\nGoal stack:\n" ++
+             intercalate "\n" annotatedStack
 
 -- | Run the debugger with the given configuration and goal. The result of this function is a
 -- computaion in the 'IO' monad which, when executed, will run the debugger.

@@ -1,7 +1,13 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+#if __GLASGOW_HASKELL__ < 710
+{-# LANGUAGE OverlappingInstances #-}
+#endif
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraint
+{-# LANGUAGE UndecidableInstances #-}
 
 -- Abstraction layer on top of HSpec, plus some additional combinators. This is necessary because
 -- versions of HSpec < 2.4 do not include the shouldNotBe expectation, which is used by many tests.
@@ -22,7 +28,7 @@ module Testing (
   , shouldBeSubsetOf
   , pending
   , pendingWith
-  , assertError
+  , AssertError (..)
   , shouldBeAlphaEquivalentTo
   ) where
 
@@ -95,13 +101,19 @@ shouldBeSubsetOf xs ys
   | xs `isSubsetOf` ys = success
   | otherwise = failure $ "Expected: " ++ show xs ++ "\nto be a subset of: " ++ show ys
 
-assertError :: (NFData a, Show a) => String -> (() ~ () => a) -> Assertion
-assertError expected expr = do
-  result <- try (evaluate $ force expr)
-  case result of
-    Right r -> assertFailure $ "Expected the expression " ++ show r ++ " to raise an error:\n" ++
-                               expected
-    Left (ErrorCall msg) -> msg `shouldBe` expected
-
 shouldBeAlphaEquivalentTo :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Assertion
 shouldBeAlphaEquivalentTo a b = toTerm a `shouldSatisfy` alphaEquivalent (toTerm b)
+
+class AssertError a where
+  assertError :: String -> a -> Assertion
+
+instance {-# OVERLAPPABLE #-} (NFData a, Show a) => AssertError a where
+  assertError expected expr = assertError expected $ evaluate $ force expr
+
+instance {-# OVERLAPPING #-} Show a => AssertError (IO a) where
+  assertError expected expr = do
+    result <- try expr
+    case result of
+      Right r -> assertFailure $ "Expected the expression " ++ show r ++ " to raise an error:\n" ++
+                                 expected
+      Left (ErrorCall msg) -> msg `shouldBe` expected

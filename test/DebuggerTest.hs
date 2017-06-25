@@ -431,3 +431,14 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
         [ expectCall 1 "deep" (Var "x" :: Var Char)
         , "Unknown command \"bogus\". Try \"?\" for help."
         ]
+
+  describe "an uninstantiated variables error" $
+    it "should print the goal stack" $ do
+      let goal = PredGoal (predicate "foo" (Var "x" :: Var Char))
+                          [HornClause (predicate "foo" (Var "x" :: Var Char))
+                                      (Equal (toTerm 'a') (toTerm (Var "x")))]
+      let msg = "Variables are not sufficiently instantiated.\n" ++
+                "Goal stack:\n" ++
+                "(1) " ++ show (PredGoal (predicate "foo" (Var "x" :: Var Char)) []) ++ "\n" ++
+                "(2) " ++ show (Equal (toTerm 'a') (toTerm (Var "x")))
+      assertError msg $ runTest goal ["n", "n"] []

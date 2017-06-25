@@ -371,7 +371,10 @@ data SolverCont (m :: * -> *) =
                -- | Continuation to be invoked when a goal fails because there are no matching
                -- clauses. This computation should result in 'mzero', but may perform effects in the
                -- underlying monad first.
-             , errorUnknownPred :: Predicate -> SolverT m ProofResult
+             , failUnknownPred :: Predicate -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to evaluate a 'Term' which contains
+               -- ununified variables. This is a runtime error.
+             , errorUninstantiatedVariables :: forall a. a
              }
 
 -- | Continuations which, when passed to 'proveWith', will allow statements to be proven with no
@@ -389,7 +392,9 @@ solverCont = SolverCont { tryPredicate = provePredicateWith solverCont
                         , tryOrRight = proveOrRightWith solverCont
                         , tryTop = proveTopWith solverCont
                         , tryBottom = proveBottomWith solverCont
-                        , errorUnknownPred = const mzero
+                        , failUnknownPred = const mzero
+                        , errorUninstantiatedVariables =
+                            error "Variables are not sufficiently instantiated."
                         }
 
 -- | Run the minimal, zero-overhead version of the algorithm by supplying the appropriate
@@ -438,21 +443,21 @@ proveIdenticalWith _ t1 t2 = if t1 == t2
 -- | Check if the value of the right-hand side unifies with the left-hand side.
 proveEqualWith :: (TermEntry a, Monad m) =>
                   SolverCont m -> Term a -> Term a -> SolverT m ProofResult
-proveEqualWith _ lhs rhs = case mgu lhs (eval rhs) of
+proveEqualWith cont lhs rhs = case mgu lhs (eval rhs) of
     Just u -> return (Equated (unifyTerm u lhs) (unifyTerm u rhs), u)
     Nothing -> mzero
   where eval :: TermEntry a => Term a -> Term a
         eval t = case fromTerm t of
           Just t' -> toTerm t'
-          Nothing -> error "Variables are not sufficiently instantiated."
+          Nothing -> errorUninstantiatedVariables cont
 
 -- | Check if the left-hand side is less than the right-hand side. No new bindings are created.
 proveLessThanWith :: (TermEntry a, Ord a, Monad m) =>
                      SolverCont m -> Term a -> Term a -> SolverT m ProofResult
-proveLessThanWith _ lhs rhs = case (fromTerm lhs, fromTerm rhs) of
+proveLessThanWith cont lhs rhs = case (fromTerm lhs, fromTerm rhs) of
   (Just l, Just r) | l < r -> return (ProvedLessThan l r, mempty)
   (Just _, Just _) -> mzero
-  _ -> error "Variables are not sufficiently instantiated."
+  _ -> errorUninstantiatedVariables cont
 
 -- | Succeed if and only if the given 'Goal' fails. No new bindings are created in the process.
 proveNotWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
@@ -493,7 +498,7 @@ proveBottomWith _ = mzero
 -- relevant event occurs during the course of the proof.
 proveWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
 proveWith cont g = case g of
-  PredGoal p [] -> errorUnknownPred cont p
+  PredGoal p [] -> failUnknownPred cont p
   PredGoal p (c:cs) -> tryPredicate cont p c `mplus` msum (map (retryPredicate cont p) cs)
   CanUnify t1 t2 -> tryUnifiable cont t1 t2
   Identical t1 t2 -> tryIdentical cont t1 t2
