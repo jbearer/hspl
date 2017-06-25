@@ -21,8 +21,8 @@ module Control.Hspl.Examples (
   , goodWidget
   -- * Using lists
   -- $lists
-  , member
   , distinct
+  , cross
   -- * Unification and equality
   -- $equals
   , isFoo
@@ -77,25 +77,13 @@ goodWidget = predicate "goodWidget" $
 -- $lists
 -- A simple example illustrating the use of lists in HSPL.
 --
--- >>> getAllSolutions $ runHspl $ member? (char "x", "abc")
--- [member('a', 'a', 'b', 'c'),member('b', 'a', 'b', 'c'),member('c', 'a', 'b', 'c')]
---
--- >>> getAllSolutions $ runHspl $ member? (int "x", [1, 1] :: [Int])
--- [member(1, 1, 1),member(1, 1, 1)]
---
 -- >>> getAllSolutions $ runHspl $ distinct? (int "x", [1, 1] :: [Int])
 -- [member(1, 1, 1)]
+--
+-- >>> getAllSolutions $ runHspl $ cross? (['a', 'b'], [True, False], v"xs")
+-- [cross('a', 'b', True, False, 'a', True),cross('a', 'b', True, False, 'a', False),cross('a', 'b', True, False, 'b', True),cross('a', 'b', True, False, 'b', False)]
 
--- | @member? (v"x", [...])@ succeeds once for each element of the list, and binds that element to
--- the variable @"x"@. @member? (x, xs)@ succeeds if and only if @x@ is an element of @xs@.
-member :: forall a. TermEntry a => Predicate (a, [a])
-member = predicate "member" $ do
-  let a :: String -> Var a
-      a = v
-  match (a"x", a"x" <:> v"xs")
-  match (a"y", a"x" <:> v"xs") |- member? (a"y", a \* "xs")
-
--- | Similar to 'member', but if the first variable is unbound, 'distinct' succeeds only once for
+-- | Similar to 'helem', but if the first variable is unbound, 'distinct' succeeds only once for
 -- each distinct element of the list.
 distinct :: forall a. TermEntry a => Predicate (a, [a])
 distinct = predicate "distinct" $ do
@@ -103,6 +91,13 @@ distinct = predicate "distinct" $ do
   match (v"y", v"x" <:> v"xs") |- do
     (v"y" :: Var a) |\=| (v"x" :: Var a)
     distinct? (v"y" :: Var a, v"xs" :: Var [a])
+
+-- | Compute the Cartesian product of two lists.
+cross :: forall a b. (TermEntry a, TermEntry b) => Predicate ([a], [b], (a, b))
+cross = predicate "cross" $
+  match (v"xs" :: Var [a], v"ys" :: Var [b], (v"x", v"y")) |- do
+    helem? (v"x" :: Var a, v"xs")
+    helem? (v"y" :: Var b, v"ys")
 
 -- $equals
 -- Example illustrating the difference between 'is' and '|=|'.
