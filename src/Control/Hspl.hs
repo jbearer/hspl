@@ -31,7 +31,9 @@ module Control.Hspl (
   , NoVariables
   -- * Building HSPL programs
   , GoalWriter (..)
+  , execGoalWriter
   , ClauseWriter (..)
+  , execClauseWriter
   -- ** Defining predicates
   , predicate
   , match
@@ -146,11 +148,19 @@ type Clause = Ast.HornClause
 newtype GoalWriter a = GW { unGW :: Writer Goal a }
   deriving (Functor, Applicative, Monad, MonadWriter Goal)
 
+-- | Extract the 'Goal' from a 'GoalWriter'.
+execGoalWriter :: GoalWriter a -> Goal
+execGoalWriter = execWriter . unGW
+
 -- | A monad for appending alternative 'Clause's to a 'Predicate'. This monad creates a list of
 -- functions waiting for a predicate name. When applied to a string, they produce clauses whose
 -- positive literals has that name.
 newtype ClauseWriter t a = CW { unCW :: Writer [String -> Clause] a }
   deriving (Functor, Applicative, Monad, MonadWriter [String -> Clause])
+
+-- | Extract a list of 'Clause' constructors from a 'ClauseWriter'.
+execClauseWriter :: ClauseWriter t a -> [String -> Clause]
+execClauseWriter = execWriter . unCW
 
 -- | Predicate application. @pred? term@ is a goal that succeeds if the predicate @pred@ applied
 -- to @term@ is true.
@@ -193,7 +203,7 @@ data Predicate a = Predicate { predName :: String, definitions :: [Clause] }
 --
 -- Note that the generic type must be an instance of 'TermEntry'.
 predicate :: String -> ClauseWriter t b -> Predicate t
-predicate name gs = Predicate name (map ($name) $ execWriter $ unCW gs)
+predicate name gs = Predicate name (map ($name) $ execClauseWriter gs)
 
 -- | Make a statement about when a 'Predicate' holds for inputs of a particular form. A 'match'
 -- statement succeeds when the input can unify with the argument to 'match'. When attempting to
@@ -208,8 +218,8 @@ match t = tell [\p -> Ast.HornClause (Ast.predicate p $ toTerm t) Top]
 infixr 0 |-
 (|-) :: ClauseWriter t a -> GoalWriter b -> ClauseWriter t ()
 p |- gs =
-  let [f] = execWriter $ unCW p
-      goal = execWriter $ unGW gs
+  let [f] = execClauseWriter p
+      goal = execGoalWriter gs
       addGoal name = let Ast.HornClause prd ogGoal = f name
                      in assert (ogGoal == Top) $ Ast.HornClause prd goal
   in tell [addGoal]
@@ -237,7 +247,7 @@ isnt t1 t2 = lnot $ t1 `is` t2
 -- false. @lnot@ does not create any new bindings.
 lnot :: GoalWriter a -> GoalWriter ()
 lnot p =
-  let g = execWriter $ unGW p
+  let g = execGoalWriter p
   in tell $ Not g
 
 -- | Logical disjunction. @p ||| q@ is a predicate which is true if either @p@ is true or @q@ is
@@ -246,8 +256,8 @@ lnot p =
 infixl 1 |||
 (|||) :: GoalWriter a -> GoalWriter b -> GoalWriter ()
 gw1 ||| gw2 =
-  let g1 = execWriter $ unGW gw1
-      g2 = execWriter $ unGW gw2
+  let g1 = execGoalWriter gw1
+      g2 = execGoalWriter gw2
   in tell $ Or g1 g2
 
 -- | A predicate which always succeeds.
@@ -352,7 +362,7 @@ a |%| b = Ast.Modulus (toTerm a) (toTerm b)
 -- functions like `getAllSolutions`, `searchProof`, etc.
 runHspl :: GoalWriter a -> [ProofResult]
 runHspl gs =
-  let g = execWriter $ unGW gs
+  let g = execGoalWriter gs
   in Solver.runHspl g
 
 -- | Query an HSPL program for a given goal. If a proof is found, stop immediately instead of
@@ -365,7 +375,7 @@ runHspl1 gs = case runHsplN 1 gs of
 -- | Query an HSPL program for a given goal. Stop after @n@ solutions are found.
 runHsplN :: Int -> GoalWriter a -> [ProofResult]
 runHsplN n gs =
-  let g = execWriter $ unGW gs
+  let g = execGoalWriter gs
   in Solver.runHsplN n g
 
 {- $types
