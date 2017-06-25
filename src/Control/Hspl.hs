@@ -225,11 +225,13 @@ p |- gs =
   in tell [addGoal]
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
+infix 2 |=|
 (|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
 t1 |=| t2 = tell $ Ast.CanUnify (toTerm t1) (toTerm t2)
 
 -- | Negation of '|=|'. The predicate @t1 |\\=| t2@ succeeds if and only if @t1 |=| t2@ fails. No
 -- new bindings are created.
+infix 2 |\=|
 (|\=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> GoalWriter ()
 t1 |\=| t2 = lnot $ t1 |=| t2
 
