@@ -103,6 +103,7 @@ module Control.Hspl (
   -- ** ADTs
   -- $adts
   , ($$)
+  , enum
   ) where
 
 #if __GLASGOW_HASKELL__ < 710
@@ -470,8 +471,17 @@ subterms in an ADT via the '$$' constructor. See 'Control.Hspl.Examples.adts' fo
 --    toTerm (Leaf a) = Leaf $$ a
 --    toTerm (Tree a l r) = Tree $$ (a, l, r)
 -- @
+infixr 3 $$
 ($$) :: AdtTerm f a r => f -> a -> Term r
 ($$) = adt
+
+-- | Backtrack over all the values of a bounded enumerable type. For example,
+--
+-- >>> getAllSolutions $ runHspl $ enum? bool "x"
+-- [enum(False), enum(True)]
+enum :: forall a. (TermEntry a, Bounded a, Enum a) => Predicate a
+enum = predicate "enum" $
+  match(v"x") |- helem?(v"x" :: Var a, enumFromTo minBound maxBound :: [a])
 
 {- $lists
 Lists can also be used as HSPL terms. Lists consisting entirely of constants or of variables can be

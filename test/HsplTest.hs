@@ -29,6 +29,10 @@ data Arities = A1 Char
   deriving (Show, Eq, Typeable, Data, Generic)
 instance Termable Arities
 
+data BoundedEnum = E1 | E2 | E3 | E4
+  deriving (Show, Eq, Typeable, Data, Generic, Ord, Bounded, Enum)
+instance Termable BoundedEnum
+
 foo :: Predicate Char
 foo = predicate "foo" $ match (v"x")
 
@@ -138,6 +142,12 @@ test = describeModule "Control.Hspl" $ do
     it "should produce terms which can be reified" $ do
       Ast.fromTerm (A3 $$ ('a', 'b', 'c')) `shouldBe` Just (A3 'a' 'b' 'c')
       Ast.fromTerm (A4 $$ ('a', 'b' ,'c', 'd')) `shouldBe` Just (A4 'a' 'b' 'c' 'd')
+
+  describe "The enum predicate" $
+    it "should backtrack over all elements of a bounded enumerable type" $ do
+      let us = getAllUnifiers $ runHspl $ enum? (v"x" :: Var BoundedEnum)
+      length us `shouldBe` 4
+      head us `shouldSatisfy` (E1 // v"x" `isSubunifierOf`)
 
   describe "list term construction" $ do
     context "via cons" $ do
