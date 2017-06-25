@@ -97,6 +97,7 @@ module Control.Hspl (
   -- $lists
   , (<:>)
   , (<++>)
+  , nil
   , helem
   , hlength
   , hat
@@ -511,6 +512,15 @@ t <:> ts = Ast.List (toTerm t) (toTerm ts)
 (<++>) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => [a] -> [b] -> Term [HSPLType a]
 [] <++> ts = toTerm ts
 (t:ts) <++> ts' = Ast.List (toTerm t) (ts <++> ts')
+
+-- | A term representing an empty list. Note that for most lists which do not contain variables, the
+-- list itself can be used as a term, e.g. @helem? (char "c", ['a', 'b', 'c'])@. However, for empty
+-- lists, the compiler cannot tell the difference between a list of type @[a]@ and a list of type
+-- @[Var a]@. Either would typecheck, and so the type is ambiguous. (Of course, in HSPL, the
+-- semantics would be the same, but GHC doesn't know that). The type annotation for 'nil' informs
+-- the compiler that it is an empty list of terms, not variables, and so there is no ambiguity.
+nil :: forall a. TermEntry a => Term [a]
+nil = toTerm ([] :: [a])
 
 -- | @helem? (x, xs)@ succeeds if @x@ is a member of @xs@. There are three primary modes of use:
 -- 1. If both arguments are instantiated, 'helem' can be used to determine if an element is in a

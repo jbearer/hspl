@@ -177,6 +177,10 @@ test = describeModule "Control.Hspl" $ do
                    (toTerm 'a') (Ast.List
                    (toTerm 'b')
                    Ast.Nil)))
+    context "via nil" $
+      it "should create an empty list of any type" $ do
+        nil `shouldBe` toTerm ([] :: [Int])
+        nil `shouldBe` toTerm ([] :: [Bool])
 
   describe "the hlength predicate" $ do
     it "should succeed when given the correct length of a list" $ do
