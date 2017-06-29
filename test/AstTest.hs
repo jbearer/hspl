@@ -473,100 +473,81 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       PredGoal (predicate "foo" ()) [c1] `shouldEqual` PredGoal (predicate "foo" ()) [c1]
       PredGoal (predicate "foo" ()) [c1] `shouldNotEqual` PredGoal (predicate "foo" ()) [c2]
       PredGoal (predicate "foo" ()) [c1] `shouldNotEqual` PredGoal (predicate "foo" ()) [c1, c2]
-  describe "CanUnify goals" $ do
+  describe "binary term goals" $ do
+    let constrs :: [(Term Char -> Term Char -> Goal, Term Bool -> Term Bool -> Goal)]
+        constrs = [(CanUnify, CanUnify), (Identical, Identical), (Equal, Equal), (LessThan, LessThan)]
     context "of the same type" $
-      it "should compare according to the arguments" $ do
-        CanUnify (toTerm 'a') (toTerm 'b') `shouldEqual` CanUnify (toTerm 'a') (toTerm 'b')
-        CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldEqual`
-          CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'b')
-        CanUnify (toTerm 'a') (toTerm 'b') `shouldNotEqual` CanUnify (toTerm 'a') (toTerm 'a')
-        CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldNotEqual`
-          CanUnify (toTerm (Var "y" :: Var Char)) (toTerm 'b')
+      withParams constrs $ \(char, _) ->
+        context "of the same type" $
+          it "should compare according to the arguments" $ do
+            char (toTerm 'a') (toTerm 'b') `shouldEqual` char (toTerm 'a') (toTerm 'b')
+            char (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldEqual`
+              char (toTerm (Var "x" :: Var Char)) (toTerm 'b')
+            char (toTerm 'a') (toTerm 'b') `shouldNotEqual` char (toTerm 'a') (toTerm 'a')
+            char (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldNotEqual`
+              char (toTerm (Var "y" :: Var Char)) (toTerm 'b')
     context "of different types" $
-      it "should compare unequal" $ do
-        CanUnify (toTerm 'a') (toTerm 'b') `shouldNotEqual` CanUnify (toTerm True) (toTerm False)
-        CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
-          CanUnify (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))
-  describe "Identical goals" $ do
-    context "of the same type" $
-      it "should compare according to the arguments" $ do
-        Identical (toTerm 'a') (toTerm 'b') `shouldEqual` Identical (toTerm 'a') (toTerm 'b')
-        Identical (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldEqual`
-          Identical (toTerm (Var "x" :: Var Char)) (toTerm 'b')
-        Identical (toTerm 'a') (toTerm 'b') `shouldNotEqual` Identical (toTerm 'a') (toTerm 'a')
-        Identical (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldNotEqual`
-          Identical (toTerm (Var "y" :: Var Char)) (toTerm 'b')
-    context "of different types" $
-      it "should compare unequal" $ do
-        Identical (toTerm 'a') (toTerm 'b') `shouldNotEqual` Identical (toTerm True) (toTerm False)
-        Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
-          Identical (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))
-  describe "Equal goals" $ do
-    context "of the same type" $
-      it "should compare according to the arguments" $ do
-        Equal (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldEqual`
-          Equal (toTerm (1 :: Int)) (toTerm (2 :: Int))
-        Equal (toTerm (Var "x" :: Var Int)) (toTerm (1 :: Int)) `shouldEqual`
-          Equal (toTerm (Var "x" :: Var Int)) (toTerm (1 :: Int))
-        Equal (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldNotEqual`
-          Equal (toTerm (1 :: Int)) (toTerm (1 :: Int))
-        Equal (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int)) `shouldNotEqual`
-          Equal (toTerm (Var "y" :: Var Int)) (toTerm (2 :: Int))
-    context "of different types" $
-      it "should compare unequal" $ do
-        Equal (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldNotEqual`
-          Equal (toTerm (1.0 :: Double)) (toTerm (2.0 :: Double))
-        Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int)) `shouldNotEqual`
-          Equal (toTerm (Var "x" :: Var Double)) (toTerm (Var "y" :: Var Double))
-  describe "LessThan goals" $ do
-    context "of the same type" $
-      it "should compare according to the arguments" $ do
-        LessThan (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldEqual`
-          LessThan (toTerm (1 :: Int)) (toTerm (2 :: Int))
-        LessThan (toTerm (Var "x" :: Var Int)) (toTerm (1 :: Int)) `shouldEqual`
-          LessThan (toTerm (Var "x" :: Var Int)) (toTerm (1 :: Int))
-        LessThan (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldNotEqual`
-          LessThan (toTerm (1 :: Int)) (toTerm (1 :: Int))
-        LessThan (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int)) `shouldNotEqual`
-          LessThan (toTerm (Var "y" :: Var Int)) (toTerm (2 :: Int))
-    context "of different types" $
-      it "should compare unequal" $ do
-        LessThan (toTerm (1 :: Int)) (toTerm (2 :: Int)) `shouldNotEqual`
-          LessThan (toTerm (1.0 :: Double)) (toTerm (2.0 :: Double))
-        LessThan (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int)) `shouldNotEqual`
-          LessThan (toTerm (Var "x" :: Var Double)) (toTerm (Var "y" :: Var Double))
+      withParams constrs $ \(char, bool) ->
+        it "should compare unequal" $ do
+          char (toTerm 'a') (toTerm 'b') `shouldNotEqual` bool (toTerm True) (toTerm False)
+          char (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
+            bool (toTerm (Var "x" :: Var Bool)) (toTerm (Var "y" :: Var Bool))
   describe "Not goals" $
     it "should compare according to the inner goal" $ do
       Not (PredGoal (predicate "foo" ()) []) `shouldEqual` Not (PredGoal (predicate "foo" ()) [])
       Not (PredGoal (predicate "foo" ()) []) `shouldNotEqual` Not (PredGoal (predicate "bar" ()) [])
-  describe "And goals" $
-    it "should compare according to the subgoals" $ do
-      And (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldEqual`
-        And (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) [])
-      And (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
-        And (PredGoal (predicate "foo'" ()) []) (PredGoal (predicate "bar" ()) [])
-      And (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
-        And (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar'" ()) [])
-  describe "Or goals" $
-    it "should compare according to the subgoals" $ do
-      Or (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldEqual`
-        Or (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) [])
-      Or (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
-        Or (PredGoal (predicate "foo'" ()) []) (PredGoal (predicate "bar" ()) [])
-      Or (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
-        Or (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar'" ()) [])
-  describe "Top" $ do
-    it "should equal itself" $
-      Top `shouldEqual` Top
-    it "should not equal any other goal" $ do
-      Top `shouldNotEqual` Bottom
-      Top `shouldNotEqual` And Top Top
-  describe "Bottom" $ do
-    it "should equal itself" $
-      Bottom `shouldEqual` Bottom
-    it "should not equal any other goal" $ do
-      Bottom `shouldNotEqual` Top
-      Bottom `shouldNotEqual` And Bottom Bottom
+  describe "binary logic goals" $
+    withParams [And, Or] $ \constr ->
+      it "should compare according to the subgoals" $ do
+        constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldEqual`
+          constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) [])
+        constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
+          constr (PredGoal (predicate "foo'" ()) []) (PredGoal (predicate "bar" ()) [])
+        constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
+          constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar'" ()) [])
+  describe "unitary logic goals" $
+    withParams [Top, Bottom] $ \constr -> do
+      it "should equal itself" $
+        constr `shouldEqual` constr
+      it "should not equal any other goal" $ do
+        constr `shouldNotEqual` case constr of { Top -> Bottom; Bottom -> Top }
+        constr `shouldNotEqual` And constr constr
+  describe "Alternatives goals" $ do
+    context "of the same type" $
+      it "should compare according to the subcomponents" $ do
+        let g = Alternatives (toTerm (Var "x" :: Var Char))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm (Var "xs" :: Var [Char]))
+        g `shouldEqual` g
+
+        Alternatives (toTerm (Var "x" :: Var Char))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm (Var "xs" :: Var [Char])) `shouldNotEqual`
+          Alternatives (toTerm (Var "y" :: Var Char))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm (Var "xs" :: Var [Char]))
+
+        Alternatives (toTerm (Var "x" :: Var Char))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm (Var "xs" :: Var [Char])) `shouldNotEqual`
+          Alternatives (toTerm (Var "x" :: Var Char))
+                             (Equal (toTerm 'b') (toTerm 'a'))
+                             (toTerm (Var "xs" :: Var [Char]))
+
+        Alternatives (toTerm (Var "x" :: Var Char))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm (Var "xs" :: Var [Char])) `shouldNotEqual`
+          Alternatives (toTerm (Var "x" :: Var Char))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm (Var "ys" :: Var [Char]))
+    context "of different types" $
+      it "should compare unequal" $
+        Alternatives (toTerm (Var "x" :: Var Char))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm (Var "xs" :: Var [Char])) `shouldNotEqual`
+          Alternatives (toTerm (Var "x" :: Var Bool))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm (Var "xs" :: Var [Bool]))
   describe "goals" $
     it "should form a monoid under conjunction" $ do
       mempty `shouldBe` Top

@@ -284,6 +284,7 @@ unifyGoal u (And g1 g2) = And (unifyGoal u g1) (unifyGoal u g2)
 unifyGoal u (Or g1 g2) = Or (unifyGoal u g1) (unifyGoal u g2)
 unifyGoal _ Top = Top
 unifyGoal _ Bottom = Bottom
+unifyGoal u (Alternatives x g xs) = Alternatives (unifyTerm u x) (unifyGoal u g) (unifyTerm u xs)
 
 -- | Apply a 'Unifier' to all 'Predicate's in a 'HornClause'.
 unifyClause :: Unifier -> HornClause -> HornClause
@@ -441,6 +442,11 @@ renameGoal (Or g1 g2) = do
   return $ Or g1' g2'
 renameGoal Top = return Top
 renameGoal Bottom = return Bottom
+renameGoal (Alternatives x g xs) = do
+  x' <- renameTerm x
+  g' <- renameGoal g
+  xs' <- renameTerm xs
+  return $ Alternatives x' g' xs'
 
 -- | Helper function for renaming variables in a 'Goal' with two 'Term' arguments.
 renameBinaryGoal :: Monad m => (Term a -> Term b -> Goal) -> Term a -> Term b -> RenamedT m Goal

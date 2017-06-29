@@ -132,6 +132,21 @@ expectBottom d = [ "(" ++ show d ++ ") Call: " ++ show Bottom
                  , "(" ++ show d ++ ") Fail: " ++ show Bottom
                  ]
 
+expectAlternativesCall :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) =>
+                          Int -> a -> Goal -> as -> String
+expectAlternativesCall d x g xs = "(" ++ show d ++ ") Call: " ++
+                                  show (Alternatives (toTerm x) g (toTerm xs))
+
+expectAlternativesExit :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) =>
+                          Int -> a -> Goal -> as -> String
+expectAlternativesExit d x g xs = "(" ++ show d ++ ") Exit: " ++
+                                  show (Alternatives (toTerm x) g (toTerm xs))
+
+expectAlternativesFail :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) =>
+                          Int -> a -> Goal -> as -> String
+expectAlternativesFail d x g xs = "(" ++ show d ++ ") Fail: " ++
+                                  show (Alternatives (toTerm x) g (toTerm xs))
+
 -- deep(X) :- foo(X).
 -- foo(X) :- bar(X).
 -- bar(a).
@@ -311,6 +326,47 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                       , expectOrFail 1 (CanUnify (toTerm "bar") (toTerm "foo"))
                                        (CanUnify (toTerm "foo") (toTerm "baz"))
                       ]
+    let alternativesGoal = Alternatives (toTerm (Var "x" :: Var Char))
+                                        (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                            (CanUnify (toTerm $ Var "x") (toTerm 'b')))
+                                        (toTerm $ Var "xs")
+    let alternativesTrace = [ expectAlternativesCall 1 (Var "x" :: Var Char)
+                                                       (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                                           (CanUnify (toTerm $ Var "x") (toTerm 'b')))
+                                                       (Var "xs")
+                            , expectOrCall 2 (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                             (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                            , expectCanUnifyCall 3 (Var "x") 'a'
+                            , expectCanUnifyExit 3 'a'
+                            , expectOrExit 2 (CanUnify (toTerm 'a') (toTerm 'a'))
+                                             (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                            , expectOrRedo 2 (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                             (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                            , expectCanUnifyCall 3 (Var "x") 'b'
+                            , expectCanUnifyExit 3 'b'
+                            , expectOrExit 2 (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                             (CanUnify (toTerm 'b') (toTerm 'b'))
+                            , expectAlternativesExit 1 (Var "x" :: Var Char)
+                                                       (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                                           (CanUnify (toTerm $ Var "x") (toTerm 'b')))
+                                                       ['a', 'b']
+                            ]
+    let alternativesFailInnerGoal = Alternatives (toTerm (Var "x" :: Var Char))
+                                                 Bottom
+                                                 (toTerm $ Var "xs")
+    let alternativesFailInnerTrace = [ expectAlternativesCall 1 (Var "x" :: Var Char)
+                                                                Bottom
+                                                                (Var "xs")
+                                     ] ++
+                                       expectBottom 2 ++
+                                     [ expectAlternativesExit 1 (Var "x" :: Var Char) Bottom Nil
+                                     ]
+    let alternativesFailGoal = Alternatives (toTerm (Var "x" :: Var Char)) Top Nil
+    let alternativesFailTrace = [ expectAlternativesCall 1 (Var "x" :: Var Char) Top Nil
+                                ] ++
+                                  expectTop 2 ++
+                                [ expectAlternativesFail 1 (Var "x" :: Var Char) Top Nil
+                                ]
     let run g t c = runTest g (map (const c) [1..length t]) t
 
     it "should prompt after every step of computation" $ do
@@ -336,6 +392,9 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       go orFailGoal orFailTrace
       go Top (expectTop 1)
       go Bottom (expectBottom 1)
+      go alternativesGoal alternativesTrace
+      go alternativesFailInnerGoal alternativesFailInnerTrace
+      go alternativesFailGoal alternativesFailTrace
     it "should have a one-character alias" $ do
       let go g t = run g t "s"
       go deepGoal deepTrace

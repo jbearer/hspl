@@ -155,6 +155,7 @@ debugCont stack = SolverCont { tryPredicate = debugFirstAlternative stack
                              , tryOrRight = debugOrRight stack
                              , tryTop = debugTop stack
                              , tryBottom = debugBottom stack
+                             , tryAlternatives = debugAlternatives stack
                              , failUnknownPred = debugFailUnknownPred stack
                              , errorUninstantiatedVariables = debugErrorUninstantiatedVariables stack
                              }
@@ -218,12 +219,19 @@ callWith0 msg stack cont = do
 
 -- | Attempt to prove a subgoal, logging a message of the given type on entry and either 'Exit' or
 -- 'Fail' as appropriate.
-callWith :: MsgType -> [Goal] -> (DebugCont -> a -> Debugger ProofResult) -> a -> Debugger ProofResult
+callWith :: MsgType -> [Goal] -> (DebugCont -> a -> Debugger ProofResult) ->
+            a -> Debugger ProofResult
 callWith msg stack cont g = callWith0 msg stack (\c -> cont c g)
 
 -- | Same as call, but for 2-ary provers.
-callWith2 :: MsgType -> [Goal] -> (DebugCont -> a -> b -> Debugger ProofResult) -> a -> b -> Debugger ProofResult
+callWith2 :: MsgType -> [Goal] -> (DebugCont -> a -> b -> Debugger ProofResult) ->
+             a -> b -> Debugger ProofResult
 callWith2 msg stack cont a b = callWith msg stack (\c (x, y) -> cont c x y) (a, b)
+
+-- | Same as call, but for 3-ary provers.
+callWith3 :: MsgType -> [Goal] -> (DebugCont -> a -> b -> c -> Debugger ProofResult) ->
+             a -> b -> c -> Debugger ProofResult
+callWith3 msg stack cont a b c = callWith msg stack (\cont' (x, y, z) -> cont cont' x y z) (a, b, c)
 
 -- | Attempt to prove a subgoal and log 'Call', 'Exit', and 'Fail' messages as appropriate.
 call :: [Goal] -> (DebugCont -> a -> Debugger ProofResult) -> a -> Debugger ProofResult
@@ -232,6 +240,11 @@ call = callWith Call
 -- | Same as call, but for 2-ary provers.
 call2 :: [Goal] -> (DebugCont -> a -> b -> Debugger ProofResult) -> a -> b -> Debugger ProofResult
 call2 = callWith2 Call
+
+-- | Same as call, but for 3-ary provers.
+call3 :: [Goal] -> (DebugCont -> a -> b -> c -> Debugger ProofResult) ->
+         a -> b -> c -> Debugger ProofResult
+call3 = callWith3 Call
 
 -- | Same as call, but for unitary provers.
 call0 :: [Goal] -> (DebugCont -> Debugger ProofResult) -> Debugger ProofResult
@@ -304,6 +317,11 @@ debugBottom :: [Goal] -> Debugger ProofResult
 debugBottom s =
   let stack = Bottom : s
   in call0 stack proveBottomWith
+
+debugAlternatives :: TermEntry a => [Goal] -> Term a -> Goal -> Term [a] -> Debugger ProofResult
+debugAlternatives s x g xs =
+  let stack = Alternatives x g xs : s
+  in call3 stack proveAlternativesWith x g xs
 
 -- | Continuation hook invoked when a goal with no matching clauses is encountered.
 debugFailUnknownPred :: [Goal] -> Predicate -> Debugger ProofResult

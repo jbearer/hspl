@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraints
 
 module SolverTest where
@@ -9,6 +10,7 @@ import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Unification hiding (Unified)
 import Data.Monoid hiding (Sum, Product)
+import Data.Typeable
 
 instance NFData Proof where
   rnf (Equated t1 t2) = t1 `seq` t2 `seq` ()
@@ -235,6 +237,94 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
   describe "proveBottomWith" $
     it "should always fail" $
       observeAllSolver (proveBottomWith solverCont) `shouldBe` []
+  describe "an Alternatives proof" $ do
+    let runTest x g xs = observeAllSolver $ proveAlternativesWith solverCont x g xs
+    let xIsAOrB = Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                     (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+    let x :: Term Char
+        x = toTerm $ Var "x"
+        xs :: Term [Char]
+        xs = toTerm $ Var "xs"
+    it "should unify a variable with a list of alternatives" $ do
+      let (ps, us) = unzip $ runTest x xIsAOrB xs
+      ps `shouldBe` [FoundAlternatives x xIsAOrB (toTerm ['a', 'b'])
+                                       [ ProvedLeft (Unified (toTerm 'a') (toTerm 'a'))
+                                                    (CanUnify x (toTerm 'b'))
+                                       , ProvedRight (CanUnify x (toTerm 'a'))
+                                                     (Unified (toTerm 'b') (toTerm 'b'))
+                                       ]]
+      length us `shouldBe` 1
+      head us `shouldSatisfy` (['a', 'b'] // Var "xs" `isSubunifierOf`)
+    it "should succeed even if the inner goal fails" $ do
+      let (ps, us) = unzip $ runTest x Bottom xs
+      ps `shouldBe` [FoundAlternatives x Bottom Nil []]
+      length us `shouldBe` 1
+      head us `shouldSatisfy` (Nil // (Var "xs" :: Var [Char]) `isSubunifierOf`)
+    it "should fail if the output term does not unify with the alternatives" $ do
+      runTest x xIsAOrB (toTerm [Var "y" :: Var Char]) `shouldBe` []
+      runTest x Bottom (List (toTerm (Var "y" :: Var Char)) (toTerm $ Var "ys")) `shouldBe` []
+    it "should handle complex templates" $ do
+      let (ps, us) = unzip $ runTest (adt Just x) xIsAOrB (toTerm (Var "xs" :: Var [Maybe Char]))
+      ps `shouldBe` [FoundAlternatives (adt Just x) xIsAOrB (toTerm [Just 'a', Just 'b'])
+                                       [ ProvedLeft (Unified (toTerm 'a') (toTerm 'a'))
+                                                    (CanUnify x (toTerm 'b'))
+                                       , ProvedRight (CanUnify x (toTerm 'a'))
+                                                     (Unified (toTerm 'b') (toTerm 'b'))
+                                       ]]
+      length us `shouldBe` 1
+      head us `shouldSatisfy` ([Just 'a', Just 'b'] // Var "xs" `isSubunifierOf`)
+    it "should take place in the same environment as the parent goal" $ do
+      let g = PredGoal (predicate "foo" 'a')
+                       [HornClause (predicate "foo" (Var "x" :: Var Char))
+                                   (Alternatives (toTerm (Var "y" :: Var Char))
+                                                 (Equal (toTerm (Var "y" :: Var Char)) (toTerm $ Var "x"))
+                                                 (toTerm [Var "x"]))
+                       ]
+      let (ps, _) = unzip $ runHspl g
+      length ps `shouldBe` 1
+      case head ps of
+        Resolved p proof -> do
+          p `shouldBe` predicate "foo" 'a'
+          case proof of
+            FoundAlternatives x g xs proofs -> do
+              case cast x of
+                Just (x' :: Term Char) -> x' `shouldBeAlphaEquivalentTo` (Var "y" :: Var Char)
+                Nothing -> failure $ "Expected y :: Char, but got " ++ show x
+              case cast xs of
+                Just xs' -> xs' `shouldBe` toTerm ['a']
+                Nothing -> failure $ "Expected ['a'], but got " ++ show xs
+              proofs `shouldBe` [Equated (toTerm 'a') (toTerm 'a')]
+              case g of
+                Equal t1 t2 -> do
+                  case cast t1 of
+                    Just (t1' :: Term Char) -> t1' `shouldBeAlphaEquivalentTo` (Var "y" :: Var Char)
+                    Nothing -> failure $ "Expected y :: Char, but got " ++ show t1
+                  case cast t2 of
+                    Just t2' -> t2' `shouldBe` toTerm 'a'
+                    Nothing -> failure $ "Expected 'a', but got " ++ show t2
+                _ -> failure $ "Expected Equal y 'a', but got " ++ show g
+            _ -> failure $ "Expected FoundAlternatives y (Equal y 'a') ['a'], but got " ++ show proof
+        _ -> failure $ "Expected Resolved foo('a') (FoundAlternatives y (Equal y 'a') ['a']), " ++
+                       "but got " ++ show (head ps)
+    when "the template variable is already bound" $
+      it "should return a list of the bound variable" $ do
+        let (ps, us) = unzip $ runHspl $  CanUnify (toTerm $ Var "y") (toTerm 'c')
+                                       <> Alternatives (toTerm $ Var "y") xIsAOrB xs
+        ps `shouldBe` [ProvedAnd (Unified (toTerm 'c') (toTerm 'c'))
+                                 (FoundAlternatives (toTerm 'c') xIsAOrB (toTerm ['c', 'c'])
+                                    [ ProvedLeft (Unified (toTerm 'a') (toTerm 'a'))
+                                                 (CanUnify x (toTerm 'b'))
+                                    , ProvedRight (CanUnify x (toTerm 'a'))
+                                                  (Unified (toTerm 'b') (toTerm 'b'))
+                                    ])]
+        length us `shouldBe` 1
+        head us `shouldSatisfy` (['c', 'c'] // Var "xs" `isSubunifierOf`)
+    when "the template variable is unbound" $
+      it "should return a list of variables" $ do
+        let (ps, us) = unzip $ runTest x Top xs
+        ps `shouldBe` [FoundAlternatives x Top (toTerm [x]) [ProvedTop]]
+        length us `shouldBe` 1
+        head us `shouldSatisfy` ([x] // Var "xs" `isSubunifierOf`)
   describe "a proof search" $ do
     let search p = searchProof (p, mempty)
     it "should traverse every branch of the proof" $ do
@@ -254,79 +344,112 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         [ PredGoal (predicate "p" (Var "x" :: Var Char, 'b')) []
         , PredGoal (predicate "p" ('a', Var "x" :: Var Char)) []
         ]
-    it "should unify a goal with a proven conjunction" $ do
-      let leftProof = Identified (toTerm 'a') (toTerm 'a')
-      let rightProof = Identified (toTerm 'b') (toTerm 'b')
-      let leftGoal = getSolution (leftProof, mempty)
-      let rightGoal = getSolution (rightProof, mempty)
-      search (ProvedAnd leftProof rightProof) (And leftGoal rightGoal) `shouldBe` [And leftGoal rightGoal]
-    it "should recursively search the proof of a conjunction" $ do
-      let leftProof = Identified (toTerm 'a') (toTerm 'a')
-      let rightProof = Identified (toTerm 'b') (toTerm 'b')
-      let leftGoal = getSolution (leftProof, mempty)
-      let rightGoal = getSolution (rightProof, mempty)
-      search (ProvedAnd leftProof rightProof) leftGoal `shouldBe` [leftGoal]
-      search (ProvedAnd leftProof rightProof) rightGoal `shouldBe` [rightGoal]
-    it "should unify a goal with a proven disjunction" $ do
-      let unprovenGoal = Identical (toTerm 'a') (toTerm 'b')
-      let provenGoal = Equal (toTerm 'a') (toTerm 'a')
-      let subProof = Equated (toTerm 'a') (toTerm 'a')
-      search (ProvedLeft subProof unprovenGoal) (Or provenGoal unprovenGoal) `shouldBe`
-        [Or provenGoal unprovenGoal]
-      search (ProvedRight unprovenGoal subProof) (Or unprovenGoal provenGoal) `shouldBe`
-        [Or unprovenGoal provenGoal]
-    it "should recursively search the proof of a disjunction" $ do
-      let unprovenGoal = Identical (toTerm 'a') (toTerm 'b')
-      let p = predicate "p" 'a'
-      let subProof = Resolved p ProvedTop
-      let provenGoal = getSolution (subProof, mempty)
-      search (ProvedLeft subProof unprovenGoal) provenGoal `shouldBe` [provenGoal]
-      search (ProvedRight unprovenGoal subProof) provenGoal `shouldBe` [provenGoal]
-    it "should not unify a goal with the unproven goal in a proof of a disjunction" $ do
-      let unprovenGoal = Identical (toTerm 'a') (toTerm 'b')
-      let subProof = Equated (toTerm 'a') (toTerm 'a')
-      search (ProvedLeft subProof unprovenGoal) unprovenGoal `shouldBe` []
-      search (ProvedRight unprovenGoal subProof) unprovenGoal `shouldBe` []
-    it "should work for all types of goals" $ do
-      search (Identified (toTerm 'a') (toTerm 'a'))
-             (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
-        [Identical (toTerm 'a') (toTerm 'a')]
-      search (Unified (toTerm 'a') (toTerm 'a'))
-             (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
-        [CanUnify (toTerm 'a') (toTerm 'a')]
-      search (Equated (toTerm (3 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int))))
-             (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
-        [Equal (toTerm (3 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))]
-      search (ProvedLessThan 'a' 'b')
-             (LessThan (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
-        [LessThan (toTerm 'a') (toTerm 'b')]
-      search (Negated $ Identical (toTerm 'a') (toTerm 'b'))
-             (Not $ Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
-        [Not (Identical (toTerm 'a') (toTerm 'b'))]
-      search ProvedTop Top `shouldBe` [Top]
+    context "of a ProvedAnd proof" $ do
+      it "should unify a goal with a proven conjunction" $ do
+        let leftProof = Identified (toTerm 'a') (toTerm 'a')
+        let rightProof = Identified (toTerm 'b') (toTerm 'b')
+        let leftGoal = getSolution (leftProof, mempty)
+        let rightGoal = getSolution (rightProof, mempty)
+        search (ProvedAnd leftProof rightProof) (And leftGoal rightGoal) `shouldBe` [And leftGoal rightGoal]
+      it "should recursively search the proof of a conjunction" $ do
+        let leftProof = Identified (toTerm 'a') (toTerm 'a')
+        let rightProof = Identified (toTerm 'b') (toTerm 'b')
+        let leftGoal = getSolution (leftProof, mempty)
+        let rightGoal = getSolution (rightProof, mempty)
+        search (ProvedAnd leftProof rightProof) leftGoal `shouldBe` [leftGoal]
+        search (ProvedAnd leftProof rightProof) rightGoal `shouldBe` [rightGoal]
+    context "of a ProvedOr proof" $ do
+      it "should unify a goal with a proven disjunction" $ do
+        let unprovenGoal = Identical (toTerm 'a') (toTerm 'b')
+        let provenGoal = Equal (toTerm 'a') (toTerm 'a')
+        let subProof = Equated (toTerm 'a') (toTerm 'a')
+        search (ProvedLeft subProof unprovenGoal) (Or provenGoal unprovenGoal) `shouldBe`
+          [Or provenGoal unprovenGoal]
+        search (ProvedRight unprovenGoal subProof) (Or unprovenGoal provenGoal) `shouldBe`
+          [Or unprovenGoal provenGoal]
+      it "should recursively search the proof of a disjunction" $ do
+        let unprovenGoal = Identical (toTerm 'a') (toTerm 'b')
+        let p = predicate "p" 'a'
+        let subProof = Resolved p ProvedTop
+        let provenGoal = getSolution (subProof, mempty)
+        search (ProvedLeft subProof unprovenGoal) provenGoal `shouldBe` [provenGoal]
+        search (ProvedRight unprovenGoal subProof) provenGoal `shouldBe` [provenGoal]
+      it "should not unify a goal with the unproven goal in a proof of a disjunction" $ do
+        let unprovenGoal = Identical (toTerm 'a') (toTerm 'b')
+        let subProof = Equated (toTerm 'a') (toTerm 'a')
+        search (ProvedLeft subProof unprovenGoal) unprovenGoal `shouldBe` []
+        search (ProvedRight unprovenGoal subProof) unprovenGoal `shouldBe` []
+    context "of a FoundAlternatives proof" $ do
+      it "should unify a goal with the proven Alternatives goal" $
+        search (FoundAlternatives (toTerm (Var "x" :: Var Char))
+                                  (Equal (toTerm $ Var "x") (toTerm 'a'))
+                                  (toTerm ['a'])
+                                  [Equated (toTerm 'a') (toTerm 'a')])
+               (Alternatives (toTerm (Var "a" :: Var Char))
+                             (Equal (toTerm (Var "b" :: Var Char)) (toTerm $ Var "c"))
+                             (toTerm (Var "d"))) `shouldBe`
+          [Alternatives (toTerm (Var "x" :: Var Char))
+                        (Equal (toTerm $ Var "x") (toTerm 'a'))
+                        (toTerm ['a'])]
+      it "should recursively search each subproof" $
+        search (FoundAlternatives (toTerm (Var "x" :: Var Char))
+                                  (Equal (toTerm $ Var "x") (toTerm 'a'))
+                                  (toTerm ['a'])
+                                  [ Equated (toTerm 'a') (toTerm 'a')
+                                  , Equated (toTerm 'a') (toTerm 'b') -- ???
+                                  ])
+               (Equal (toTerm (Var "x" :: Var Char)) (toTerm $ Var "y")) `shouldBe`
+          [Equal (toTerm 'a') (toTerm 'a'), Equal (toTerm 'a') (toTerm 'b')]
+    context "of binary term proofs" $ do
+      let constrs :: [(Term Char -> Term Char -> Proof, Term Char -> Term Char -> Goal)]
+          constrs = [ (Identified, Identical)
+                    , (Unified, CanUnify)
+                    , (Equated, Equal)
+                    ]
+      withParams constrs $ \(proof, term) ->
+        it "should unify a query goal" $
+          search (proof (toTerm 'a') (toTerm 'a'))
+                 (term (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+            [term (toTerm 'a') (toTerm 'a')]
+      it "should unify a query goal" $
+        search (ProvedLessThan 'a' 'a')
+               (LessThan (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+            [LessThan (toTerm 'a') (toTerm 'a')]
+    context "of a Negated proof" $
+      it "should unify a query goal" $
+        search (Negated $ Identical (toTerm 'a') (toTerm 'b'))
+               (Not $ Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+          [Not (Identical (toTerm 'a') (toTerm 'b'))]
+    context "of unitary logic proofs" $
+      it "should unify a query goal" $
+        search ProvedTop Top `shouldBe` [Top]
   describe "the \"get solutions\" feature" $ do
     it "should return the theorem at the root of a proof tree" $ do
-      getSolution (Resolved (predicate "p" ())
-                            (Resolved (predicate "s" ()) ProvedTop), mempty) `shouldBe`
+      let get p = getSolution (p, mempty)
+      get (Resolved (predicate "p" ()) (Resolved (predicate "s" ()) ProvedTop)) `shouldBe`
         PredGoal (predicate "p" ()) []
-      getSolution (Unified (toTerm 'a') (toTerm 'a'), mempty) `shouldBe`
-        CanUnify (toTerm 'a') (toTerm 'a')
-      getSolution (Identified (toTerm 'a') (toTerm 'a'), mempty) `shouldBe`
-        Identical (toTerm 'a') (toTerm 'a')
-      getSolution (Equated (toTerm (1 :: Int)) (toTerm (1 :: Int)), mempty) `shouldBe`
+      get (Unified (toTerm 'a') (toTerm 'a')) `shouldBe` CanUnify (toTerm 'a') (toTerm 'a')
+      get (Identified (toTerm 'a') (toTerm 'a')) `shouldBe` Identical (toTerm 'a') (toTerm 'a')
+      get (Equated (toTerm (1 :: Int)) (toTerm (1 :: Int))) `shouldBe`
         Equal (toTerm (1 :: Int)) (toTerm (1 :: Int))
-      getSolution (ProvedLessThan 'a' 'b', mempty) `shouldBe`
-        LessThan (toTerm 'a') (toTerm 'b')
-      getSolution (ProvedAnd (Equated (toTerm 'a') (toTerm 'a'))
-                              (Identified (toTerm 'b') (toTerm 'b')), mempty) `shouldBe`
+      get (ProvedLessThan 'a' 'b') `shouldBe` LessThan (toTerm 'a') (toTerm 'b')
+      get (ProvedAnd (Equated (toTerm 'a') (toTerm 'a'))
+                     (Identified (toTerm 'b') (toTerm 'b'))) `shouldBe`
         And (Equal (toTerm 'a') (toTerm 'a')) (Identical (toTerm 'b') (toTerm 'b'))
-      getSolution (ProvedLeft (Equated (toTerm 'a') (toTerm 'a'))
-                              (Identical (toTerm 'a') (toTerm 'b')), mempty) `shouldBe`
+      get (ProvedLeft (Equated (toTerm 'a') (toTerm 'a'))
+                      (Identical (toTerm 'a') (toTerm 'b'))) `shouldBe`
         Or (Equal (toTerm 'a') (toTerm 'a')) (Identical (toTerm 'a') (toTerm 'b'))
-      getSolution (ProvedRight (Identical (toTerm 'a') (toTerm 'b'))
-                               (Equated (toTerm 'a') (toTerm 'a')), mempty) `shouldBe`
+      get (ProvedRight (Identical (toTerm 'a') (toTerm 'b'))
+                      (Equated (toTerm 'a') (toTerm 'a'))) `shouldBe`
         Or (Identical (toTerm 'a') (toTerm 'b')) (Equal (toTerm 'a') (toTerm 'a'))
-      getSolution (ProvedTop, mempty) `shouldBe` Top
+      get ProvedTop `shouldBe` Top
+      get (FoundAlternatives (toTerm (Var "x" :: Var Char))
+                                     (Equal (toTerm $ Var "x") (toTerm 'a'))
+                                     (toTerm ['a'])
+                                     [Equated (toTerm 'a') (toTerm 'a')]) `shouldBe`
+        Alternatives (toTerm (Var "x" :: Var Char))
+                     (Equal (toTerm $ Var "x") (toTerm 'a'))
+                     (toTerm ['a'])
     it "should get all solutions from a forest of proof tress" $
       getAllSolutions [ (Resolved (predicate "p" ()) ProvedTop, mempty)
                       , (Resolved (predicate "q" ()) ProvedTop, mempty)] `shouldBe`

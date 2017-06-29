@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
@@ -51,6 +52,7 @@ module Control.Hspl.Internal.Solver (
   , proveOrRightWith
   , proveTopWith
   , proveBottomWith
+  , proveAlternativesWith
   , proveWith
   , prove
   ) where
@@ -92,6 +94,10 @@ data Proof =
            | ProvedRight Goal Proof
              -- | A (trivial) proof of 'Top'.
            | ProvedTop
+             -- | A proof of an 'Alternatives' goal. The first argument is the template term, the
+             -- second is the subgoal, and the third is the "bag" of alternatives. The final
+             -- argument is the list of proofs of the subgoal.
+           | forall a. TermEntry a => FoundAlternatives (Term a) Goal (Term [a]) [Proof]
 
 instance Eq Proof where
   (==) proof1 proof2 = case (proof1, proof2) of
@@ -105,6 +111,11 @@ instance Eq Proof where
     (ProvedLeft p g, ProvedLeft p' g') -> p == p' && g == g'
     (ProvedRight g p, ProvedRight g' p') -> g == g' && p == p'
     (ProvedTop, ProvedTop) -> True
+    (FoundAlternatives x g xs ps, FoundAlternatives x' g' xs' ps') -> fromMaybe False $
+      do x'' <- cast x'
+         xs'' <- cast xs'
+         return $ x == x'' && g == g' && xs == xs'' && ps == ps'
+
     _ -> False
     where compareBinaryProof t t' = maybe False (t==) $ cast t'
 
@@ -123,6 +134,8 @@ instance Show Proof where
   show (ProvedAnd p1 p2) = "ProvedAnd (" ++ show p1 ++ ") (" ++ show p2
   show (ProvedLeft p g) = "ProvedLeft (" ++ show p ++ ") (" ++ show g ++ ")"
   show (ProvedRight g p) = "ProvedRight (" ++ show g ++ ") (" ++ show p ++ ")"
+  show (FoundAlternatives x g xs ps) =
+    "FoundAlternatives (" ++ show x ++ ") (" ++ show g ++ ") (" ++ show xs ++ ") (" ++ show ps ++ ")"
   show ProvedTop = "ProvedTop"
 
 -- | The output of the solver. This is meant to be treated as an opaque data type which can be
@@ -131,25 +144,28 @@ type ProofResult = (Proof, Unifier)
 
 -- | Return the list of all goals or subgoals in the given result which unify with a particular goal.
 searchProof :: ProofResult -> Goal -> [Goal]
-searchProof (proof, _) goal = searchProof' proof (runRenamed $ renameGoal goal)
+searchProof (proof, unifier) goal = searchProof' proof (runRenamed $ renameGoal goal)
   where
         -- Proofs with subproof to be search recursively
         searchProof' p@(Resolved _ subProof) g =
-          maybeToList (matchGoal (getSolution (p, mempty)) g) ++ -- Match the root of the proof tree
-          searchProof' subProof g                                -- Recursively search the subproof
+          maybeToList (matchGoal (getSolution (p, unifier)) g) ++ -- Match the root of the proof tree
+          searchProof' subProof g                                 -- Recursively search the subproof
         searchProof' p@(ProvedAnd p1 p2) g =
-          maybeToList (matchGoal (getSolution (p, mempty)) g) ++ -- Match the root of the proof tree
-          searchProof' p1 g ++                                   -- Recurse on the left subproof
-          searchProof' p2 g                                      -- Recurse on the right subproof
+          maybeToList (matchGoal (getSolution (p, unifier)) g) ++ -- Match the root of the proof tree
+          searchProof' p1 g ++                                    -- Recurse on the left subproof
+          searchProof' p2 g                                       -- Recurse on the right subproof
         searchProof' p@(ProvedLeft p' _) g =
-          maybeToList (matchGoal (getSolution (p, mempty)) g) ++ -- Match the root of the proof tree
-          searchProof' p' g                                      -- Recursively search the subproof
+          maybeToList (matchGoal (getSolution (p, unifier)) g) ++ -- Match the root of the proof tree
+          searchProof' p' g                                       -- Recursively search the subproof
         searchProof' p@(ProvedRight _ p') g =
-          maybeToList (matchGoal (getSolution (p, mempty)) g) ++ -- Match the root of the proof tree
-          searchProof' p' g                                      -- Recursively search the subproof
+          maybeToList (matchGoal (getSolution (p, unifier)) g) ++ -- Match the root of the proof tree
+          searchProof' p' g                                       -- Recursively search the subproof
+        searchProof' p@(FoundAlternatives _ _ _ ps) g =
+          maybeToList (matchGoal (getSolution (p, unifier)) g) ++ -- Match the root of the proof tree
+          concatMap (`searchProof'` g) ps                         -- Recursively search each subproof
 
         -- Goals with no subproof, just try to match the goal itself
-        searchProof' p g = maybeToList (matchGoal (getSolution (p, mempty)) g)
+        searchProof' p g = maybeToList (matchGoal (getSolution (p, unifier)) g)
 
         -- Unify a goal with the query goal and return the unified goal, or Nothing
         matchGoal (PredGoal prd@(Predicate name arg) _) (PredGoal (Predicate name' arg') _)
@@ -171,6 +187,14 @@ searchProof (proof, _) goal = searchProof' proof (runRenamed $ renameGoal goal)
                                                return $ Or g1'' g2''
         matchGoal Top Top = Just Top
         matchGoal Bottom Bottom = Just Bottom
+        matchGoal (Alternatives x g xs) (Alternatives x' g' xs') =
+          let t = toTerm (x, xs)
+              t' = toTerm (x', xs')
+          in case cast t' >>= mgu t of
+            Just u -> do
+              g'' <- matchGoal g g'
+              return $ Alternatives (unifyTerm u x) g'' (unifyTerm u xs)
+            Nothing -> Nothing
         matchGoal _ _ = Nothing
 
         matchBinary :: (TermEntry a, TermEntry b, TermEntry c, TermEntry d) =>
@@ -208,6 +232,7 @@ getSolution (proof, _) = case proof of
   ProvedLeft p g -> Or (getSolution (p, mempty)) g
   ProvedRight g p -> Or g (getSolution (p, mempty))
   ProvedTop -> Top
+  FoundAlternatives x g xs _ -> Alternatives x g xs
 
 -- | Get the set of theorems which were proven by each 'Proof' tree in a forest.
 getAllSolutions :: [ProofResult] -> [Goal]
@@ -368,6 +393,21 @@ data SolverCont (m :: * -> *) =
                -- underlying monad. The zero-overhead version of this continuation is
                -- 'proveBottomWith'.
              , tryBottom :: SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove an 'Alternatives' goal. In
+               -- addition to any effects performed in the underlying monad, this continuation
+               -- should have the following semantics:
+               --
+               --   1. Obtain all solutions of the inner goal, as if through 'runHspl'.
+               --   2. For each solution, apply the unifier to the template 'Term' (first argument).
+               --   3. Attempt to unify the resulting list with the output 'Term' (third argument).
+               --
+               -- The proof should succeed if and only if step 3. succeeds. In particular, note that
+               -- the failure of the inner goal does not imply the failure of the proof. It should
+               -- simply try to unify an empty list with the output term.
+               --
+               -- The zero-overhead version of this continuation is 'proveAlternativesWith'.
+             , tryAlternatives :: forall a. TermEntry a =>
+                                  Term a -> Goal -> Term [a] -> SolverT m ProofResult
                -- | Continuation to be invoked when a goal fails because there are no matching
                -- clauses. This computation should result in 'mzero', but may perform effects in the
                -- underlying monad first.
@@ -392,6 +432,7 @@ solverCont = SolverCont { tryPredicate = provePredicateWith solverCont
                         , tryOrRight = proveOrRightWith solverCont
                         , tryTop = proveTopWith solverCont
                         , tryBottom = proveBottomWith solverCont
+                        , tryAlternatives = proveAlternativesWith solverCont
                         , failUnknownPred = const mzero
                         , errorUninstantiatedVariables =
                             error "Variables are not sufficiently instantiated."
@@ -493,6 +534,19 @@ proveTopWith _ = return (ProvedTop, mempty)
 proveBottomWith :: Monad m => SolverCont m -> SolverT m ProofResult
 proveBottomWith _ = mzero
 
+-- | Succeed if and only if the list term unifies with the alternatives of the template term when
+-- proving the given goal.
+proveAlternativesWith :: (Monad m, TermEntry a) =>
+                         SolverCont m -> Term a -> Goal -> Term [a] -> SolverT m ProofResult
+proveAlternativesWith cont x g xs = do
+  results <- solverLift $ observeAllSolverT $ proveWith cont g
+  let (ps, us) = unzip results
+  let alternatives = toTerm $ map (`unifyTerm` x) us
+  let mu = mgu xs alternatives
+  guard $ isJust mu
+  let u = fromJust mu
+  return (FoundAlternatives x g (unifyTerm u xs) ps, u)
+
 -- | Produce a proof of the goal. This function will either fail, or backtrack over all possible
 -- proofs. It will invoke the appropriate continuations in the given 'SolverCont' whenever a
 -- relevant event occurs during the course of the proof.
@@ -509,3 +563,4 @@ proveWith cont g = case g of
   Or g1 g2 -> tryOrLeft cont g1 g2 `mplus` tryOrRight cont g1 g2
   Top -> tryTop cont
   Bottom -> tryBottom cont
+  Alternatives x g' xs -> tryAlternatives cont x g' xs

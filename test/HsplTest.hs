@@ -182,6 +182,34 @@ test = describeModule "Control.Hspl" $ do
         nil `shouldBe` toTerm ([] :: [Int])
         nil `shouldBe` toTerm ([] :: [Bool])
 
+  describe "findAll" $
+    it "should generate an Alternatives goal" $
+      execGoalWriter (findAll (char "x") (v"x" |=| 'a') (v"xs")) `shouldBe`
+        Alternatives (toTerm $ char "x") (CanUnify (toTerm $ Var "x") (toTerm 'a')) (toTerm $ v"xs")
+  describe "bagOf" $ do
+    it "should bind a list to all alternatives of a variable" $ do
+      let l = ['a', 'b', 'c']
+      let us = getAllUnifiers $ runHspl $ bagOf (char "x") (helem? (char "x", l)) (v"xs")
+      length us `shouldBe` 1
+      queryVar (head  us) (char \* "xs") `shouldBe` Unified l
+    it "should handle ununified solutions" $ do
+        let us = getAllUnifiers $ runHspl $
+                  bagOf (Var "x" :: Var (Maybe Char))
+                        ((Var "x" :: Var (Maybe Char)) |=| Just $$ char "y")
+                        (v"xs")
+        length us `shouldBe` 1
+        case queryVar (head us) (Var "xs" :: Var [Maybe Char]) of
+          Partial t -> t `shouldBeAlphaEquivalentTo` [Just $$ char "y"]
+          st -> failure $ "Expected Partial (Just $$ y), but got " ++ show st
+
+        let us = getAllUnifiers $ runHspl $ bagOf (char "x") (char "x" |=| char "y") (v"xs")
+        length us `shouldBe` 1
+        case queryVar (head us) (char \* "xs") of
+          Partial t -> t `shouldBeAlphaEquivalentTo` [char "x"]
+          st -> failure $ "Expected Partial [x], but got " ++ show st
+    it "should fail if the inner goal fails" $
+      getAllSolutions (runHspl $ bagOf (char "x") false (v"xs")) `shouldBe` []
+
   describe "the hlength predicate" $ do
     it "should succeed when given the correct length of a list" $ do
       length (getAllSolutions $ runHspl $ hlength? ([] :: [Char], 0 :: Int)) `shouldBe` 1

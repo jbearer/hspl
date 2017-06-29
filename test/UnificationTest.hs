@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeFamilies #-}
 #if __GLASGOW_HASKELL__ >= 800
 {-# OPTIONS_GHC -fdefer-type-errors #-}
 #endif
@@ -353,66 +354,48 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         let g = PredGoal (predicate "foo" ())
                          [HornClause (predicate "bar" (Var "x" :: Var Char)) Top]
         rename g `shouldBe` g
-    context "of CanUnify goals" $ do
-      it "should rename variables in each term" $
-        rename (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
-          CanUnify (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 1 :: Var Char))
-      it "should rename variables in both terms the same" $
-        rename (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
-          CanUnify (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
-    context "of Identical goals" $ do
-      it "should rename variables in each term" $
-        rename (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
-          Identical (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 1 :: Var Char))
-      it "should rename variables in both terms the same" $
-        rename (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
-          Identical (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
-    context "of Equal goals" $ do
-      it "should rename variables in each term" $
-        rename (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
-          Equal (toTerm (Fresh 0 :: Var Int)) (toTerm (Fresh 1 :: Var Int))
-      it "should rename variables in both terms the same" $
-        rename (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
-          Equal (toTerm (Fresh 0 :: Var Int)) (toTerm (Fresh 0 :: Var Int))
-    context "of Equal goals" $ do
-      it "should rename variables in each term" $
-        rename (LessThan (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
-          LessThan (toTerm (Fresh 0 :: Var Int)) (toTerm (Fresh 1 :: Var Int))
-      it "should rename variables in both terms the same" $
-        rename (LessThan (toTerm (Var "x" :: Var Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
-          LessThan (toTerm (Fresh 0 :: Var Int)) (toTerm (Fresh 0 :: Var Int))
+    context "of binary term goals" $ do
+      let constrs :: [Term Char -> Term Char -> Goal]
+          constrs = [CanUnify, Identical, Equal, LessThan]
+      withParams constrs $ \constr -> do
+        it "should rename variables in each term" $
+          rename (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+            constr (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 1 :: Var Char))
+        it "should rename variables in both terms the same" $
+          rename (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+            constr (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
     context "of Not goals" $
       it "should rename variables in the inner goal" $
         rename (Not $ PredGoal (predicate "foo" (Var "x" :: Var Bool)) []) `shouldBe`
           Not (PredGoal (predicate "foo" (Fresh 0 :: Var Bool)) [])
-    context "of And goals" $ do
-      it "should rename variables in each goal" $
-        rename (And (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
-                   (PredGoal (predicate "bar" (Var "y" :: Var Bool)) [])) `shouldBe`
-          And (PredGoal (predicate "foo" (Fresh 0 :: Var Char)) [])
-             (PredGoal (predicate "bar" (Fresh 1 :: Var Bool)) [])
-      it "should rename variables in both terms the same" $
-        rename (And (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
-                   (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
-          And (PredGoal (predicate "foo" (Fresh 0 :: Var Char)) [])
-             (PredGoal (predicate "bar" (Fresh 0 :: Var Char)) [])
-    context "of Or goals" $ do
-      it "should rename variables in each goal" $
-        rename (Or (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
-                   (PredGoal (predicate "bar" (Var "y" :: Var Bool)) [])) `shouldBe`
-          Or (PredGoal (predicate "foo" (Fresh 0 :: Var Char)) [])
-             (PredGoal (predicate "bar" (Fresh 1 :: Var Bool)) [])
-      it "should rename variables in both terms the same" $
-        rename (Or (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
-                   (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
-          Or (PredGoal (predicate "foo" (Fresh 0 :: Var Char)) [])
-             (PredGoal (predicate "bar" (Fresh 0 :: Var Char)) [])
-    context "of Top" $
-      it "should be a noop" $
-        rename Top `shouldBe` Top
-    context "of Bottom" $
-      it "should be a noop" $
-        rename Bottom `shouldBe` Bottom
+    context "of binary logic goals" $
+      withParams [And, Or] $ \constr -> do
+        it "should rename variables in each goal" $
+          rename (constr (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
+                     (PredGoal (predicate "bar" (Var "y" :: Var Bool)) [])) `shouldBe`
+            constr (PredGoal (predicate "foo" (Fresh 0 :: Var Char)) [])
+               (PredGoal (predicate "bar" (Fresh 1 :: Var Bool)) [])
+        it "should rename variables in both terms the same" $
+          rename (constr (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
+                     (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
+            constr (PredGoal (predicate "foo" (Fresh 0 :: Var Char)) [])
+               (PredGoal (predicate "bar" (Fresh 0 :: Var Char)) [])
+    context "of unitary logic goals" $
+      withParams [Top, Bottom] $ \constr ->
+        it "should be a noop" $
+          rename constr `shouldBe` constr
+    context "of Alternatives goals" $ do
+      let go x g xs = rename $ Alternatives (toTerm x) g (toTerm xs)
+      it "should rename variables in each subcomponent" $
+        go (Var "x" :: Var Char) (Equal (toTerm 'a') (toTerm $ Var "y")) (Var "xs") `shouldBe`
+          go (Fresh 0 :: Var Char) (Equal (toTerm 'a') (toTerm $ Fresh 1)) (Fresh 2)
+      it "should rename the same variables the same way" $
+        go (Var "x" :: Var Char)
+           (PredGoal (predicate "foo" (Var "x" :: Var Char, Var "xs" :: Var [Char])) [])
+           (Var "xs") `shouldBe`
+          go (Fresh 0 :: Var Char)
+             (PredGoal (predicate "foo" (Fresh 0 :: Var Char, Fresh 1 :: Var [Char])) [])
+             (Fresh 1)
   describe "clause renaming" $ do
     let rename = doRenameClause
     it "should rename variables in the positive literal" $
@@ -505,73 +488,43 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       it "should ignore the clauses" $ do
         let g = PredGoal (predicate "foo" ()) [HornClause (predicate "bar" (Var "x" :: Var Char)) Top]
         unifyGoal (toTerm 'a' // Var "x") g `shouldBe` g
-    context "to a CanUnify goal" $ do
-      it "should unify both terms" $
-        unifyGoal (toTerm 'a' // Var "x" <> toTerm 'b' // Var "y")
-          (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
-          CanUnify (toTerm 'a') (toTerm 'b')
-      it "should leave either term unchanged when the unifier does not apply" $ do
-        let u = toTerm 'a' // Var "x"
-        unifyGoal u (CanUnify (toTerm (Var "y" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
-          CanUnify (toTerm (Var "y" :: Var Char)) (toTerm 'a')
-        unifyGoal u (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
-          CanUnify (toTerm 'a') (toTerm (Var "y" :: Var Char))
-    context "to an Identical goal" $ do
-      it "should unify both terms" $
-        unifyGoal (toTerm 'a' // Var "x" <> toTerm 'b' // Var "y")
-          (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
-          Identical (toTerm 'a') (toTerm 'b')
-      it "should leave either term unchanged when the unifier does not apply" $ do
-        let u = toTerm 'a' // Var "x"
-        unifyGoal u (Identical (toTerm (Var "y" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
-          Identical (toTerm (Var "y" :: Var Char)) (toTerm 'a')
-        unifyGoal u (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
-          Identical (toTerm 'a') (toTerm (Var "y" :: Var Char))
-    context "to an Equal goal" $ do
-      it "should unify both terms" $
-        unifyGoal (toTerm (1 :: Int) // Var "x" <> toTerm (2 :: Int) // Var "y")
-          (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
-          Equal (toTerm (1 :: Int)) (toTerm (2 :: Int))
-      it "should leave either term unchanged when the unifier does not apply" $ do
-        let u = toTerm (1 :: Int) // Var "x"
-        unifyGoal u (Equal (toTerm (Var "y" :: Var Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
-          Equal (toTerm (Var "y" :: Var Int)) (toTerm (1 :: Int))
-        unifyGoal u (Equal (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
-          Equal (toTerm (1 :: Int)) (toTerm (Var "y" :: Var Int))
-    context "to a LessThan goal" $ do
-      it "should unify both terms" $
-        unifyGoal (toTerm (1 :: Int) // Var "x" <> toTerm (2 :: Int) // Var "y")
-          (LessThan (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
-          LessThan (toTerm (1 :: Int)) (toTerm (2 :: Int))
-      it "should leave either term unchanged when the unifier does not apply" $ do
-        let u = toTerm (1 :: Int) // Var "x"
-        unifyGoal u (LessThan (toTerm (Var "y" :: Var Int)) (toTerm (Var "x" :: Var Int))) `shouldBe`
-          LessThan (toTerm (Var "y" :: Var Int)) (toTerm (1 :: Int))
-        unifyGoal u (LessThan (toTerm (Var "x" :: Var Int)) (toTerm (Var "y" :: Var Int))) `shouldBe`
-          LessThan (toTerm (1 :: Int)) (toTerm (Var "y" :: Var Int))
+    context "to a binary term goal" $ do
+      let constrs :: [Term Char -> Term Char -> Goal]
+          constrs = [CanUnify, Identical, Equal, LessThan]
+      withParams constrs $ \constr -> do
+        it "should unify both terms" $
+          unifyGoal (toTerm 'a' // Var "x" <> toTerm 'b' // Var "y")
+            (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+            constr (toTerm 'a') (toTerm 'b')
+        it "should leave either term unchanged when the unifier does not apply" $ do
+          let u = toTerm 'a' // Var "x"
+          unifyGoal u (constr (toTerm (Var "y" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+            constr (toTerm (Var "y" :: Var Char)) (toTerm 'a')
+          unifyGoal u (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+            constr (toTerm 'a') (toTerm (Var "y" :: Var Char))
     context "to a Not goal" $
       it "should unify the inner goal" $
         unifyGoal (toTerm 'a' // Var "x")
                   (Not $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []) `shouldBe`
           Not (PredGoal (predicate "foo" 'a') [])
-    context "to an And goal" $
-      it "should unify both inner goals" $
-        unifyGoal (toTerm 'a' // Var "x")
-                  (And (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
-                      (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
-          And (PredGoal (predicate "foo" 'a') []) (PredGoal (predicate "bar" 'a') [])
-    context "to an Or goal" $
-      it "should unify both inner goals" $
-        unifyGoal (toTerm 'a' // Var "x")
-                  (Or (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
-                      (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
-          Or (PredGoal (predicate "foo" 'a') []) (PredGoal (predicate "bar" 'a') [])
-    context "to Top" $
-      it "should be a noop" $
-        unifyGoal (toTerm 'a' // Var "x") Top `shouldBe` Top
-    context "to Bottom" $
-      it "should be a noop" $
-        unifyGoal (toTerm 'a' // Var "x") Bottom `shouldBe` Bottom
+    context "to a binary logic goal" $
+      withParams [And, Or] $ \constr ->
+        it "should unify both inner goals" $
+          unifyGoal (toTerm 'a' // Var "x")
+                    (constr (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
+                            (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
+            constr (PredGoal (predicate "foo" 'a') []) (PredGoal (predicate "bar" 'a') [])
+    context "to a unitary logic goal" $
+      withParams [Top, Bottom] $ \constr ->
+        it "should be a noop" $
+          unifyGoal (toTerm 'a' // Var "x") constr `shouldBe` constr
+    context "to an Alternatives goal" $
+      it "should unify each subcomponent" $
+        unifyGoal (toTerm 'a' // Var "x" <> toTerm "foo" // Var "xs")
+                  (Alternatives (toTerm (Var "x" :: Var Char))
+                                (Equal (toTerm 'a') (toTerm $ Var "x"))
+                                (toTerm $ Var "xs")) `shouldBe`
+          Alternatives (toTerm 'a') (Equal (toTerm 'a') (toTerm 'a')) (toTerm "foo")
   describe "clause unifier application" $ do
     it "should unify the positive literal when the unifier applies" $
       unifyClause (toTerm 'a' // Var "x")

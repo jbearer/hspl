@@ -751,6 +751,9 @@ data Goal =
           | Top
             -- | A goal which always fails.
           | Bottom
+            -- | Similar to Prolog's @findall/3@. @Alternatives template goal bag@ is a goal which
+            -- succeeds if @bag@ unifies with the alternatives of @template@ in @goal@.
+          | forall t. TermEntry t => Alternatives (Term t) Goal (Term [t])
 
 instance Show Goal where
   show (PredGoal p _) = show p
@@ -763,6 +766,7 @@ instance Show Goal where
   show (Or g1 g2) = show g1 ++ " ||| " ++ show g2
   show Top = "true"
   show Bottom = "false"
+  show (Alternatives x g xs) = "findAll (" ++ show x ++ ") (" ++ show g ++ ") (" ++ show xs ++ ")"
 
 instance Eq Goal where
   (==) (PredGoal p cs) (PredGoal p' cs') = p == p' && cs == cs'
@@ -783,6 +787,9 @@ instance Eq Goal where
   (==) (Or g1 g2) (Or g1' g2') = g1 == g1' && g2 == g2'
   (==) Top Top = True
   (==) Bottom Bottom = True
+  (==) (Alternatives x g xs) (Alternatives x' g' xs') = case cast (x', xs') of
+    Just t' -> (x, xs) == t' && g == g'
+    Nothing -> False
   (==) _ _ = False
 
 instance Monoid Goal where

@@ -24,12 +24,15 @@ module Testing (
   , shouldNotBe
   , shouldSatisfy
   , shouldNotSatisfy
+  , shouldBeOneOf
   , shouldBePermutationOf
   , shouldBeSubsetOf
   , pending
   , pendingWith
   , AssertError (..)
   , shouldBeAlphaEquivalentTo
+  , failure
+  , success
   ) where
 
 import Control.DeepSeq (NFData, force)
@@ -90,6 +93,11 @@ isSubsetOf _ [] = False
 isSubsetOf (x:xs) ys
   | x `elem` ys = isSubsetOf xs (deleteFirst x ys)
   | otherwise = False
+
+shouldBeOneOf :: (HasCallStack, Show a, Eq a) => a -> [a] -> Expectation
+shouldBeOneOf x xs
+  | x `elem` xs = success
+  | otherwise = failure $ "Expected " ++ show x ++ " to be one of " ++ show xs
 
 shouldBePermutationOf :: (HasCallStack, Show a, Eq a) => [a] -> [a] -> Expectation
 shouldBePermutationOf xs ys

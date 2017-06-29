@@ -42,7 +42,8 @@ module Control.Hspl (
   -- ** Special predicates
   -- | Some predicates have special semantics. These can appear as goals on the right-hand side of
   -- '|-'.
-  --
+  , findAll
+  , bagOf
   -- *** Unification, identity, equality, and inequality
   , (|=|)
   , (|\=|)
@@ -223,6 +224,32 @@ p |- gs =
       addGoal name = let Ast.HornClause prd ogGoal = f name
                      in assert (ogGoal == Top) $ Ast.HornClause prd goal
   in tell [addGoal]
+
+-- | Unify a list with all the alternatives of a given template. @findAll template goal list@ works
+-- as follows:
+--
+-- 1. The given goal is proven nondeterministically, yielding a list of 'ProofResult's.
+-- 2. From each 'ProofResult', the 'Unifier' is extracted and applied to @template@, yielding a list
+--    of 'Term's.
+-- 3. The solver attempts to unify the list of 'Term's with @list@. If successful, the goal succeeds
+--    and @list@ is bound to the list of 'Term's.
+--
+-- Note that 'findAll' succeeds even if the inner goal fails, so long as @list@ unifies with an
+-- empty list.
+findAll :: (TermData a, TermData c, HSPLType c ~ [HSPLType a]) =>
+           a -> GoalWriter b -> c -> GoalWriter ()
+findAll x gw xs =
+  let g = execGoalWriter gw
+  in tell $ Alternatives (toTerm x) g (toTerm xs)
+
+-- | Like 'findAll', but fails if the inner goal fails.
+bagOf :: forall a b c. (TermData a, TermData c, HSPLType c ~ [HSPLType a]) =>
+         a -> GoalWriter b -> c -> GoalWriter ()
+bagOf x gw xs =
+  let p :: Predicate [HSPLType a]
+      p = predicate "bagOf" $
+            match(v"x" <:> v"xs") |- findAll x gw (v"x" <:> v"xs")
+  in p? xs
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
 infix 2 |=|
