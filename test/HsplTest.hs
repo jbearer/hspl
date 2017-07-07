@@ -327,6 +327,23 @@ test = describeModule "Control.Hspl" $ do
       length us `shouldBe` 1
       head us `shouldSatisfy` (('a' // char "y") `isSubunifierOf`)
 
+  describe "the hdelete predicate" $ do
+    withParams [[], ['a', 'b'], ['a', 'a', 'c'], ['a', 'b', 'b', 'a'], ['b', 'b']] $ \l ->
+      it "should delete all occurrences of an element from a list" $ do
+        let us = getAllUnifiers $ runHspl $ hdelete? (l, 'b', v"xs")
+        let expected = [x | x <- l, x /= 'b']
+        length us `shouldBe` 1
+        head us `shouldSatisfy` (expected // v"xs" `isSubunifierOf`)
+    it "should succeed when given the deleted list" $ do
+      length (getAllSolutions $ runHspl $ hdelete? (nil, 'b', nil)) `shouldBe` 1
+      length (getAllSolutions $ runHspl $ hdelete? (['b'], 'b', nil)) `shouldBe` 1
+      length (getAllSolutions $ runHspl $ hdelete? (['a', 'b'], 'b', ['a'])) `shouldBe` 1
+    it "should fail when given a list that does not unify with the deleted list" $ do
+      length (getAllSolutions $ runHspl $ hdelete? (nil, 'b', v"x" <:> v"xs")) `shouldBe` 0
+      length (getAllSolutions $ runHspl $ hdelete? (['b'], 'b', ['b'])) `shouldBe` 0
+      length (getAllSolutions $ runHspl $ hdelete? (['a', 'b'], 'b', ['a', 'b'])) `shouldBe` 0
+      length (getAllSolutions $ runHspl $ hdelete? (['a', 'b'], 'b', ['a', 'c'])) `shouldBe` 0
+
   describe "the |=| predicate" $ do
     let exec = execGoalWriter
     it "should create a CanUnify goal from TermData" $ do

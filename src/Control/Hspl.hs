@@ -106,6 +106,7 @@ module Control.Hspl (
   , helem
   , hlength
   , hat
+  , hdelete
   -- ** ADTs
   -- $adts
   , ($$)
@@ -585,6 +586,18 @@ hlength = predicate "length" $ do
   match (v"x" <:> v"xs", v"l") |- do
     hlength? (v"xs" :: Var [a], v"l2")
     int "l" |==| int "l2" |+| (1 :: Int)
+
+-- | Delete matching elements from a list. @hdelete? (xs, x, ys)@ succeeds when @ys@ is a list
+-- containing all elements from @xs@ except those which unify with @x@.
+hdelete :: forall a. TermEntry a => Predicate ([a], a, [a])
+hdelete = predicate "delete" $
+  match (v"in", v"elem", v"out") |-
+    findAll (v"x" :: Var a) (select? (v"in", v"elem", v"x")) (v"out")
+  where select :: Predicate ([a], a, a)
+        select = predicate "selectForDeletion" $
+                    match (v"xs", v"ignore", v"x") |- do
+                      helem? (v"x" :: Var a, v"xs")
+                      v"x" |\=| (v"ignore" :: Var a)
 
 -- | @hat? (i, xs, x)@ succeeds if @x@ is the element of @xs@ at position @i@ (counting starts at
 -- 0). There are three primary modes of use:
