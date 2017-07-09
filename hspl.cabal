@@ -38,6 +38,7 @@ library
                      , mtl
                      , logict
                      , ansi-terminal
+                     , monad-coroutine
   ghc-options:         -Wall
   if flag(ShowTerms)
     cpp-options:       -DSHOW_TERMS
