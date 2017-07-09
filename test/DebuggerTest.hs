@@ -492,12 +492,30 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
         , expectFail 1 "foo" (Var "x" :: Var Char)
         ]
 
+  describe "the goals command" $
+    it "should print the current goal stack" $
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
+              ["s", "s", "goals", "f", "f", "f"]
+              [ expectCall 1 "deep" (Var "x" :: Var Char)
+              , expectCall 2 "foo" (Var "x" :: Var Char)
+              , expectCall 3 "bar" (Var "x" :: Var Char)
+              , intercalate "\n"
+                [ "(1) " ++ show (PredGoal (predicate "deep" (Var "x" :: Var Char)) [])
+                , "(2) " ++ show (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
+                , "(3) " ++ show (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
+                ]
+              , expectCall 3 "bar" (Var "x" :: Var Char)
+              , expectExit 2 "foo" 'a'
+              , expectExit 1 "deep" 'a'
+              ]
+
   describe "the help command" $
     it "should print a usage message" $
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
               ["help", "finish"]
               [ expectCall 1 "deep" (Var "x" :: Var Char)
               , debugHelp
+              , expectCall 1 "deep" (Var "x" :: Var Char)
               ]
 
   describe "a blank command" $

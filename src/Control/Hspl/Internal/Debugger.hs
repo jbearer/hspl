@@ -141,6 +141,8 @@ data Command =
   | Next
     -- | Continue execution until the next event in the parent goal.
   | Finish
+    -- | Print out the current goal stack.
+  | InfoStack
     -- | Print a usage message.
   | Help
   deriving (Show, Eq)
@@ -150,6 +152,7 @@ debugHelp :: String
 debugHelp = unlines ["s, step: proceed one predicate call"
                     ,"n, next: proceed to the next call, failure, or exit at this level"
                     ,"f, finish: proceed to the exit or failure of the current goal"
+                    ,"g, goals: print the current goal stack"
                     ,"?, h, help: show this help"
                     , "<return>: replay last command"
                     ]
@@ -257,6 +260,11 @@ debugCont s = SolverCont { tryPredicate = debugFirstAlternative s
                          , errorUninstantiatedVariables = debugErrorUninstantiatedVariables s
                          }
 
+-- | Format a goal stack in a manner suitable for displaying to the user.
+showStack :: [Goal] -> String
+showStack s = intercalate "\n"
+  ["(" ++ show d ++ ") " ++ show g | (d, g) <- zip ([1..] :: [Int]) (reverse s)]
+
 -- | Print a line to the 'output' 'Handle'. The end-of-line character depends on whether we are
 -- running in interactive mode (i.e. whether 'tty' is set). In interactive mode, the end of line is
 -- a ' ', and the user is prompted for input at the end of the same line. In non-interactive mode,
@@ -282,9 +290,10 @@ parseCommand str = do
       step = (tok "step" <|> tok "s") >> return Step
       next = (tok "next" <|> tok "n") >> return Next
       finish = (tok "finish" <|> tok "f") >> return Finish
+      goals = (tok "goals" <|> tok "g") >> return InfoStack
       help = (tok "help" <|> tok "h" <|> tok "?") >> return Help
       repeatLast = tok "" >> return (lastCommand st)
-      command = step <|> next <|> finish <|> help <|> repeatLast
+      command = step <|> next <|> finish <|> goals <|> help <|> repeatLast
 
   return $ parse (spaces *> command <* spaces <* eof <?> "command") "" str
 
@@ -313,6 +322,7 @@ runCommand DC { stack = s } c = do
     Step -> lift (put st { currentTarget = Any }) >> return True
     Next -> lift (put st { currentTarget = Depth $ length s }) >> return True
     Finish -> lift (put st { currentTarget = Depth $ length s - 1 }) >> return True
+    InfoStack -> printLine (showStack s) >> return False
     Help -> printLine debugHelp >> return False
 
   lift $ modify $ \st' -> st' { lastCommand = c }
@@ -325,7 +335,7 @@ repl :: (Functor m, MonadIO m) => DebugContext -> TerminalCoroutine m ()
 repl context = do
   c <- getCommand
   shouldYield <- runCommand context c
-  unless shouldYield $ repl context
+  unless shouldYield $ prompt context
 
 -- | Entry point when yielding control from the solver to the terminal. This function outputs a
 -- message to the user based on the yielded context, and then enters the interactive 'repl'.
@@ -480,11 +490,8 @@ debugFailUnknownPred s p@(Predicate name _) = do
 -- | Continuation hook resulting in a runtime error when attempting to evaluate a 'Term' containing
 -- ununified variables.
 debugErrorUninstantiatedVariables :: [Goal] -> a
-debugErrorUninstantiatedVariables s =
-  let annotatedStack =
-        ["(" ++ show d ++ ") " ++ show g | (d, g) <- zip ([1..] :: [Int]) (reverse s)]
-  in error $ "Variables are not sufficiently instantiated.\nGoal stack:\n" ++
-             intercalate "\n" annotatedStack
+debugErrorUninstantiatedVariables s = error $
+  "Variables are not sufficiently instantiated.\nGoal stack:\n" ++ showStack s
 
 -- | A coroutine which controls the HSPL solver, yielding control at every important event.
 solverCoroutine :: Monad m => Goal -> SolverCoroutine m [ProofResult]
