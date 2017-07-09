@@ -8,11 +8,19 @@ import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Debugger
 import Control.Hspl.Internal.Solver
 
+import Control.Monad.Coroutine
+import Control.Monad.Coroutine.SuspensionFunctors
+import Control.Monad.Identity
+import Control.Monad.State
+import Data.Either
 import Data.List
 import Data.Monoid ((<>))
 import Data.Time.Clock
 import System.Directory
 import System.FilePath
+import Text.Parsec
+import Text.Parsec.Pos
+import Text.Parsec.Error
 
 runTest :: Goal -> [String] -> [String] -> IO ()
 runTest g commands expectedOutput = do
@@ -183,6 +191,44 @@ backtracking = [ HornClause (predicate "foo" (Var "x" :: Var Char))
                ]
 
 test = describeModule "Control.Hspl.Internal.Debugger" $ do
+  describe "the command parser" $ do
+    -- This will be ignored by the parser, but we need it to run the coroutine
+    let context = DC { stack = []
+                     , status = Call
+                     , msg = ""
+                     }
+    let runTest input expected =
+          do let st = pogoStick (\(Await f) -> f (Just context)) $ parseCommand input
+             output <- runDebugStateT debugConfig st
+             output `shouldBe` Right expected
+    let shouldFail input =
+          do let st = pogoStick (\(Await f) -> f (Just context)) $ parseCommand input
+             output <- runDebugStateT debugConfig st
+             output `shouldSatisfy` isLeft
+    withParams [ (["s", "step"], Step)
+               , (["n", "next"], Next)
+               , (["f", "finish"], Finish)
+               , (["g", "goals"], InfoStack)
+               , (["h", "?", "help"], Help)
+               ] $ \(inputs, expected) ->
+      it "should parse valid debugger commands" $
+        forM_ inputs $ \input ->
+          runTest input expected
+    withParams [" s", "s ", " s ", "\ts", "s\t", "\ts\t", " s\t", "\t s "] $ \input ->
+      it "should ignore whitespace" $
+        runTest input Step
+    it "should fail when given an unexpected token" $
+      shouldFail "step next"
+    it "should fail when given an unknown command" $
+      shouldFail "bogus"
+    withParams ["", " ", "\t"] $ \input ->
+      it "should output the previous command when given a blank line" $ do
+        freshState <- initTerminalState debugConfig
+        let state = freshState { lastCommand = Finish }
+        let m = pogoStick (\(Await f) -> f (Just context)) $ parseCommand input
+        output <- evalStateT m state
+        output `shouldBe` Right Finish
+
   describe "the step command" $ do
     let deepGoal = PredGoal (predicate "deep" (Var "x" :: Var Char)) deep
     let deepTrace = [ expectCall 1 "deep" (Var "x" :: Var Char)
@@ -395,10 +441,6 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       go alternativesGoal alternativesTrace
       go alternativesFailInnerGoal alternativesFailInnerTrace
       go alternativesFailGoal alternativesFailTrace
-    it "should have a one-character alias" $ do
-      let go g t = run g t "s"
-      go deepGoal deepTrace
-      go wideGoal wideTrace
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do
@@ -433,12 +475,6 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
         , expectExit 2 "foo" 'a'
         , expectExit 1 "deep" 'a'
         ]
-    it "should have a one-character alias" $
-      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
-        ["n", "n"]
-        [ expectCall 1 "deep" (Var "x" :: Var Char)
-        , expectExit 1 "deep" 'a'
-        ]
 
   describe "the finish command" $ do
     it "should skip to the next decrease in depth" $ do
@@ -455,25 +491,14 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
         , expectCall 2 "bar" (Var "x" :: Var Char)
         , expectFail 1 "foo" (Var "x" :: Var Char)
         ]
-    it "should have a one-character alias" $
-        runTest (PredGoal (predicate "wide"
-                  (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["s", "f", "s"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , expectCall 2 "foo" (Var "x" :: Var Char)
-        , expectExit 1 "wide" ('a', 'b', 'c')
-        ]
 
   describe "the help command" $
-    it "should print a usage message" $ do
-      let run comm = runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
-                      [comm, "f"]
-                      [ expectCall 1 "deep" (Var "x" :: Var Char)
-                      , debugHelp
-                      ]
-      run "?"
-      run "h"
-      run "help"
+    it "should print a usage message" $
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
+              ["help", "finish"]
+              [ expectCall 1 "deep" (Var "x" :: Var Char)
+              , debugHelp
+              ]
 
   describe "a blank command" $
     it "should repeat the previous command" $
@@ -484,11 +509,13 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
         ]
 
   describe "an unknown command" $
-    it "should trigger a retry prompt" $
+    it "should trigger a retry prompt" $ do
+      let unexpected = newErrorMessage (UnExpect "'b'") (newPos "" 1 1)
+      let err = addErrorMessage (Expect "command") unexpected
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
         ["bogus", "finish"]
         [ expectCall 1 "deep" (Var "x" :: Var Char)
-        , "Unknown command \"bogus\". Try \"?\" for help."
+        , show err ++ "\nTry \"?\" for help."
         ]
 
   describe "an uninstantiated variables error" $

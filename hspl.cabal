@@ -39,6 +39,7 @@ library
                      , logict
                      , ansi-terminal
                      , monad-coroutine
+                     , parsec
   ghc-options:         -Wall
   if flag(ShowTerms)
     cpp-options:       -DSHOW_TERMS
@@ -69,6 +70,8 @@ test-suite hspl-test
                      , directory
                      , filepath
                      , time
+                     , monad-coroutine
+                     , parsec
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   cpp-options:         -DDEBUG
   other-modules:       Testing

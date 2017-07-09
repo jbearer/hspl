@@ -1,3 +1,7 @@
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# OPTIONS_HADDOCK show-extensions #-}
+
 {-|
 Module      : Control.Hspl.Internal.Debugger
 Description : An interactive debugger for HSPL programs.
@@ -17,15 +21,20 @@ module Control.Hspl.Internal.Debugger (
   , debugConfig
   -- * Commands
   , Command (..)
-  , parseCommand
   , debugHelp
-  -- * Debugger
-  -- ** Data structures
+  , parseCommand
+  , getCommand
+  , runCommand
+  , repl
+  , prompt
+  -- * State
   , MsgType (..)
   , Target (..)
   , DebugContext (..)
   , TerminalState (..)
-  -- ** Control flow
+  , initTerminalState
+  , closeTerminalState
+  -- * Control flow
   -- | The complete debugger is composed of two cooperating coroutines. One routine controls the
   -- interactive terminal. It prompts the user for commands, processes them, and displays the output
   -- to the user. Whenever the user enters a command which should cause exectution to continue (e.g.
@@ -37,17 +46,21 @@ module Control.Hspl.Internal.Debugger (
   -- state of the computation. The terminal then decides whether to prompt the user or to continue
   -- the solve.
   , DebugStateT
+  , runDebugStateT
   , TerminalCoroutine
   , terminalCoroutine
   , SolverCoroutine
   , solverCoroutine
   , DebugSolverT
   , DebugCont
-  -- ** Entry points
+  -- * Entry points
   , debug
   , unsafeDebug
   ) where
 
+#if __GLASGOW_HASKELL__ < 710
+import           Control.Applicative hiding ((<|>))
+#endif
 import           Control.Monad.Coroutine
 import           Control.Monad.Coroutine.SuspensionFunctors hiding (yield)
 import qualified Control.Monad.Coroutine.SuspensionFunctors as CR
@@ -55,11 +68,11 @@ import           Control.Monad.Identity
 import           Control.Monad.Logic
 import           Control.Monad.State
 import           Data.List
-import qualified Data.Map as M
 import           Data.Maybe
 import           System.Console.ANSI
 import           System.IO
 import           System.IO.Unsafe
+import           Text.Parsec hiding (Error)
 
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Solver
@@ -93,6 +106,32 @@ debugConfig = DebugConfig { inputFile = "stdin"
                           , coloredOutput = True
                           }
 
+-- | Initialize the state which will be maintained by 'TerminalCoroutine'. Depending on the
+-- configuration, this may include opening file handles, and so the computation must take place in
+-- the 'IO' monad.
+initTerminalState :: MonadIO m => DebugConfig -> m TerminalState
+initTerminalState config = do
+  inputH <- if inputFile config == "stdin"
+              then return stdin
+              else liftIO $ openFile (inputFile config) ReadMode
+  outputH <- if outputFile config == "stdout"
+              then return stdout
+              else liftIO $ openFile (outputFile config) WriteMode
+  return Terminal { currentTarget = Any
+                  , lastCommand = Step
+                  , input = inputH
+                  , output = outputH
+                  , tty = interactive config
+                  , useColors = coloredOutput config
+                  }
+
+-- | Clean up any state which must be disposed after the termination of a 'TerminalCoroutine'. For
+-- example, input and output file handles which were opened in 'initTerminalState' will be closed.
+closeTerminalState :: MonadIO m => DebugConfig -> TerminalState -> m ()
+closeTerminalState config st = do
+  unless (inputFile config == "stdin") $ liftIO $ hClose $ input st
+  unless (outputFile config == "stdout") $ liftIO $ hClose $ output st
+
 -- | The available debugger commands.
 data Command =
     -- | Continue execution until the next event (predicate call, failure, or exit).
@@ -102,19 +141,9 @@ data Command =
   | Next
     -- | Continue execution until the next event in the parent goal.
   | Finish
-
--- | Read a 'Command' from a string. This accounts for short aliases of commands. For example,
---
--- >>> parseCommand "step"
--- Just Step
---
--- >>> parseCommand "s"
--- Just Step
-parseCommand :: String -> Maybe Command
-parseCommand s = M.lookup s $ M.fromList [ ("s", Step), ("step", Step)
-                                         , ("n", Next), ("next", Next)
-                                         , ("f", Finish), ("finish", Finish)
-                                         ]
+    -- | Print a usage message.
+  | Help
+  deriving (Show, Eq)
 
 -- | A usage message describing the various commands offered by the debugger.
 debugHelp :: String
@@ -181,22 +210,9 @@ type DebugStateT = StateT TerminalState
 -- monad. The initial state is derived from the given 'DebugConfig'.
 runDebugStateT :: MonadIO m => DebugConfig -> DebugStateT m a -> m a
 runDebugStateT config m = do
-  inputH <- if inputFile config == "stdin"
-              then return stdin
-              else liftIO $ openFile (inputFile config) ReadMode
-  outputH <- if outputFile config == "stdout"
-              then return stdout
-              else liftIO $ openFile (outputFile config) WriteMode
-  result <- evalStateT m Terminal { currentTarget = Any
-                                  , lastCommand = Step
-                                  , input = inputH
-                                  , output = outputH
-                                  , tty = interactive config
-                                  , useColors = coloredOutput config
-                                  }
-  unless (inputFile config == "stdin") $ liftIO $ hClose inputH
-  unless (outputFile config == "stdout") $ liftIO $ hClose outputH
-
+  st <- initTerminalState config
+  result <- evalStateT m st
+  closeTerminalState config st
   return result
 
 -- | Monad transformer which runs the interactive debugger terminal. It maintains some state, and
@@ -251,23 +267,70 @@ printLine s = do
   let endChar = if tty st then " " else "\n"
   liftIO $ hPutStr (output st) $ s ++ endChar
 
--- | Read a command from 'input'.
-getCommand :: (Functor m, MonadIO m) => TerminalCoroutine m Command
+-- | Read a 'Command' from a string. This accounts for short aliases of commands. For example,
+--
+-- >>> parseCommand "step"
+-- Just Step
+--
+-- >>> parseCommand "s"
+-- Just Step
+parseCommand :: MonadIO m => String -> TerminalCoroutine m (Either ParseError Command)
+parseCommand str = do
+  st <- lift get
+
+  let tok t = try $ spaces *> string t <* spaces
+      step = (tok "step" <|> tok "s") >> return Step
+      next = (tok "next" <|> tok "n") >> return Next
+      finish = (tok "finish" <|> tok "f") >> return Finish
+      help = (tok "help" <|> tok "h" <|> tok "?") >> return Help
+      repeatLast = tok "" >> return (lastCommand st)
+      command = step <|> next <|> finish <|> help <|> repeatLast
+
+  return $ parse (spaces *> command <* spaces <* eof <?> "command") "" str
+
+-- | Read a 'Command' from the input file handle. If the input is not a valid command, an error
+-- message is shown and the user is prompted to re-enter the command. This loop continues until a
+-- valid command is entered.
+getCommand :: MonadIO m => TerminalCoroutine m Command
 getCommand = do
   st <- lift get
-  comm <- liftIO $ hGetLine $ input st
-  if comm == "" then
-    fmap lastCommand $ lift get
-  else if comm == "?" || comm == "h" || comm == "help" then
-    printLine debugHelp >> getCommand
-  else case parseCommand comm of
-    Just c -> return c
-    Nothing -> printLine ("Unknown command \"" ++ comm ++ "\". Try \"?\" for help.") >> getCommand
+  commStr <- liftIO $ hGetLine $ input st
+  comm <- parseCommand commStr
+  case comm of
+    Left err -> printLine (show err ++ "\nTry \"?\" for help.") >> getCommand
+    Right c -> return c
 
--- | Display a message to the user and wait for the next command. When this function returns, the
--- command will be stored in 'lastCommand', and 'currentTarget' will be set appropriately.
+-- | Process a 'Command'. When this function returns, the command will be stored in 'lastCommand',
+-- and 'currentTarget' will be set appropriately. The return value indicates whether the processed
+-- command should cause the solver to continue executing. For example, if the given command is
+-- 'Next', the return value will be 'True', and the caller should thus yield control back to the
+-- solver. But if the given command is, say, 'Help', the caller should simply prompt for another
+-- command.
+runCommand :: MonadIO m => DebugContext -> Command -> TerminalCoroutine m Bool
+runCommand DC { stack = s } c = do
+  st <- lift get
+  result <- case c of
+    Step -> lift (put st { currentTarget = Any }) >> return True
+    Next -> lift (put st { currentTarget = Depth $ length s }) >> return True
+    Finish -> lift (put st { currentTarget = Depth $ length s - 1 }) >> return True
+    Help -> printLine debugHelp >> return False
+
+  lift $ modify $ \st' -> st' { lastCommand = c }
+
+  return result
+
+-- | Read and evalute commands until a command is entered which causes control to be yielded back to
+-- the solver.
+repl :: (Functor m, MonadIO m) => DebugContext -> TerminalCoroutine m ()
+repl context = do
+  c <- getCommand
+  shouldYield <- runCommand context c
+  unless shouldYield $ repl context
+
+-- | Entry point when yielding control from the solver to the terminal. This function outputs a
+-- message to the user based on the yielded context, and then enters the interactive 'repl'.
 prompt :: (Functor m, MonadIO m) => DebugContext -> TerminalCoroutine m ()
-prompt DC { stack = s, status = mtype, msg = m } = do
+prompt context@DC { stack = s, status = mtype, msg = m } = do
   st <- lift get
   let shouldStop = case currentTarget st of
                       Any -> True
@@ -278,12 +341,7 @@ prompt DC { stack = s, status = mtype, msg = m } = do
     liftIO $ hPutStr (output st) $ show mtype ++ ": "
     liftIO $ setSGR []
     printLine m
-    comm <- getCommand
-    let nextTarget = case comm of
-                      Step -> Any
-                      Next -> Depth (length s)
-                      Finish -> Depth $ length s - 1
-    lift $ put st { currentTarget = nextTarget, lastCommand = comm }
+    repl context
 
 -- | Same as callWith, but for unitary provers.
 callWith0 :: Monad m => MsgType -> [Goal] -> (DebugCont m -> DebugSolverT m ProofResult) ->
