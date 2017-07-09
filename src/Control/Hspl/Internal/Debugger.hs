@@ -142,20 +142,22 @@ data Command =
     -- | Continue execution until the next event in the parent goal.
   | Finish
     -- | Print out the current goal stack.
-  | InfoStack
+  | InfoStack (Maybe Int)
     -- | Print a usage message.
   | Help
   deriving (Show, Eq)
 
 -- | A usage message describing the various commands offered by the debugger.
 debugHelp :: String
-debugHelp = unlines ["s, step: proceed one predicate call"
-                    ,"n, next: proceed to the next call, failure, or exit at this level"
-                    ,"f, finish: proceed to the exit or failure of the current goal"
-                    ,"g, goals: print the current goal stack"
-                    ,"?, h, help: show this help"
-                    , "<return>: replay last command"
-                    ]
+debugHelp = unlines
+  ["s, step: proceed one predicate call"
+  ,"n, next: proceed to the next call, failure, or exit at this level"
+  ,"f, finish: proceed to the exit or failure of the current goal"
+  ,"gs, goals [N]: print the most recent N goals from the goal stack, or all goals if no N is given"
+  ,"g, goal: print the current goal (equivalent to 'goals 1')"
+  ,"?, h, help: show this help"
+  , "<return>: replay last command"
+  ]
 
 -- | Descriptor of the next event at which to stop execution and prompt the user for a command.
 data Target =
@@ -260,10 +262,16 @@ debugCont s = SolverCont { tryPredicate = debugFirstAlternative s
                          , errorUninstantiatedVariables = debugErrorUninstantiatedVariables s
                          }
 
--- | Format a goal stack in a manner suitable for displaying to the user.
-showStack :: [Goal] -> String
-showStack s = intercalate "\n"
-  ["(" ++ show d ++ ") " ++ show g | (d, g) <- zip ([1..] :: [Int]) (reverse s)]
+-- | Format a goal stack in a manner suitable for displaying to the user. If a number @n@ is
+-- specified, then just the top @n@ goals are shown from the stack. Otherwise, the entire stack is
+-- displayed.
+showStack :: Maybe Int -> [Goal] -> String
+showStack mn s =
+  let enumeratedStack = zip ([1..] :: [Int]) (reverse s)
+      truncatedStack = case mn of
+                          Just n -> reverse $ take n $ reverse enumeratedStack
+                          Nothing -> enumeratedStack
+  in intercalate "\n" ["(" ++ show d ++ ") " ++ show g | (d, g) <- truncatedStack]
 
 -- | Print a line to the 'output' 'Handle'. The end-of-line character depends on whether we are
 -- running in interactive mode (i.e. whether 'tty' is set). In interactive mode, the end of line is
@@ -287,10 +295,18 @@ parseCommand str = do
   st <- lift get
 
   let tok t = try $ spaces *> string t <* spaces
+      decimal = try $ fmap read $ spaces *> many1 digit <* spaces
+      positiveDecimal = try (do n <- decimal
+                                if n >= 1 then return n else mzero) <?> "positive integer"
+
       step = (tok "step" <|> tok "s") >> return Step
       next = (tok "next" <|> tok "n") >> return Next
       finish = (tok "finish" <|> tok "f") >> return Finish
-      goals = (tok "goals" <|> tok "g") >> return InfoStack
+      goals = do _ <- spaces >> (try (string "goals") <|> try (string "gs"))
+                 n <- optionMaybe $ space >> spaces >> positiveDecimal
+                 spaces
+                 return $ InfoStack n
+              <|> ((tok "goal" <|> tok "g") >> return (InfoStack $ Just 1))
       help = (tok "help" <|> tok "h" <|> tok "?") >> return Help
       repeatLast = tok "" >> return (lastCommand st)
       command = step <|> next <|> finish <|> goals <|> help <|> repeatLast
@@ -322,7 +338,7 @@ runCommand DC { stack = s } c = do
     Step -> lift (put st { currentTarget = Any }) >> return True
     Next -> lift (put st { currentTarget = Depth $ length s }) >> return True
     Finish -> lift (put st { currentTarget = Depth $ length s - 1 }) >> return True
-    InfoStack -> printLine (showStack s) >> return False
+    InfoStack n -> printLine (showStack n s) >> return False
     Help -> printLine debugHelp >> return False
 
   lift $ modify $ \st' -> st' { lastCommand = c }
@@ -491,7 +507,7 @@ debugFailUnknownPred s p@(Predicate name _) = do
 -- ununified variables.
 debugErrorUninstantiatedVariables :: [Goal] -> a
 debugErrorUninstantiatedVariables s = error $
-  "Variables are not sufficiently instantiated.\nGoal stack:\n" ++ showStack s
+  "Variables are not sufficiently instantiated.\nGoal stack:\n" ++ showStack Nothing s
 
 -- | A coroutine which controls the HSPL solver, yielding control at every important event.
 solverCoroutine :: Monad m => Goal -> SolverCoroutine m [ProofResult]

@@ -10,8 +10,8 @@ import Control.Hspl.Internal.Solver
 
 import Control.Monad.Coroutine
 import Control.Monad.Coroutine.SuspensionFunctors
-import Control.Monad.Identity
-import Control.Monad.State
+import Control.Monad.Identity hiding (when)
+import Control.Monad.State hiding (when)
 import Data.Either
 import Data.List
 import Data.Monoid ((<>))
@@ -155,6 +155,12 @@ expectAlternativesFail :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) 
 expectAlternativesFail d x g xs = "(" ++ show d ++ ") Fail: " ++
                                   show (Alternatives (toTerm x) g (toTerm xs))
 
+instance Show Message where
+  show (SysUnExpect s) = "SysUnExpect " ++ show s
+  show (UnExpect s) = "UnExpect " ++ show s
+  show (Expect s) = "Expect " ++ show s
+  show (Message s) = "Message " ++ show s
+
 -- deep(X) :- foo(X).
 -- foo(X) :- bar(X).
 -- bar(a).
@@ -201,26 +207,52 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           do let st = pogoStick (\(Await f) -> f (Just context)) $ parseCommand input
              output <- runDebugStateT debugConfig st
              output `shouldBe` Right expected
-    let shouldFail input =
+    let shouldFail input err =
           do let st = pogoStick (\(Await f) -> f (Just context)) $ parseCommand input
              output <- runDebugStateT debugConfig st
-             output `shouldSatisfy` isLeft
+             case output of
+                Right c -> failure $ "Expected parser to fail on input \"" ++ input ++ "\" with " ++
+                                     "error (" ++ show err ++
+                                     "), but it succeeded and produced " ++ show c
+                Left e -> if err `elem` errorMessages e
+                            then success
+                            else failure $ "Expected parser to fail on input \"" ++ input ++
+                                           "\" with error (" ++ show err ++ "), but it failed with " ++
+                                          show (errorMessages e)
+    -- ([aliases], command)
     withParams [ (["s", "step"], Step)
                , (["n", "next"], Next)
                , (["f", "finish"], Finish)
-               , (["g", "goals"], InfoStack)
+               , (["gs", "goals"], InfoStack Nothing)
+               , (["g", "goal"], InfoStack $ Just 1)
                , (["h", "?", "help"], Help)
                ] $ \(inputs, expected) ->
-      it "should parse valid debugger commands" $
+      it "should parse valid debugger commands with no arguments" $
         forM_ inputs $ \input ->
           runTest input expected
+    when "parsing commands with arguments" $
+      -- ([aliases], [args], command)
+      withParams [ (["gs", "goals"], ["3"], InfoStack $ Just 3) ] $ \(inputs, args, command) -> do
+        it "should parse a valid command line" $
+          forM_ inputs $ \input ->
+            runTest (input ++ " " ++ unwords args) command
+        it "should accept extra whitespace" $
+          forM_ inputs $ \input ->
+            runTest (input ++ "  " ++ intercalate "  " args) command
+        it "should fail when the command is not separated from the arguments" $
+          forM_ inputs $ \input ->
+            shouldFail (input ++ unwords args) (Expect "command")
+    when "parsing the goals command" $
+      withParams ["a", "1a", "a1", "0", "-1", "1.5"] $ \arg ->
+        it "should reject invalid arguments" $
+          shouldFail ("goals " ++ arg) (Expect "positive integer")
     withParams [" s", "s ", " s ", "\ts", "s\t", "\ts\t", " s\t", "\t s "] $ \input ->
       it "should ignore whitespace" $
         runTest input Step
     it "should fail when given an unexpected token" $
-      shouldFail "step next"
+      shouldFail "step next" (UnExpect "'n'")
     it "should fail when given an unknown command" $
-      shouldFail "bogus"
+      shouldFail "bogus" (Expect "command")
     withParams ["", " ", "\t"] $ \input ->
       it "should output the previous command when given a blank line" $ do
         freshState <- initTerminalState debugConfig
@@ -492,7 +524,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
         , expectFail 1 "foo" (Var "x" :: Var Char)
         ]
 
-  describe "the goals command" $
+  describe "the goals command" $ do
     it "should print the current goal stack" $
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
               ["s", "s", "goals", "f", "f", "f"]
@@ -503,6 +535,33 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                 [ "(1) " ++ show (PredGoal (predicate "deep" (Var "x" :: Var Char)) [])
                 , "(2) " ++ show (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
                 , "(3) " ++ show (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
+                ]
+              , expectCall 3 "bar" (Var "x" :: Var Char)
+              , expectExit 2 "foo" 'a'
+              , expectExit 1 "deep" 'a'
+              ]
+    it "should print the top N goals from the current goal stack" $
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
+              ["s", "s", "goals 2", "f", "f", "f"]
+              [ expectCall 1 "deep" (Var "x" :: Var Char)
+              , expectCall 2 "foo" (Var "x" :: Var Char)
+              , expectCall 3 "bar" (Var "x" :: Var Char)
+              , intercalate "\n"
+                [ "(2) " ++ show (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
+                , "(3) " ++ show (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
+                ]
+              , expectCall 3 "bar" (Var "x" :: Var Char)
+              , expectExit 2 "foo" 'a'
+              , expectExit 1 "deep" 'a'
+              ]
+    it "should print the current goal" $
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
+              ["s", "s", "goal", "f", "f", "f"]
+              [ expectCall 1 "deep" (Var "x" :: Var Char)
+              , expectCall 2 "foo" (Var "x" :: Var Char)
+              , expectCall 3 "bar" (Var "x" :: Var Char)
+              , intercalate "\n"
+                [ "(3) " ++ show (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
                 ]
               , expectCall 3 "bar" (Var "x" :: Var Char)
               , expectExit 2 "foo" 'a'
