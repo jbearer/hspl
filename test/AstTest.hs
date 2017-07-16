@@ -495,10 +495,13 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
           char (toTerm 'a') (toTerm 'b') `shouldNotEqual` bool (toTerm True) (toTerm False)
           char (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
             bool (toTerm (Var "x" :: Var Bool)) (toTerm (Var "y" :: Var Bool))
-  describe "Not goals" $
-    it "should compare according to the inner goal" $ do
-      Not (PredGoal (predicate "foo" ()) []) `shouldEqual` Not (PredGoal (predicate "foo" ()) [])
-      Not (PredGoal (predicate "foo" ()) []) `shouldNotEqual` Not (PredGoal (predicate "bar" ()) [])
+  describe "unary outer goals" $
+    withParams [Not, Once] $ \constr ->
+      it "should compare according to the inner goal" $ do
+        constr (PredGoal (predicate "foo" ()) []) `shouldEqual`
+          constr (PredGoal (predicate "foo" ()) [])
+        constr (PredGoal (predicate "foo" ()) []) `shouldNotEqual`
+          constr (PredGoal (predicate "bar" ()) [])
   describe "binary logic goals" $
     withParams [And, Or] $ \constr ->
       it "should compare according to the subgoals" $ do

@@ -61,6 +61,7 @@ module Control.Hspl.Internal.Debugger (
 #if __GLASGOW_HASKELL__ < 710
 import           Control.Applicative hiding ((<|>))
 #endif
+import           Control.Exception (finally)
 import           Control.Monad.Coroutine
 import           Control.Monad.Coroutine.SuspensionFunctors hiding (yield)
 import qualified Control.Monad.Coroutine.SuspensionFunctors as CR
@@ -109,14 +110,14 @@ debugConfig = DebugConfig { inputFile = "stdin"
 -- | Initialize the state which will be maintained by 'TerminalCoroutine'. Depending on the
 -- configuration, this may include opening file handles, and so the computation must take place in
 -- the 'IO' monad.
-initTerminalState :: MonadIO m => DebugConfig -> m TerminalState
+initTerminalState :: DebugConfig -> IO TerminalState
 initTerminalState config = do
   inputH <- if inputFile config == "stdin"
               then return stdin
-              else liftIO $ openFile (inputFile config) ReadMode
+              else openFile (inputFile config) ReadMode
   outputH <- if outputFile config == "stdout"
               then return stdout
-              else liftIO $ openFile (outputFile config) WriteMode
+              else openFile (outputFile config) WriteMode
   return Terminal { currentTarget = Any
                   , lastCommand = Step
                   , input = inputH
@@ -127,10 +128,10 @@ initTerminalState config = do
 
 -- | Clean up any state which must be disposed after the termination of a 'TerminalCoroutine'. For
 -- example, input and output file handles which were opened in 'initTerminalState' will be closed.
-closeTerminalState :: MonadIO m => DebugConfig -> TerminalState -> m ()
+closeTerminalState :: DebugConfig -> TerminalState -> IO ()
 closeTerminalState config st = do
-  unless (inputFile config == "stdin") $ liftIO $ hClose $ input st
-  unless (outputFile config == "stdout") $ liftIO $ hClose $ output st
+  unless (inputFile config == "stdin") $ hClose $ input st
+  unless (outputFile config == "stdout") $ hClose $ output st
 
 -- | The available debugger commands.
 data Command =
@@ -213,18 +214,17 @@ type DebugStateT = StateT TerminalState
 
 -- | Evaluate a compuation in the 'DebugStateT' monad, returning a computation in the underlying
 -- monad. The initial state is derived from the given 'DebugConfig'.
-runDebugStateT :: MonadIO m => DebugConfig -> DebugStateT m a -> m a
+runDebugStateT :: DebugConfig -> DebugStateT IO a -> IO a
 runDebugStateT config m = do
   st <- initTerminalState config
-  result <- evalStateT m st
-  closeTerminalState config st
+  result <- evalStateT m st `finally` closeTerminalState config st
   return result
 
--- | Monad transformer which runs the interactive debugger terminal. It maintains some state, and
--- performs computations in the 'IO' monad. At certain times, it yields control to the calling
--- routine, which should run one step of the computation and then pass control back to the terminal,
--- along with some context about the current state of the computation.
-type TerminalCoroutine m = Coroutine (Await (Maybe DebugContext)) (DebugStateT m)
+-- | Monad which runs the interactive debugger terminal. It maintains some state, and performs
+-- computations in the 'IO' monad. At certain times, it yields control to the calling routine, which
+-- should run one step of the computation and then pass control back to the terminal, along with
+-- some context about the current state of the computation.
+type TerminalCoroutine = Coroutine (Await (Maybe DebugContext)) (DebugStateT IO)
 
 -- | Monad transformer which runs an HSPL program, yielding control and context at each important
 -- step of the computation.
@@ -258,6 +258,7 @@ debugCont s = SolverCont { tryPredicate = debugFirstAlternative s
                          , tryTop = debugTop s
                          , tryBottom = debugBottom s
                          , tryAlternatives = debugAlternatives s
+                         , tryOnce = debugOnce s
                          , failUnknownPred = debugFailUnknownPred s
                          , errorUninstantiatedVariables = debugErrorUninstantiatedVariables s
                          }
@@ -277,7 +278,7 @@ showStack mn s =
 -- running in interactive mode (i.e. whether 'tty' is set). In interactive mode, the end of line is
 -- a ' ', and the user is prompted for input at the end of the same line. In non-interactive mode,
 -- each line of output is terminated by a '\n' character.
-printLine :: MonadIO m => String -> TerminalCoroutine m ()
+printLine :: String -> TerminalCoroutine ()
 printLine s = do
   st <- lift get
   let endChar = if tty st then " " else "\n"
@@ -290,7 +291,7 @@ printLine s = do
 --
 -- >>> parseCommand "s"
 -- Just Step
-parseCommand :: MonadIO m => String -> TerminalCoroutine m (Either ParseError Command)
+parseCommand :: String -> TerminalCoroutine (Either ParseError Command)
 parseCommand str = do
   st <- lift get
 
@@ -316,7 +317,7 @@ parseCommand str = do
 -- | Read a 'Command' from the input file handle. If the input is not a valid command, an error
 -- message is shown and the user is prompted to re-enter the command. This loop continues until a
 -- valid command is entered.
-getCommand :: MonadIO m => TerminalCoroutine m Command
+getCommand :: TerminalCoroutine Command
 getCommand = do
   st <- lift get
   commStr <- liftIO $ hGetLine $ input st
@@ -331,7 +332,7 @@ getCommand = do
 -- 'Next', the return value will be 'True', and the caller should thus yield control back to the
 -- solver. But if the given command is, say, 'Help', the caller should simply prompt for another
 -- command.
-runCommand :: MonadIO m => DebugContext -> Command -> TerminalCoroutine m Bool
+runCommand :: DebugContext -> Command -> TerminalCoroutine Bool
 runCommand DC { stack = s } c = do
   st <- lift get
   result <- case c of
@@ -347,7 +348,7 @@ runCommand DC { stack = s } c = do
 
 -- | Read and evalute commands until a command is entered which causes control to be yielded back to
 -- the solver.
-repl :: (Functor m, MonadIO m) => DebugContext -> TerminalCoroutine m ()
+repl :: DebugContext -> TerminalCoroutine ()
 repl context = do
   c <- getCommand
   shouldYield <- runCommand context c
@@ -355,7 +356,7 @@ repl context = do
 
 -- | Entry point when yielding control from the solver to the terminal. This function outputs a
 -- message to the user based on the yielded context, and then enters the interactive 'repl'.
-prompt :: (Functor m, MonadIO m) => DebugContext -> TerminalCoroutine m ()
+prompt :: DebugContext -> TerminalCoroutine ()
 prompt context@DC { stack = s, status = mtype, msg = m } = do
   st <- lift get
   let shouldStop = case currentTarget st of
@@ -490,6 +491,11 @@ debugAlternatives s x g xs =
   let s' = Alternatives x g xs : s
   in call3 s' proveAlternativesWith x g xs
 
+debugOnce :: Monad m => [Goal] -> Goal -> DebugSolverT m ProofResult
+debugOnce s g =
+  let s' = Once g : s
+  in call s' proveOnceWith g
+
 -- | Continuation hook invoked when a goal with no matching clauses is encountered.
 debugFailUnknownPred :: Monad m => [Goal] -> Predicate -> DebugSolverT m ProofResult
 debugFailUnknownPred s p@(Predicate name _) = do
@@ -515,14 +521,14 @@ solverCoroutine g = observeAllSolverT $ proveWith (debugCont []) g
 
 -- | A coroutine which controls the interactive debugger terminal, periodically yielding control to
 -- the solver.
-terminalCoroutine :: (Functor m, MonadIO m) => TerminalCoroutine m ()
+terminalCoroutine :: TerminalCoroutine ()
 terminalCoroutine = await >>= \mc -> when (isJust mc) $ do
   prompt $ fromJust mc
   terminalCoroutine
 
 -- | Run the debugger with the given configuration and goal. The result of this function is a
 -- computaion in the 'IO' monad which, when executed, will run the debugger.
-debug :: (Functor m, MonadIO m) => DebugConfig -> Goal -> m [ProofResult]
+debug :: DebugConfig -> Goal -> IO [ProofResult]
 debug c g =
   let cr = weave sequentialBinder weaveAwaitMaybeYield terminalCoroutine (solverCoroutine g)
       st = pogoStick runIdentity cr

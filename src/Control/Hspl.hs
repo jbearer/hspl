@@ -36,6 +36,7 @@ module Control.Hspl (
   , execClauseWriter
   -- ** Defining predicates
   , predicate
+  , semiDetPredicate
   , match
   , (|-)
   , (?)
@@ -44,6 +45,7 @@ module Control.Hspl (
   -- '|-'.
   , findAll
   , bagOf
+  , once
   -- *** Unification, identity, equality, and inequality
   , (|=|)
   , (|\=|)
@@ -168,11 +170,12 @@ execClauseWriter = execWriter . unCW
 -- to @term@ is true.
 infix 9 ?
 (?) :: TermData a => Predicate (HSPLType a) -> a -> GoalWriter ()
-p? arg = tell $ Ast.PredGoal (Ast.predicate (predName p) arg) (definitions p)
+p? arg = let g = Ast.PredGoal (Ast.predicate (predName p) arg) (definitions p)
+         in if semiDet p then tell (Once g) else tell g
 
 -- | A declaration of a predicate with a given name and set of alternatives. Parameterized by the
 -- type of the argument to which the predicate can be applied.
-data Predicate a = Predicate { predName :: String, definitions :: [Clause] }
+data Predicate a = Predicate { predName :: String, definitions :: [Clause], semiDet :: Bool }
 
 -- | Declare and define a new predicate with a given name. This function takes a block containing
 -- one or more definitions ('match' statements). For example, we define a predicate called "odd"
@@ -222,7 +225,16 @@ data Predicate a = Predicate { predName :: String, definitions :: [Clause] }
 --
 -- Note that the generic type must be an instance of 'TermEntry'.
 predicate :: String -> ClauseWriter t b -> Predicate t
-predicate name gs = Predicate name (map ($name) $ execClauseWriter gs)
+predicate name gs = Predicate { predName = name
+                              , definitions = map ($name) $ execClauseWriter gs
+                              , semiDet = False
+                              }
+
+-- | Declare and define a new semi-deterministic predicate. The usage is exactly the same as that of
+-- 'predicate'. However, predicates created with 'semiDetPredicate' are semi-deterministic, meaning
+-- they succeed at most once.
+semiDetPredicate :: String -> ClauseWriter t b -> Predicate t
+semiDetPredicate name cw = (predicate name cw) { semiDet = True }
 
 -- | Make a statement about when a 'Predicate' holds for inputs of a particular form. A 'match'
 -- statement succeeds when the input can unify with the argument to 'match'. When attempting to
@@ -268,6 +280,12 @@ bagOf x gw xs =
       p = predicate "bagOf" $
             match(v"x" <:> v"xs") |- findAll x gw (v"x" <:> v"xs")
   in p? xs
+
+-- | Convert a possibly non-deterministic goal into a semi-deterministic goal. If a goal @g@
+-- succeeds at all, then the goal @once g@ succeeds exactly once, and the result is the first
+-- solution of @g@. If @g@ fails, then @once g@ also fails.
+once :: GoalWriter a -> GoalWriter ()
+once gw = tell $ Once $ execGoalWriter gw
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
 infix 2 |=|

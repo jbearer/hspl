@@ -364,10 +364,11 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         it "should rename variables in both terms the same" $
           rename (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
             constr (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
-    context "of Not goals" $
-      it "should rename variables in the inner goal" $
-        rename (Not $ PredGoal (predicate "foo" (Var "x" :: Var Bool)) []) `shouldBe`
-          Not (PredGoal (predicate "foo" (Fresh 0 :: Var Bool)) [])
+    context "of unary outer goals" $
+      withParams [Not, Once] $ \constr ->
+        it "should rename variables in the inner goal" $
+          rename (constr $ PredGoal (predicate "foo" (Var "x" :: Var Bool)) []) `shouldBe`
+            constr (PredGoal (predicate "foo" (Fresh 0 :: Var Bool)) [])
     context "of binary logic goals" $
       withParams [And, Or] $ \constr -> do
         it "should rename variables in each goal" $
@@ -502,11 +503,12 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
             constr (toTerm (Var "y" :: Var Char)) (toTerm 'a')
           unifyGoal u (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
             constr (toTerm 'a') (toTerm (Var "y" :: Var Char))
-    context "to a Not goal" $
-      it "should unify the inner goal" $
-        unifyGoal (toTerm 'a' // Var "x")
-                  (Not $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []) `shouldBe`
-          Not (PredGoal (predicate "foo" 'a') [])
+    context "to a unary outer goal" $
+      withParams [Not, Once] $ \constr ->
+        it "should unify the inner goal" $
+          unifyGoal (toTerm 'a' // Var "x")
+                    (constr $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []) `shouldBe`
+            constr (PredGoal (predicate "foo" 'a') [])
     context "to a binary logic goal" $
       withParams [And, Or] $ \constr ->
         it "should unify both inner goals" $

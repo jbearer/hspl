@@ -325,6 +325,21 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         ps `shouldBe` [FoundAlternatives x Top (toTerm [x]) [ProvedTop]]
         length us `shouldBe` 1
         head us `shouldSatisfy` ([x] // Var "xs" `isSubunifierOf`)
+  describe "proveOnceWith" $ do
+    let runTest g = observeAllSolver $ proveOnceWith solverCont g
+    it "should fail if the inner goal fails" $
+      runTest Bottom `shouldBe` []
+    it "should succeed if the inner goal succeeds" $ do
+      let (ps, us) = unzip $ runTest (PredGoal (predicate "foo" (Var "x" :: Var Char, Var "y" :: Var Char)) [simpleBinary])
+      ps `shouldBe` [ProvedOnce $ Resolved (predicate "foo" ('a', 'b')) ProvedTop]
+      length us `shouldBe` 1
+      head us `shouldSatisfy` (('a' // Var "x" <> 'b' // Var "y") `isSubunifierOf`)
+
+      let (ps, us) = unzip $ runTest (PredGoal (predicate "mortal" (Var "x" :: Var String)) [mortal])
+      ps `shouldBe` [ProvedOnce $ Resolved (predicate "mortal" "hypatia")
+                                           (Resolved (predicate "human" "hypatia") ProvedTop)]
+      length us `shouldBe` 1
+      head us `shouldSatisfy` ("hypatia" // Var "x" `isSubunifierOf`)
   describe "a proof search" $ do
     let search p = searchProof (p, mempty)
     it "should traverse every branch of the proof" $ do
@@ -423,6 +438,11 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     context "of unitary logic proofs" $
       it "should unify a query goal" $
         search ProvedTop Top `shouldBe` [Top]
+    context "of a ProvedOnce proof" $ do
+      it "should unify a query goal" $
+        search (ProvedOnce ProvedTop) (Once Top) `shouldBe` [Once Top]
+      it "should recursively search the subproof" $
+        search (ProvedOnce ProvedTop) Top `shouldBe` [Top]
   describe "the \"get solutions\" feature" $ do
     it "should return the theorem at the root of a proof tree" $ do
       let get p = getSolution (p, mempty)

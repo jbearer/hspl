@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraints
 
 module DebuggerTest where
@@ -8,6 +9,7 @@ import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Debugger
 import Control.Hspl.Internal.Solver
 
+import Control.Exception
 import Control.Monad.Coroutine
 import Control.Monad.Coroutine.SuspensionFunctors
 import Control.Monad.Identity hiding (when)
@@ -18,9 +20,11 @@ import Data.Monoid ((<>))
 import Data.Time.Clock
 import System.Directory
 import System.FilePath
-import Text.Parsec
 import Text.Parsec.Pos
 import Text.Parsec.Error
+
+-- For tests involving Parsec error messages
+deriving instance Show Message
 
 runTest :: Goal -> [String] -> [String] -> IO ()
 runTest g commands expectedOutput = do
@@ -34,11 +38,20 @@ runTest g commands expectedOutput = do
                            , coloredOutput = False
                            }
   writeFile (inputFile config) $ unlines commands
-  debug config g
-  actualOutput <- readFile $ outputFile config
+
+  result <- try $ debug config g
+  output <- readFile $ outputFile config
+  case result of
+    Right _ -> return ()
+    Left e ->
+      failure $ "uncaught exeption: " ++ show (e :: IOException) ++
+                "\n--- begin captured stdout ---\n" ++
+                output ++
+                "\n--- end captured stdout ---\n"
+
   removeFile $ inputFile config
   removeFile $ outputFile config
-  actualOutput `shouldEqual` unlines expectedOutput
+  output `shouldEqual` unlines expectedOutput
 
 expectTrace :: TermData a => String -> Int -> String -> a -> String
 expectTrace s d pred arg = "(" ++ show d ++ ") " ++ s ++ ": " ++ show (predicate pred arg)
@@ -155,11 +168,14 @@ expectAlternativesFail :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) 
 expectAlternativesFail d x g xs = "(" ++ show d ++ ") Fail: " ++
                                   show (Alternatives (toTerm x) g (toTerm xs))
 
-instance Show Message where
-  show (SysUnExpect s) = "SysUnExpect " ++ show s
-  show (UnExpect s) = "UnExpect " ++ show s
-  show (Expect s) = "Expect " ++ show s
-  show (Message s) = "Message " ++ show s
+expectOnceCall :: Int -> Goal -> String
+expectOnceCall d g = "(" ++ show d ++ ") Call: " ++ show (Once g)
+
+expectOnceExit :: Int -> Goal -> String
+expectOnceExit d g = "(" ++ show d ++ ") Exit: " ++ show (Once g)
+
+expectOnceFail :: Int -> Goal -> String
+expectOnceFail d g = "(" ++ show d ++ ") Fail: " ++ show (Once g)
 
 -- deep(X) :- foo(X).
 -- foo(X) :- bar(X).
@@ -445,6 +461,23 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                                   expectTop 2 ++
                                 [ expectAlternativesFail 1 (Var "x" :: Var Char) Top Nil
                                 ]
+    let onceGoal = Once $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                             (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+    let onceTrace = [ expectOnceCall 1 $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                            (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                    , expectOrCall 2 (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                     (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                    , expectCanUnifyCall 3 (Var "x") 'a'
+                    , expectCanUnifyExit 3 'a'
+                    , expectOrExit 2 (CanUnify (toTerm 'a') (toTerm 'a'))
+                                     (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                    , expectOnceExit 1 $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
+                                            (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                    ]
+    let onceFailGoal = Once Bottom
+    let onceFailTrace = [expectOnceCall 1 Bottom] ++
+                         expectBottom 2 ++
+                        [expectOnceFail 1 Bottom]
     let run g t c = runTest g (map (const c) [1..length t]) t
 
     it "should prompt after every step of computation" $ do
@@ -473,6 +506,8 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       go alternativesGoal alternativesTrace
       go alternativesFailInnerGoal alternativesFailInnerTrace
       go alternativesFailGoal alternativesFailTrace
+      go onceGoal onceTrace
+      go onceFailGoal onceFailTrace
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do

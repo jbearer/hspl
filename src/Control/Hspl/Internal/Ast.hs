@@ -754,6 +754,9 @@ data Goal =
             -- | Similar to Prolog's @findall/3@. @Alternatives template goal bag@ is a goal which
             -- succeeds if @bag@ unifies with the alternatives of @template@ in @goal@.
           | forall t. TermEntry t => Alternatives (Term t) Goal (Term [t])
+            -- | A goal which succeeds at most once. If the inner goal succeeds multiple times, only
+            -- the first result is taken.
+          | Once Goal
 
 instance Show Goal where
   show (PredGoal p _) = show p
@@ -767,6 +770,7 @@ instance Show Goal where
   show Top = "true"
   show Bottom = "false"
   show (Alternatives x g xs) = "findAll (" ++ show x ++ ") (" ++ show g ++ ") (" ++ show xs ++ ")"
+  show (Once g) = "once (" ++ show g ++ ")"
 
 instance Eq Goal where
   -- Here we make the assumption that if two predicates have the same name, they have the same
@@ -797,6 +801,7 @@ instance Eq Goal where
   (==) (Alternatives x g xs) (Alternatives x' g' xs') = case cast (x', xs') of
     Just t' -> (x, xs) == t' && g == g'
     Nothing -> False
+  (==) (Once g) (Once g') = g == g'
   (==) _ _ = False
 
 instance Monoid Goal where

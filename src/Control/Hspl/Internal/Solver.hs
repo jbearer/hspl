@@ -53,6 +53,7 @@ module Control.Hspl.Internal.Solver (
   , proveTopWith
   , proveBottomWith
   , proveAlternativesWith
+  , proveOnceWith
   , proveWith
   , prove
   ) where
@@ -98,6 +99,8 @@ data Proof =
              -- second is the subgoal, and the third is the "bag" of alternatives. The final
              -- argument is the list of proofs of the subgoal.
            | forall a. TermEntry a => FoundAlternatives (Term a) Goal (Term [a]) [Proof]
+             -- | A proof of a 'Once' goal.
+           | ProvedOnce Proof
 
 instance Eq Proof where
   (==) proof1 proof2 = case (proof1, proof2) of
@@ -115,7 +118,7 @@ instance Eq Proof where
       do x'' <- cast x'
          xs'' <- cast xs'
          return $ x == x'' && g == g' && xs == xs'' && ps == ps'
-
+    (ProvedOnce p, ProvedOnce p') -> p == p'
     _ -> False
     where compareBinaryProof t t' = maybe False (t==) $ cast t'
 
@@ -137,6 +140,7 @@ instance Show Proof where
   show (FoundAlternatives x g xs ps) =
     "FoundAlternatives (" ++ show x ++ ") (" ++ show g ++ ") (" ++ show xs ++ ") (" ++ show ps ++ ")"
   show ProvedTop = "ProvedTop"
+  show (ProvedOnce p) = "ProvedOnce (" ++ show p ++ ")"
 
 -- | The output of the solver. This is meant to be treated as an opaque data type which can be
 -- inspected via the functions defined in this module.
@@ -145,27 +149,17 @@ type ProofResult = (Proof, Unifier)
 -- | Return the list of all goals or subgoals in the given result which unify with a particular goal.
 searchProof :: ProofResult -> Goal -> [Goal]
 searchProof (proof, unifier) goal = searchProof' proof (runRenamed $ renameGoal goal)
-  where
-        -- Proofs with subproof to be search recursively
-        searchProof' p@(Resolved _ subProof) g =
-          maybeToList (matchGoal (getSolution (p, unifier)) g) ++ -- Match the root of the proof tree
-          searchProof' subProof g                                 -- Recursively search the subproof
-        searchProof' p@(ProvedAnd p1 p2) g =
-          maybeToList (matchGoal (getSolution (p, unifier)) g) ++ -- Match the root of the proof tree
-          searchProof' p1 g ++                                    -- Recurse on the left subproof
-          searchProof' p2 g                                       -- Recurse on the right subproof
-        searchProof' p@(ProvedLeft p' _) g =
-          maybeToList (matchGoal (getSolution (p, unifier)) g) ++ -- Match the root of the proof tree
-          searchProof' p' g                                       -- Recursively search the subproof
-        searchProof' p@(ProvedRight _ p') g =
-          maybeToList (matchGoal (getSolution (p, unifier)) g) ++ -- Match the root of the proof tree
-          searchProof' p' g                                       -- Recursively search the subproof
-        searchProof' p@(FoundAlternatives _ _ _ ps) g =
-          maybeToList (matchGoal (getSolution (p, unifier)) g) ++ -- Match the root of the proof tree
-          concatMap (`searchProof'` g) ps                         -- Recursively search each subproof
+  where searchProof' p g =
+          maybeToList (matchGoal (getSolution (p, unifier)) g) ++
+          concatMap (`searchProof'` g) (subProofs p)
 
-        -- Goals with no subproof, just try to match the goal itself
-        searchProof' p g = maybeToList (matchGoal (getSolution (p, unifier)) g)
+        subProofs (Resolved _ p) = [p]
+        subProofs (ProvedAnd p1 p2) = [p1, p2]
+        subProofs (ProvedLeft p _) = [p]
+        subProofs (ProvedRight _ p) = [p]
+        subProofs (FoundAlternatives _ _ _ ps) = ps
+        subProofs (ProvedOnce p) = [p]
+        subProofs _ = []
 
         -- Unify a goal with the query goal and return the unified goal, or Nothing
         matchGoal (PredGoal prd@(Predicate name arg) _) (PredGoal (Predicate name' arg') _)
@@ -195,6 +189,9 @@ searchProof (proof, unifier) goal = searchProof' proof (runRenamed $ renameGoal 
               g'' <- matchGoal g g'
               return $ Alternatives (unifyTerm u x) g'' (unifyTerm u xs)
             Nothing -> Nothing
+
+        matchGoal (Once g) (Once g') = fmap Once $ matchGoal g g'
+
         matchGoal _ _ = Nothing
 
         matchBinary :: (TermEntry a, TermEntry b, TermEntry c, TermEntry d) =>
@@ -233,6 +230,7 @@ getSolution (proof, _) = case proof of
   ProvedRight g p -> Or g (getSolution (p, mempty))
   ProvedTop -> Top
   FoundAlternatives x g xs _ -> Alternatives x g xs
+  ProvedOnce p -> Once $ getSolution (p, mempty)
 
 -- | Get the set of theorems which were proven by each 'Proof' tree in a forest.
 getAllSolutions :: [ProofResult] -> [Goal]
@@ -408,6 +406,11 @@ data SolverCont (m :: * -> *) =
                -- The zero-overhead version of this continuation is 'proveAlternativesWith'.
              , tryAlternatives :: forall a. TermEntry a =>
                                   Term a -> Goal -> Term [a] -> SolverT m ProofResult
+               -- | Continuation to be invoked when attempting to prove a 'Once' goal'. This
+               -- continuation should extract the first 'ProofResult' from the inner goal using, for
+               -- example, 'proveWith', and return it. It should ignore any further solutions to the
+               -- inner goal. The zero-overhead version of this continuation is 'proveOnceWith'.
+             , tryOnce :: Goal -> SolverT m ProofResult
                -- | Continuation to be invoked when a goal fails because there are no matching
                -- clauses. This computation should result in 'mzero', but may perform effects in the
                -- underlying monad first.
@@ -433,6 +436,7 @@ solverCont = SolverCont { tryPredicate = provePredicateWith solverCont
                         , tryTop = proveTopWith solverCont
                         , tryBottom = proveBottomWith solverCont
                         , tryAlternatives = proveAlternativesWith solverCont
+                        , tryOnce = proveOnceWith solverCont
                         , failUnknownPred = const mzero
                         , errorUninstantiatedVariables =
                             error "Variables are not sufficiently instantiated."
@@ -547,6 +551,12 @@ proveAlternativesWith cont x g xs = do
   let u = fromJust mu
   return (FoundAlternatives x g (unifyTerm u xs) ps, u)
 
+-- | Produce at most one proof of the inner goal.
+proveOnceWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
+proveOnceWith cont g = do
+  (p, u) <- once $ proveWith cont g
+  return (ProvedOnce p, u)
+
 -- | Produce a proof of the goal. This function will either fail, or backtrack over all possible
 -- proofs. It will invoke the appropriate continuations in the given 'SolverCont' whenever a
 -- relevant event occurs during the course of the proof.
@@ -564,3 +574,4 @@ proveWith cont g = case g of
   Top -> tryTop cont
   Bottom -> tryBottom cont
   Alternatives x g' xs -> tryAlternatives cont x g' xs
+  Once g' -> tryOnce cont g'

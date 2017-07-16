@@ -143,6 +143,21 @@ test = describeModule "Control.Hspl" $ do
       Ast.fromTerm (A3 $$ ('a', 'b', 'c')) `shouldBe` Just (A3 'a' 'b' 'c')
       Ast.fromTerm (A4 $$ ('a', 'b' ,'c', 'd')) `shouldBe` Just (A4 'a' 'b' 'c' 'd')
 
+  describe "the semiDet predicate constructor" $
+    it "should wrap the predicate in once whenever it is invoked" $ do
+        let p :: ClauseWriter Char ()
+            p = do match(char "x") |- helem?(v"x", ['a', 'b', 'c'])
+                   match(char "y") |- helem?(v"x", ['m', 'n', 'o'])
+                   match 'z'
+
+        execGoalWriter (semiDetPredicate "foo" p? char "z") `shouldEqual`
+          Once (execGoalWriter $ predicate "foo" p? char "z")
+
+  describe "the once predicate" $
+    it "should create a Once goal" $
+      execGoalWriter (once $ helem?(v"x", ['a', 'b', 'c'])) `shouldBe`
+        Once (execGoalWriter $ helem? (v"x", ['a', 'b', 'c']))
+
   describe "The enum predicate" $
     it "should backtrack over all elements of a bounded enumerable type" $ do
       let us = getAllUnifiers $ runHspl $ enum? (v"x" :: Var BoundedEnum)
