@@ -467,12 +467,15 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       PredGoal (predicate "foo" ()) [] `shouldNotEqual` PredGoal (predicate "bar" ()) []
       PredGoal (predicate "foo" True) [] `shouldNotEqual` PredGoal (predicate "foo" ()) []
       PredGoal (predicate "foo" True) [] `shouldNotEqual` PredGoal (predicate "foo" False) []
-    it "should compare based on the alternatives" $ do
-      let c1 = HornClause (predicate "c1pred" ()) Top
-      let c2 = HornClause (predicate "c2pred" ()) Top
-      PredGoal (predicate "foo" ()) [c1] `shouldEqual` PredGoal (predicate "foo" ()) [c1]
-      PredGoal (predicate "foo" ()) [c1] `shouldNotEqual` PredGoal (predicate "foo" ()) [c2]
-      PredGoal (predicate "foo" ()) [c1] `shouldNotEqual` PredGoal (predicate "foo" ()) [c1, c2]
+    it "should compare successfully even when recursive" $ do
+      let g = PredGoal (predicate "foo" 'a') [HornClause (predicate "foo" (Var "x" :: Var Char)) g]
+      g `shouldEqual` g
+
+      let g' = PredGoal (predicate "foo" 'b') [HornClause (predicate "foo" (Var "x" :: Var Char)) g']
+      g' `shouldNotEqual` g
+
+      let g'' = PredGoal (predicate "bar" 'a') [HornClause (predicate "bar" (Var "x" :: Var Char)) g'']
+      g'' `shouldNotEqual` g
   describe "binary term goals" $ do
     let constrs :: [(Term Char -> Term Char -> Goal, Term Bool -> Term Bool -> Goal)]
         constrs = [(CanUnify, CanUnify), (Identical, Identical), (Equal, Equal), (LessThan, LessThan)]

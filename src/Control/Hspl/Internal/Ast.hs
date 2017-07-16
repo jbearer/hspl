@@ -769,7 +769,14 @@ instance Show Goal where
   show (Alternatives x g xs) = "findAll (" ++ show x ++ ") (" ++ show g ++ ") (" ++ show xs ++ ")"
 
 instance Eq Goal where
-  (==) (PredGoal p cs) (PredGoal p' cs') = p == p' && cs == cs'
+  -- Here we make the assumption that if two predicates have the same name, they have the same
+  -- associated clauses. This is necessary because, for recursive predicates (very common and
+  -- useful) one of the clauses may contain a reference to the same top-level PredGoal, and so
+  -- traversing the clauses to check for equality may not terminate. Note that it is up to the user
+  -- to provide names that are unique to each predicate, or else there will be weird behavior
+  -- wherever we make this assumption.
+  (==) (PredGoal p _) (PredGoal p' _) = p == p'
+
   (==) (CanUnify t1 t2) (CanUnify t1' t2') = case cast (t1', t2') of
     Just t' -> (t1, t2) == t'
     Nothing -> False

@@ -186,11 +186,28 @@ data Predicate a = Predicate { predName :: String, definitions :: [Clause] }
 --      odd? int "y"
 -- @
 --
--- It is worth saying a few words about the type of this function. It is polymorphic in the type of
--- the argument to which the predicate can be applied. If no type annotation is given, the compiler
--- will attempt to infer this type from the type of the 'match' statements in the definition. If a
--- type annotation is given, then the type of variables in the 'match' statements can be inferred,
--- allowing the use of 'auto' or 'v'.
+-- There are a few restrictions on the name assigned to a predicate. First, the name must not
+-- contain whitespace. It can, however, contain any non-whitespace characters you want.
+--
+-- Second, the name must be unique among all predicates with the same type. If two predicates of the
+-- same type have the same name, the program may exhibit unexpected behavior without explicitly
+-- failing. Good practice is to give a predicate the same name as the Haskell identifier to which it
+-- is assigned, as in the example above. If that convention is followed, the Haskell compiler can be
+-- used to enforce the uniquencess of the names. Unfortunately, this only works for predicates
+-- declared at the top level. For predicates defined in a @let@ expression or a @where@ clause, dot-
+-- syntax can be used to ensure name uniqueness, as in
+--
+-- @
+--  foo = predicate "foo" $
+--    match(char "x") |- bar?(char "x")
+--    where bar = predicate "foo.bar" $ match 'a'
+-- @
+--
+-- It is also worth saying a few words about the type of this function. It is polymorphic in the
+-- type of the argument to which the predicate can be applied. If no type annotation is given, the
+-- compiler will attempt to infer this type from the type of the 'match' statements in the
+-- definition. If a type annotation is given, then the type of variables in the 'match' statements
+-- can be inferred, allowing the use of 'auto' or 'v'.
 --
 -- If the GHC extension @ScopedTypeVariables@ is used, type annotations can also be used to declare
 -- generic predicates, like so:
@@ -574,14 +591,14 @@ nil = toTerm ([] :: [a])
 --    generate lists, placing the given element at each position in the list. This usage will
 --    succeed infinitely many times.
 helem :: forall a. TermEntry a => Predicate (a, [a])
-helem = predicate "elem" $ do
+helem = predicate "helem" $ do
   match (v"x", v"x" <:> v"xs")
   match (v"x", v"y" <:> v"xs") |- helem? (v"x" :: Var a, v"xs")
 
 -- | @hlength? (xs, l)@ succeeds if @l@ is the length of @xs@. If @l@ is a variable, it is bound to
 -- the length of the list.
 hlength :: forall a. TermEntry a => Predicate ([a], Int)
-hlength = predicate "length" $ do
+hlength = predicate "hlength" $ do
   match ([] :: [a], 0 :: Int)
   match (v"x" <:> v"xs", v"l") |- do
     hlength? (v"xs" :: Var [a], v"l2")
@@ -590,11 +607,11 @@ hlength = predicate "length" $ do
 -- | Delete matching elements from a list. @hdelete? (xs, x, ys)@ succeeds when @ys@ is a list
 -- containing all elements from @xs@ except those which unify with @x@.
 hdelete :: forall a. TermEntry a => Predicate ([a], a, [a])
-hdelete = predicate "delete" $
+hdelete = predicate "hdelete" $
   match (v"in", v"elem", v"out") |-
     findAll (v"x" :: Var a) (select? (v"in", v"elem", v"x")) (v"out")
   where select :: Predicate ([a], a, a)
-        select = predicate "selectForDeletion" $
+        select = predicate "hdelete.select" $
                     match (v"xs", v"ignore", v"x") |- do
                       helem? (v"x" :: Var a, v"xs")
                       v"x" |\=| (v"ignore" :: Var a)
@@ -607,7 +624,7 @@ hdelete = predicate "delete" $
 --    @xs@ at position @i@.
 -- 3. If neither @i@ nor @x@ are instantiated, 'hat' will enumerate the list @xs@.
 hat :: forall a. TermEntry a => Predicate (Int, [a], a)
-hat = predicate "at" $ do
+hat = predicate "hat" $ do
   match (0 :: Int, v"x" <:> v"xs", v"x")
   match (v"i", v"x" <:> v"xs", v"y") |- do
     hat? (v"j", v"xs" :: Var [a], v"y")
