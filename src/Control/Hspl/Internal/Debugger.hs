@@ -1,5 +1,13 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+#if __GLASGOW_HASKELL__ < 710
+{-# LANGUAGE OverlappingInstances #-}
+#endif
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -9,11 +17,7 @@ Stability   : Internal
 
 This module implements an interactive debugger for HSPL programs. The debugger hooks into the HSPL
 prover using the 'ProverCont' framework, and provides several commands for navigating through an
-HSPL program:
-
-* step: continue execution until the next continuation event
-* next: continue execution until the next event in the current goal
-* finish: continue execution until the next event in the parent goal
+HSPL program.
 -}
 module Control.Hspl.Internal.Debugger (
   -- * Configuration
@@ -68,15 +72,17 @@ import qualified Control.Monad.Coroutine.SuspensionFunctors as CR
 import           Control.Monad.Identity
 import           Control.Monad.Logic
 import           Control.Monad.State
+import           Data.Char
 import           Data.List
 import           Data.Maybe
 import           System.Console.ANSI
 import           System.IO
 import           System.IO.Unsafe
-import           Text.Parsec hiding (Error)
+import           Text.Parsec hiding (Error, tokens)
 
-import Control.Hspl.Internal.Ast
+import Control.Hspl.Internal.Ast hiding (predicate)
 import Control.Hspl.Internal.Solver
+import Control.Hspl.Internal.Tuple
 
 -- | Structure used to specify configuration options for the debugger.
 data DebugConfig = DebugConfig {
@@ -120,6 +126,7 @@ initTerminalState config = do
               else openFile (outputFile config) WriteMode
   return Terminal { currentTarget = Any
                   , lastCommand = Step
+                  , breakpoints = []
                   , input = inputH
                   , output = outputH
                   , tty = interactive config
@@ -142,6 +149,15 @@ data Command =
   | Next
     -- | Continue execution until the next event in the parent goal.
   | Finish
+    -- | Continue execution until the next breakpoint.
+  | Continue
+    -- | Set a breakpoint on a predicate, specified by name.
+  | SetBreakpoint String
+    -- | Delete a breakpoint, specified either by name or by the index associated with that
+    -- breakpoint in 'InfoBreakpoints'.
+  | DeleteBreakpoint (Either String Int)
+    -- | Show the currently set breakpoints.
+  | InfoBreakpoints
     -- | Print out the current goal stack.
   | InfoStack (Maybe Int)
     -- | Print a usage message.
@@ -154,6 +170,13 @@ debugHelp = unlines
   ["s, step: proceed one predicate call"
   ,"n, next: proceed to the next call, failure, or exit at this level"
   ,"f, finish: proceed to the exit or failure of the current goal"
+  ,"c, continue: proceed to the next breakpoint"
+  ,"b, break <predicate>: set a breakpoint to stop execution when calling a predicate with the"
+  ,"    given name"
+  ,"db, delete-breakpoint <breakpoint>: remove a breakpoint previously created via break. The"
+  ,"    breakpoint to delete can be specified by the same string passed to break, or by the"
+  ,"    breakpoint index listed in breakpoints"
+  ,"bs, breakpoints: list currently enabled breakpoints"
   ,"gs, goals [N]: print the most recent N goals from the goal stack, or all goals if no N is given"
   ,"g, goal: print the current goal (equivalent to 'goals 1')"
   ,"?, h, help: show this help"
@@ -166,10 +189,12 @@ data Target =
     Any
     -- | Stop at an event occuring at a depth less than or equal to the specified depth.
   | Depth Int
+    -- | Stop when calling a predicate matching a breakpoint
+  | Breakpoint
 
 -- | The various events which trigger debug messages.
 data MsgType = Call | Redo | Exit | Fail | Error
-  deriving (Show)
+  deriving (Show, Eq)
 
 -- | Mapping from events ('MsgType') to 'SGR' commands which set the console color.
 msgColor :: MsgType -> SGR
@@ -199,6 +224,9 @@ data TerminalState = Terminal {
                        currentTarget :: Target
                        -- | The last command issued by the user.
                      , lastCommand :: Command
+                       -- | List of predicates which we should stop at when running until a
+                       -- breakpoint.
+                     , breakpoints :: [String]
                        -- | File 'Handle' from which to read commands.
                      , input :: Handle
                        -- | File 'Handle' to which to print output.
@@ -274,6 +302,11 @@ showStack mn s =
                           Nothing -> enumeratedStack
   in intercalate "\n" ["(" ++ show d ++ ") " ++ show g | (d, g) <- truncatedStack]
 
+showBreakpoints :: [String] -> String
+showBreakpoints bs =
+  let enumeratedBreakpoints = zip ([1..] :: [Int]) (reverse bs)
+  in intercalate "\n" ["(" ++ show d ++ ") " ++ b | (d, b) <- enumeratedBreakpoints]
+
 -- | Print a line to the 'output' 'Handle'. The end-of-line character depends on whether we are
 -- running in interactive mode (i.e. whether 'tty' is set). In interactive mode, the end of line is
 -- a ' ', and the user is prompted for input at the end of the same line. In non-interactive mode,
@@ -284,6 +317,90 @@ printLine s = do
   let endChar = if tty st then " " else "\n"
   liftIO $ hPutStr (output st) $ s ++ endChar
 
+type TerminalParser = ParsecT String () Identity
+
+class Tokens ps rs | ps -> rs where
+  trimmedTokens :: ps -> TerminalParser rs
+
+  tokens :: ps -> TerminalParser rs
+  tokens ps = spaces *> trimmedTokens ps <* spaces
+
+instance {-# OVERLAPPING #-} Tokens (TerminalParser a1, TerminalParser a2) (a1, a2) where
+  trimmedTokens (p1, p2) = do
+    r1 <- try $ p1 <* space
+    spaces
+    r2 <- try p2
+    return (r1, r2)
+
+instance {-# OVERLAPPABLE #-} ( TupleCons ps, TupleCons rs
+                              , Tokens (Tail ps) (Tail rs)
+                              , Head ps ~ TerminalParser a1
+                              , Head rs ~ a1
+                              ) => Tokens ps rs where
+  trimmedTokens ps = do
+    r1 <- try $ thead ps <* space
+    spaces
+    r2 <- trimmedTokens $ ttail ps
+    return $ tcons r1 r2
+
+str :: String -> TerminalParser String
+str s = try (string s) <?> s
+
+tok :: String -> TerminalParser String
+tok t = spaces *> str t <* spaces
+
+integer :: (Read a, Integral a) => TerminalParser a
+integer = try (fmap read $ spaces *> raw <* spaces) <?> "integer"
+  where raw = do sign <- optionMaybe $ oneOf "+-"
+                 num <- many1 digit
+                 case sign of
+                   Just s -> return $ s : num
+                   Nothing -> return num
+
+predicate :: TerminalParser String
+predicate = try (many1 $ satisfy $ not . isSpace) <?> "predicate"
+
+step :: TerminalParser Command
+step = (tok "step" <|> tok "s") >> return Step
+
+next :: TerminalParser Command
+next = (tok "next" <|> tok "n") >> return Next
+
+finish :: TerminalParser Command
+finish = (tok "finish" <|> tok "f") >> return Finish
+
+continue :: TerminalParser Command
+continue = (tok "continue" <|> tok "c") >> return Continue
+
+setBreak :: TerminalParser Command
+setBreak = do (_, p) <- tokens ( str "break" <|> str "b"
+                               , predicate
+                               )
+              return $ SetBreakpoint p
+
+deleteBreak :: TerminalParser Command
+deleteBreak = do (_, b) <- tokens ( str "db" <|> str "delete-breakpoint"
+                                  , liftM Right integer <|> liftM Left predicate
+                                  )
+                 return $ DeleteBreakpoint b
+
+infoBreakpoints :: TerminalParser Command
+infoBreakpoints = (tok "breakpoints" <|> tok "bs") >> return InfoBreakpoints
+
+goals :: TerminalParser Command
+goals = do (_, n) <- tokens ( str "goals" <|> str "gs"
+                            , integer
+                            )
+           return $ InfoStack (Just n)
+        <|> ((tok "goals" <|> tok "gs") >> return (InfoStack Nothing))
+        <|> ((tok "goal" <|> tok "g") >> return (InfoStack $ Just 1))
+
+help :: TerminalParser Command
+help = (tok "help" <|> tok "h" <|> tok "?") >> return Help
+
+commandParsers :: [TerminalParser Command]
+commandParsers = [step, next, finish, continue, setBreak, deleteBreak, infoBreakpoints, goals, help]
+
 -- | Read a 'Command' from a string. This accounts for short aliases of commands. For example,
 --
 -- >>> parseCommand "step"
@@ -292,27 +409,14 @@ printLine s = do
 -- >>> parseCommand "s"
 -- Just Step
 parseCommand :: String -> TerminalCoroutine (Either ParseError Command)
-parseCommand str = do
+parseCommand s = do
   st <- lift get
 
-  let tok t = try $ spaces *> string t <* spaces
-      decimal = try $ fmap read $ spaces *> many1 digit <* spaces
-      positiveDecimal = try (do n <- decimal
-                                if n >= 1 then return n else mzero) <?> "positive integer"
+  let repeatLast = eof >> return (lastCommand st)
+      command p = spaces *> p <* spaces <* eof
+      parser = (foldl1' (<|>) (map command commandParsers) <?> "command") <|> repeatLast
 
-      step = (tok "step" <|> tok "s") >> return Step
-      next = (tok "next" <|> tok "n") >> return Next
-      finish = (tok "finish" <|> tok "f") >> return Finish
-      goals = do _ <- spaces >> (try (string "goals") <|> try (string "gs"))
-                 n <- optionMaybe $ space >> spaces >> positiveDecimal
-                 spaces
-                 return $ InfoStack n
-              <|> ((tok "goal" <|> tok "g") >> return (InfoStack $ Just 1))
-      help = (tok "help" <|> tok "h" <|> tok "?") >> return Help
-      repeatLast = tok "" >> return (lastCommand st)
-      command = step <|> next <|> finish <|> goals <|> help <|> repeatLast
-
-  return $ parse (spaces *> command <* spaces <* eof <?> "command") "" str
+  return $ parse parser "" s
 
 -- | Read a 'Command' from the input file handle. If the input is not a valid command, an error
 -- message is shown and the user is prompted to re-enter the command. This loop continues until a
@@ -333,13 +437,35 @@ getCommand = do
 -- solver. But if the given command is, say, 'Help', the caller should simply prompt for another
 -- command.
 runCommand :: DebugContext -> Command -> TerminalCoroutine Bool
-runCommand DC { stack = s } c = do
+runCommand context@DC { stack = s } c = do
   st <- lift get
   result <- case c of
     Step -> lift (put st { currentTarget = Any }) >> return True
     Next -> lift (put st { currentTarget = Depth $ length s }) >> return True
     Finish -> lift (put st { currentTarget = Depth $ length s - 1 }) >> return True
-    InfoStack n -> printLine (showStack n s) >> return False
+    Continue -> lift (put st { currentTarget = Breakpoint }) >> return True
+    SetBreakpoint p
+      | p `elem` breakpoints st ->
+          printLine ("Breakpoint " ++ p ++ " already exists.") >> return False
+      | otherwise -> do
+          lift (put st { breakpoints = p : breakpoints st })
+          printLine $ "Set breakpoint on " ++ p ++ "."
+          return False
+    DeleteBreakpoint (Left p)
+      | p `elem` breakpoints st -> do
+          lift (put st { breakpoints = delete p $ breakpoints st})
+          printLine $ "Deleted breakpoint " ++ p ++ "."
+          return False
+      | otherwise -> printLine ("No breakpoint \"" ++ p ++ "\".") >> return False
+    DeleteBreakpoint (Right i)
+      | i > 0 && i <= length (breakpoints st) ->
+          runCommand context (DeleteBreakpoint $ Left $ reverse (breakpoints st) !! (i - 1))
+      | otherwise -> printLine "Index out of range." >> return False
+    InfoBreakpoints -> printLine (showBreakpoints $ breakpoints st) >> return False
+    InfoStack (Just n)
+      | n > 0 -> printLine (showStack (Just n) s) >> return False
+      | otherwise -> printLine "Argument must be positive." >> return False
+    InfoStack Nothing -> printLine (showStack Nothing s) >> return False
     Help -> printLine debugHelp >> return False
 
   lift $ modify $ \st' -> st' { lastCommand = c }
@@ -362,6 +488,12 @@ prompt context@DC { stack = s, status = mtype, msg = m } = do
   let shouldStop = case currentTarget st of
                       Any -> True
                       Depth d -> length s <= d
+                      Breakpoint
+                        | mtype == Call ->
+                          case head s of
+                            PredGoal (Predicate p _) _ -> p `elem` breakpoints st
+                            _ -> False
+                        | otherwise -> False
   when shouldStop $ do
     liftIO $ hPutStr (output st) $ "(" ++ show (length s) ++ ") "
     liftIO $ setSGR [msgColor mtype | useColors st]

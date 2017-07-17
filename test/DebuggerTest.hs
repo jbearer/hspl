@@ -239,6 +239,8 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     withParams [ (["s", "step"], Step)
                , (["n", "next"], Next)
                , (["f", "finish"], Finish)
+               , (["c", "continue"], Continue)
+               , (["bs", "breakpoints"], InfoBreakpoints)
                , (["gs", "goals"], InfoStack Nothing)
                , (["g", "goal"], InfoStack $ Just 1)
                , (["h", "?", "help"], Help)
@@ -248,7 +250,11 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           runTest input expected
     when "parsing commands with arguments" $
       -- ([aliases], [args], command)
-      withParams [ (["gs", "goals"], ["3"], InfoStack $ Just 3) ] $ \(inputs, args, command) -> do
+      withParams [ (["gs", "goals"], ["3"], InfoStack $ Just 3)
+                 , (["b", "break"], ["foo"], SetBreakpoint "foo")
+                 , (["db", "delete-breakpoint"], ["foo"], DeleteBreakpoint $ Left "foo")
+                 , (["db", "delete-breakpoint"], ["1"], DeleteBreakpoint $ Right 1)
+                 ] $ \(inputs, args, command) -> do
         it "should parse a valid command line" $
           forM_ inputs $ \input ->
             runTest (input ++ " " ++ unwords args) command
@@ -259,9 +265,9 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           forM_ inputs $ \input ->
             shouldFail (input ++ unwords args) (Expect "command")
     when "parsing the goals command" $
-      withParams ["a", "1a", "a1", "0", "-1", "1.5"] $ \arg ->
+      withParams ["a", "1a", "a1", "1.5"] $ \arg ->
         it "should reject invalid arguments" $
-          shouldFail ("goals " ++ arg) (Expect "positive integer")
+          shouldFail ("goals " ++ arg) (Expect "integer")
     withParams [" s", "s ", " s ", "\ts", "s\t", "\ts\t", " s\t", "\t s "] $ \input ->
       it "should ignore whitespace" $
         runTest input Step
@@ -269,11 +275,10 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       shouldFail "step next" (UnExpect "'n'")
     it "should fail when given an unknown command" $
       shouldFail "bogus" (Expect "command")
-    withParams ["", " ", "\t"] $ \input ->
-      it "should output the previous command when given a blank line" $ do
+    it "should output the previous command when given a blank line" $ do
         freshState <- initTerminalState debugConfig
         let state = freshState { lastCommand = Finish }
-        let m = pogoStick (\(Await f) -> f (Just context)) $ parseCommand input
+        let m = pogoStick (\(Await f) -> f (Just context)) $ parseCommand ""
         output <- evalStateT m state
         output `shouldBe` Right Finish
 
@@ -559,6 +564,119 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
         , expectFail 1 "foo" (Var "x" :: Var Char)
         ]
 
+  describe "the break/continue commands" $ do
+    it "should continue to the next breakpoint" $
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
+        ["b bar", "b baz", "c", "c", "c"]
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on bar."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on baz."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , expectCall 2 "bar" (Var "y" :: Var Char)
+        , expectCall 2 "baz" (Var "z" :: Var Char)
+        ]
+    it "should warn when the breakpoint already exists" $
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
+        ["b bar", "b bar", "f"]
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on bar."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Breakpoint bar already exists."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        ]
+  describe "the delete-breakpoint command" $ do
+    it "should accept the name of a breakpoint" $
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
+        ["b bar", "db bar", "c"]
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on bar."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Deleted breakpoint bar."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        ]
+    it "should warn when given a name that does not exist" $
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
+        ["db bar", "c"]
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "No breakpoint \"bar\"."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        ]
+    it "should accept the index of a breakpoint" $ do
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
+        ["b bar", "b baz", "db 1", "c", "c"]
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on bar."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on baz."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Deleted breakpoint bar."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , expectCall 2 "baz" (Var "z" :: Var Char)
+        ]
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
+        ["b bar", "b baz", "db 2", "c", "c"]
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on bar."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on baz."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Deleted breakpoint baz."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , expectCall 2 "bar" (Var "y" :: Var Char)
+        ]
+    withParams ["-1", "0", "2"] $ \index ->
+      it "should warn when given an out of range" $
+        runTest (PredGoal (predicate "wide"
+                  (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
+          ["b bar", "db " ++ index, "c", "c"]
+          [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+          , "Set breakpoint on bar."
+          , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+          , "Index out of range."
+          , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+          , expectCall 2 "bar" (Var "y" :: Var Char)
+          ]
+  describe "the breakpoints command" $ do
+    it "should list active breakpoints" $
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
+        ["b bar", "b baz", "bs", "c", "c", "c"]
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on bar."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on baz."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "(1) bar"
+        , "(2) baz"
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , expectCall 2 "bar" (Var "y" :: Var Char)
+        , expectCall 2 "baz" (Var "z" :: Var Char)
+        ]
+    it "should update to reflect deletions" $
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
+        ["b foo", "b bar", "b baz", "db bar", "bs", "f"]
+        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on foo."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on bar."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Set breakpoint on baz."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "Deleted breakpoint bar."
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        , "(1) foo"
+        , "(2) baz"
+        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
+        ]
+
   describe "the goals command" $ do
     it "should print the current goal stack" $
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
@@ -602,6 +720,10 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
               , expectExit 2 "foo" 'a'
               , expectExit 1 "deep" 'a'
               ]
+    withParams [0, -1] $ \arg ->
+      it "should fail when the argument is not a positive integer" $
+        runTest Top ["goals " ++ show arg, "f"]
+                    ["(1) Call: " ++ show Top, "Argument must be positive.", "(1) Call: " ++ show Top]
 
   describe "the help command" $
     it "should print a usage message" $
@@ -622,7 +744,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
 
   describe "an unknown command" $
     it "should trigger a retry prompt" $ do
-      let unexpected = newErrorMessage (UnExpect "'b'") (newPos "" 1 1)
+      let unexpected = newErrorMessage (UnExpect "\"o\"") (newPos "" 1 2)
       let err = addErrorMessage (Expect "command") unexpected
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
         ["bogus", "finish"]
