@@ -458,13 +458,13 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                                                                 (Var "xs")
                                      ] ++
                                        expectBottom 2 ++
-                                     [ expectAlternativesExit 1 (Var "x" :: Var Char) Bottom Nil
+                                     [ expectAlternativesExit 1 (Var "x" :: Var Char) Bottom (List Nil)
                                      ]
-    let alternativesFailGoal = Alternatives (toTerm (Var "x" :: Var Char)) Top Nil
-    let alternativesFailTrace = [ expectAlternativesCall 1 (Var "x" :: Var Char) Top Nil
+    let alternativesFailGoal = Alternatives (toTerm (Var "x" :: Var Char)) Top (List Nil)
+    let alternativesFailTrace = [ expectAlternativesCall 1 (Var "x" :: Var Char) Top (List Nil)
                                 ] ++
                                   expectTop 2 ++
-                                [ expectAlternativesFail 1 (Var "x" :: Var Char) Top Nil
+                                [ expectAlternativesFail 1 (Var "x" :: Var Char) Top (List Nil)
                                 ]
     let onceGoal = Once $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
                              (CanUnify (toTerm $ Var "x") (toTerm 'b'))

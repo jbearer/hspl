@@ -46,10 +46,13 @@ module Control.Hspl.Internal.Ast (
   , Var (..)
   , varType
   -- ** Terms
+  , ListTerm (..)
+  , TupleTerm (..)
   , Term (..)
   , termType
   , fromTerm
   , alphaEquivalent
+  , getListTerm
   -- *** ADT helpers
   , AdtConstructor (..)
   , AdtArgument (..)
@@ -78,7 +81,6 @@ module Control.Hspl.Internal.Ast (
 import Control.Monad
 import Control.Monad.State
 import Data.Data
-import Data.List
 import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid (Monoid (..))
@@ -217,27 +219,28 @@ HSPLPrimitive(Double)
 
 -- Tuples
 instance (TermData a, TermData b) => Termable (a, b) where
-  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm (a, b) = Tup $ Tuple2 (toTerm a) (toTerm b)
 
 instance (TermData a, TermData b, TermData c) => Termable (a, b, c) where
-  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = let Tup ts = (toTerm $ ttail t) in Tup $ TupleN (toTerm $ thead t) ts
 
 instance (TermData a, TermData b, TermData c, TermData d) => Termable (a, b, c, d) where
-  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = let Tup ts = (toTerm $ ttail t) in Tup $ TupleN (toTerm $ thead t) ts
 
 instance (TermData a, TermData b, TermData c, TermData d, TermData e) => Termable (a, b, c, d, e) where
-  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = let Tup ts = (toTerm $ ttail t) in Tup $ TupleN (toTerm $ thead t) ts
 
 instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f) => Termable (a, b, c, d, e, f) where
-  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = let Tup ts = (toTerm $ ttail t) in Tup $ TupleN (toTerm $ thead t) ts
 
 instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f, TermData g) => Termable (a, b, c, d, e, f, g) where
-  toTerm t = Tup (toTerm $ thead t) (toTerm $ ttail t)
+  toTerm t = let Tup ts = (toTerm $ ttail t) in Tup $ TupleN (toTerm $ thead t) ts
 
 -- Lists
 instance TermData a => Termable [a] where
-  toTerm [] = Nil
-  toTerm (x:xs) = List (toTerm x) (toTerm xs)
+  toTerm = List . toListTerm
+    where toListTerm [] = Nil
+          toListTerm (x:xs) = Cons (toTerm x) (toListTerm xs)
 
 -- Standard ADTs
 instance (NoVariables a, TermData a) => Termable (Maybe a)
@@ -287,6 +290,31 @@ instance Show (Var a) where
 varType :: forall a. Typeable a => Var a -> TypeRep
 varType _ = typeOf (undefined :: a)
 
+-- | Inductive representation of lists.
+data ListTerm a where
+  -- | A list composed of a single-element head and a smaller list.
+  Cons :: TermEntry a => Term a -> ListTerm a -> ListTerm a
+  -- | A partial list. Here, the tail of the list is represented by a single variable. This list
+  -- will unify with any list of at least one element so long as the first elements unify.
+  VarCons :: TermEntry a => Term a -> Var [a] -> ListTerm a
+  -- | An empty list.
+  Nil :: ListTerm a
+deriving instance Show a => Show (ListTerm a)
+deriving instance Eq a => Eq (ListTerm a)
+
+-- | Internal representation of a tuple. We define tuples inductively with a head and a tail, which
+-- greatly simplifies operations of tuple terms.
+data TupleTerm a where
+  -- | The base case for a tuple. Notice that the smallest tuple allowed is a tuple of 2 elements,
+  -- as is the case with Haskell tuples.
+  Tuple2 :: (TermEntry a, TermEntry b) => Term a -> Term b -> TupleTerm (a, b)
+  -- | A tuple consisting of a single-element head and a two- or more-element tail.
+  TupleN :: (TermEntry a, TupleCons a, TermEntry (Head a), TermEntry (Tail a), TupleCons (Tail a)) =>
+            Term (Head a) -> TupleTerm (Tail a) -> TupleTerm a
+
+deriving instance Show a => Show (TupleTerm a)
+deriving instance Eq a => Eq (TupleTerm a)
+
 {- |
 The abstract representation of a term. Terms correspond to elements in the domain of a model. In
 formal predicate logic, they can be variables, constant symbols, and function symbols applied to one
@@ -322,6 +350,12 @@ Corresponding terms may have any of the following structures:
 > Var "y"
 -}
 data Term a where
+  -- | A primitive constant.
+  Constant :: TermEntry a => a -> Term a
+
+  -- | A variable which can unify with any 'Term' of type @a@.
+  Variable :: TermEntry a => Var a -> Term a
+
   -- | An application of an ADT constructor to a list of arguments.
   --
   -- Note that the type of the contained term is ambiguous. At reification time, the arguments will
@@ -333,22 +367,11 @@ data Term a where
   -- representations.
   Constructor :: TermEntry a => Constr -> [ErasedTerm] -> Term a
 
-  -- | A product type (i.e. a tuple). We define tuples inductively with a head and a tail, which
-  -- allows the simple representation of any tuple with just this one constructor.
-  Tup :: (TupleCons a, TermEntry a, TermEntry (Head a), TermEntry (Tail a)) =>
-         Term (Head a) -> Term (Tail a) -> Term a
+  -- | A term representing a tuple.
+  Tup :: (TermEntry a, TupleCons a, TermEntry (Head a), TermEntry (Tail a)) => TupleTerm a -> Term a
 
-  -- | A primitive constant.
-  Constant :: TermEntry a => a -> Term a
-
-  -- | A cons cell.
-  List :: TermEntry a => Term a -> Term [a] -> Term [a]
-
-  -- | An emtpy list (base case for the 'List' constructor)
-  Nil :: TermEntry a => Term [a]
-
-  -- | A variable which can unify with any 'Term' of type @a@.
-  Variable :: TermEntry a => Var a -> Term a
+  -- | A term representing a list.
+  List :: TermEntry a => ListTerm a -> Term [a]
 
   -- | An arithmetic sum of two 'Term's.
   Sum :: (Num a, TermEntry a) => Term a -> Term a -> Term a
@@ -373,12 +396,10 @@ data Term a where
 
   deriving (Typeable)
 
-#ifdef DEBUG
 instance Show (Term a) where
   show (Constructor c t) = "Constructor (" ++ show c ++ ") (" ++ show t ++ ")"
-  show (Tup t ts) = "Tup (" ++ show t ++ ") (" ++ show ts ++ ")"
-  show (List x xs) = "List (" ++ show x ++ ") (" ++ show xs ++ ")"
-  show Nil = "Nil"
+  show (Tup t) = "Tup (" ++ show t ++ ")"
+  show (List l) = "List (" ++ show l ++ ")"
 #ifdef SHOW_TERMS
   show (Constant c) = "Constant (" ++ show c ++ ")"
 #else
@@ -391,37 +412,13 @@ instance Show (Term a) where
   show (Quotient t1 t2) = "Quotient (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
   show (IntQuotient t1 t2) = "IntQuotient (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
   show (Modulus t1 t2) = "Modulus (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
-#else
-instance Show (Term a) where
-  show (Constructor c t) = show c ++ " (" ++ intercalate ", " (map show t) ++ ")"
-  show (Tup t ts) = show t ++ ", " ++ show ts
-  show (List x Nil) = show x
-  show (List x xs) = show x ++ ", " ++ show xs
-  show Nil = "[]"
-#ifdef SHOW_TERMS
-  show (Constant c) = show c
-#else
-  show (Constant _) = "c"
-#endif
-  show (Variable v) = show v
-  show (Sum t1 t2) = "(" ++ show t1 ++ ") |+| (" ++ show t2 ++ ")"
-  show (Difference t1 t2) = "(" ++ show t1 ++ ") |-| (" ++ show t2 ++ ")"
-  show (Product t1 t2) = "(" ++ show t1 ++ ") |*| (" ++ show t2 ++ ")"
-  show (Quotient t1 t2) = "(" ++ show t1 ++ ") |/| (" ++ show t2 ++ ")"
-  show (IntQuotient t1 t2) = "(" ++ show t1 ++ ") |\\| (" ++ show t2 ++ ")"
-  show (Modulus t1 t2) = "(" ++ show t1 ++ ") |%| (" ++ show t2 ++ ")"
-#endif
 
 instance Eq (Term a) where
   (==) (Constructor c t) (Constructor c' t') = c == c' && t == t'
 
-  (==) (Tup t ts) (Tup t' ts') = fromMaybe False $ do
-    t'' <- cast t'
-    ts'' <- cast ts'
-    return $ t == t'' && ts == ts''
+  (==) (Tup t) (Tup t') = t == t'
 
-  (==) (List x xs) (List y ys) = x == y && xs == ys
-  (==) Nil Nil = True
+  (==) (List l) (List l') = l == l'
 
   (==) (Constant t) (Constant t') = t == t'
 
@@ -435,6 +432,13 @@ instance Eq (Term a) where
   (==) (Modulus t1 t2) (Modulus t1' t2') = t1 == t1' && t2 == t2'
 
   (==) _ _ = False
+
+-- | Extract the 'ListTerm' representation of a list from a 'Term' parameterized by a list type.
+getListTerm :: TermEntry a => Term [a] -> Either (Var [a]) (ListTerm a)
+getListTerm (Variable x) = Left x
+getListTerm (List xs) = Right xs
+getListTerm t = error $ "Unexpected term " ++ show t ++ " of type " ++ show (termType t) ++
+                        ". This is most likely an HSPL bug."
 
 -- | Determine if two 'Term's are alpha-equivalent. Terms are alpha-equivalent if there exists an
 -- injective renaming of variables in one term which makes it equal to the other term. For example,
@@ -460,10 +464,9 @@ alphaEquivalent term1 term2 = isJust $ evalStateT (alpha term1 term2) (M.empty, 
           | c == c' = alphaETermList ts ts'
           | otherwise = mzero
 
-        alpha (Tup t ts) (Tup t' ts') = alpha t t' >> alpha ts ts'
+        alpha (Tup t) (Tup t') = alphaTup t t'
 
-        alpha (List t ts) (List t' ts') = alpha t t' >> alpha ts ts'
-        alpha Nil Nil = return ()
+        alpha (List l) (List l') = alphaList l l'
 
         alpha (Sum t1 t2) (Sum t1' t2') = alpha t1 t1' >> alpha t2 t2'
         alpha (Difference t1 t2) (Difference t1' t2') = alpha t1 t1' >> alpha t2 t2'
@@ -500,6 +503,19 @@ alphaEquivalent term1 term2 = isJust $ evalStateT (alpha term1 term2) (M.empty, 
         alphaETermList [] _ = mzero
         alphaETermList _ [] = mzero
         alphaETermList (ETerm t : ts) (ETerm t' : ts') = lift (cast t') >>= alpha t >> alphaETermList ts ts'
+
+        alphaTup :: (TermEntry a, TupleCons a) => TupleTerm a -> TupleTerm a ->
+                    StateT (M.Map ErasedVar ErasedVar, M.Map ErasedVar ErasedVar) Maybe ()
+        alphaTup (Tuple2 t1 t2) (Tuple2 t1' t2') = alpha t1 t1' >> alpha t2 t2'
+        alphaTup (TupleN t ts) (TupleN t' ts') = alpha t t' >> alphaTup ts ts'
+        alphaTup _ _ = mzero
+
+        alphaList :: TermEntry a => ListTerm a -> ListTerm a ->
+                     StateT (M.Map ErasedVar ErasedVar, M.Map ErasedVar ErasedVar) Maybe ()
+        alphaList (Cons t ts) (Cons t' ts') = alpha t t' >> alphaList ts ts'
+        alphaList (VarCons t x) (VarCons t' x') = alpha t t' >> alphaVar x x'
+        alphaList Nil Nil = return ()
+        alphaList _ _ = mzero
 
 -- | Type-erased container for storing 'Var's of any type.
 data ErasedVar = forall a. TermEntry a => EVar (Var a)
@@ -671,15 +687,8 @@ reifyAdt c l =
 fromTerm :: TermEntry a => Term a -> Maybe a
 fromTerm term = case term of
   Constructor c arg -> fmap (reifyAdt c) $ forM arg $ \(ETerm t) -> fmap ETermEntry $ fromTerm t
-  Tup t ts -> do
-    ut <- fromTerm t
-    uts <- fromTerm ts
-    return $ tcons ut uts
-  List x xs -> do
-    ux <- fromTerm x
-    uxs <- fromTerm xs
-    return $ ux : uxs
-  Nil -> Just []
+  Tup t -> fromTuple t
+  List l -> fromList l
   Constant c -> Just c
   Variable _ -> Nothing
   Sum t1 t2 -> fromBinOp (+) t1 t2
@@ -691,6 +700,21 @@ fromTerm term = case term of
   where fromBinOp f t1 t2 = do ut1 <- fromTerm t1
                                ut2 <- fromTerm t2
                                return $ f ut1 ut2
+
+        fromTuple :: TupleTerm a -> Maybe a
+        fromTuple (Tuple2 t1 t2) = do ut1 <- fromTerm t1
+                                      ut2 <- fromTerm t2
+                                      return (ut1, ut2)
+        fromTuple (TupleN t ts) = do ut <- fromTerm t
+                                     uts <- fromTuple ts
+                                     return $ tcons ut uts
+
+        fromList :: ListTerm a -> Maybe [a]
+        fromList (Cons t ts) = do ut <- fromTerm t
+                                  uts <- fromList ts
+                                  return $ ut:uts
+        fromList Nil = Just []
+        fromList _ = Nothing
 
 -- | Determine the HSPL type of a term.
 termType :: forall a. Typeable a => Term a -> TypeRep

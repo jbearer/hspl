@@ -580,7 +580,9 @@ matching elements in the other list. See 'Control.Hspl.Examples.lists' for an ex
 -- 'a', x :: [Char]
 infixr 9 <:>
 (<:>) :: (TermData a, TermData as, [HSPLType a] ~ HSPLType as) => a -> as -> Term (HSPLType as)
-t <:> ts = Ast.List (toTerm t) (toTerm ts)
+t <:> ts = Ast.List $ case Ast.getListTerm $ toTerm ts of
+  Left x -> Ast.VarCons (toTerm t) x
+  Right xs -> Ast.Cons (toTerm t) xs
 
 -- | Append a list of terms to another list. This may be necessary (and '++' insufficient) when one
 -- list contains term constants and another contains variables. For example,
@@ -589,7 +591,7 @@ t <:> ts = Ast.List (toTerm t) (toTerm ts)
 -- x :: Char, y :: Char, 'f', 'o', 'o'
 (<++>) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => [a] -> [b] -> Term [HSPLType a]
 [] <++> ts = toTerm ts
-(t:ts) <++> ts' = Ast.List (toTerm t) (ts <++> ts')
+(t:ts) <++> ts' = t <:> (ts <++> ts')
 
 -- | A term representing an empty list. Note that for most lists which do not contain variables, the
 -- list itself can be used as a term, e.g. @helem? (char "c", ['a', 'b', 'c'])@. However, for empty

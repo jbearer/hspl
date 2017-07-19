@@ -172,15 +172,19 @@ isSubunifierOf (Unifier u1) (Unifier u2) = all isSubSubmap $ M.toList u1
 
 -- | Determine if the variable x is free in the term t. This is useful, for example, when performing
 -- the occurs check before computing a 'Unifier'.
-freeIn :: (Typeable a, Typeable b) => Var a -> Term b -> Bool
-freeIn x (Variable y) = case cast y of
-  Just y' -> x == y'
-  Nothing -> False
+freeIn :: (TermEntry a, TermEntry b) => Var a -> Term b -> Bool
+freeIn x (Variable y) = maybe False (==x) $ cast y
 freeIn _ (Constant _) = False
 freeIn x (Constructor _ t) = any (termMap $ freeIn x) t
-freeIn x (Tup t ts) = freeIn x t || freeIn x ts
-freeIn x (List t ts) = freeIn x t || freeIn x ts
-freeIn _ Nil = False
+freeIn var (Tup tup) = freeInTuple var tup
+  where freeInTuple :: (TermEntry a, TermEntry b) => Var a -> TupleTerm b -> Bool
+        freeInTuple x (Tuple2 t1 t2) = freeIn x t1 || freeIn x t2
+        freeInTuple x (TupleN t ts) = freeIn x t || freeInTuple x ts
+freeIn var (List l) = freeInList var l
+  where freeInList :: (TermEntry a, TermEntry b) => Var a -> ListTerm b -> Bool
+        freeInList x (Cons t ts) = freeIn x t || freeInList x ts
+        freeInList x (VarCons t y) = freeIn x t || freeIn x (Variable y)
+        freeInList _ Nil = False
 freeIn x (Sum t1 t2) = freeIn x t1 || freeIn x t2
 freeIn x (Difference t1 t2) = freeIn x t1 || freeIn x t2
 freeIn x (Product t1 t2) = freeIn x t1 || freeIn x t2
@@ -226,12 +230,24 @@ mgu (Constructor c arg) (Constructor c' arg')
                                                           u' <- mguETermList uts uts'
                                                           return $ u <> u'
 
-mgu (Tup t ts) (Tup t' ts') = mguBinaryTerm (t, ts) (t', ts')
+mgu (Tup tup) (Tup tup') = mguTup tup tup'
+  where mguTup :: TermEntry a => TupleTerm a -> TupleTerm a -> Maybe Unifier
+        mguTup (Tuple2 t1 t2) (Tuple2 t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
+        mguTup (TupleN t ts) (TupleN t' ts') = do u <- mgu t t'
+                                                  let uts = unifyTuple u ts
+                                                  let uts' = unifyTuple u ts'
+                                                  u' <- mguTup uts uts'
+                                                  return $ u <> u'
+        mguTup _ _ = Nothing
 
-mgu Nil Nil = Just mempty
-mgu (List _ _) Nil = Nothing
-mgu Nil (List _ _) = Nothing
-mgu (List t ts) (List t' ts') = mguBinaryTerm (t, ts) (t', ts')
+mgu (List l) (List l') = mguList l l'
+  where mguList :: ListTerm a -> ListTerm a -> Maybe Unifier
+        mguList Nil Nil = Just mempty
+        mguList (Cons t ts) (Cons t' ts') = mguBinaryTerm (t, List ts) (t', List ts')
+        mguList (VarCons t x) (VarCons t' x') = mguBinaryTerm (t, Variable x) (t', Variable x')
+        mguList (VarCons t x) (Cons t' ts) = mguBinaryTerm (t, Variable x) (t', List ts)
+        mguList (Cons t ts) (VarCons t' x) = mguBinaryTerm (t, List ts) (t', Variable x)
+        mguList _ _ = Nothing
 
 mgu (Sum t1 t2) (Sum t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 mgu (Difference t1 t2) (Difference t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
@@ -252,15 +268,25 @@ mguBinaryTerm (t1, t2) (t1', t2') = do
   mgu2 <- mgu ut2 ut2'
   return $ mgu1 <> mgu2
 
+unifyTuple :: Unifier -> TupleTerm a -> TupleTerm a
+unifyTuple u (Tuple2 t1 t2) = Tuple2 (unifyTerm u t1) (unifyTerm u t2)
+unifyTuple u (TupleN t ts) = TupleN (unifyTerm u t) (unifyTuple u ts)
+
 -- | Apply a 'Unifier' to a 'Term' and return the new 'Term', in which all free variables appearing
 -- in the unifier are replaced by the corresponding sub-terms.
 unifyTerm :: Unifier -> Term a -> Term a
 unifyTerm u v@(Variable x) = findVarWithDefault v u x
 unifyTerm _ c@(Constant _) = c
 unifyTerm u (Constructor c ts) = Constructor c $ map (termMap $ ETerm . unifyTerm u) ts
-unifyTerm u (Tup t ts) = Tup (unifyTerm u t) (unifyTerm u ts)
-unifyTerm u (List t ts) = List (unifyTerm u t) (unifyTerm u ts)
-unifyTerm _ Nil = Nil
+unifyTerm u (Tup t) = Tup $ unifyTuple u t
+unifyTerm unifier (List l) = List $ unifyList unifier l
+  where unifyList :: Unifier -> ListTerm a -> ListTerm a
+        unifyList u (Cons t ts) = Cons (unifyTerm u t) (unifyList u ts)
+        unifyList u (VarCons t x) =
+          case getListTerm $ unifyTerm u $ Variable x of
+            Left ux -> VarCons (unifyTerm u t) ux
+            Right xs -> Cons (unifyTerm u t) xs
+        unifyList _ Nil = Nil
 unifyTerm u (Sum t1 t2) = Sum (unifyTerm u t1) (unifyTerm u t2)
 unifyTerm u (Difference t1 t2) = Difference (unifyTerm u t1) (unifyTerm u t2)
 unifyTerm u (Product t1 t2) = Product (unifyTerm u t1) (unifyTerm u t2)
@@ -396,9 +422,27 @@ renameVar x = do
 renameTerm :: Monad m => Term a -> RenamedT m (Term a)
 renameTerm (Variable x) = liftM Variable $ renameVar x
 renameTerm (Constant c) = return $ Constant c
-renameTerm (Tup t ts) = renameBinaryTerm Tup t ts
-renameTerm (List t ts) = renameBinaryTerm List t ts
-renameTerm Nil = return Nil
+renameTerm (Tup tup) = liftM Tup $ renameTuple tup
+  where renameTuple :: Monad m => TupleTerm a -> RenamedT m (TupleTerm a)
+        renameTuple (Tuple2 t1 t2) = do
+          t1' <- renameTerm t1
+          t2' <- renameTerm t2
+          return $ Tuple2 t1' t2'
+        renameTuple (TupleN t ts) = do
+          t' <- renameTerm t
+          ts' <- renameTuple ts
+          return $ TupleN t' ts'
+renameTerm (List l) = liftM List $ renameList l
+  where renameList :: Monad m => ListTerm a -> RenamedT m (ListTerm a)
+        renameList (Cons t ts) = do
+          t' <- renameTerm t
+          ts' <- renameList ts
+          return $ Cons t' ts'
+        renameList (VarCons t x) = do
+          t' <- renameTerm t
+          x' <- renameVar x
+          return $ VarCons t' x'
+        renameList Nil = return Nil
 renameTerm (Constructor c arg) = liftM (Constructor c) $ renameETermList arg
   where renameETermList :: Monad m => [ErasedTerm] -> RenamedT m [ErasedTerm]
         renameETermList [] = return []

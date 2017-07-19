@@ -131,13 +131,13 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         queryVar (t // Var "x") (Var "x" :: Var (Maybe Bool)) `shouldBe` Partial t
     it "should map a generic function" $
       mapUnifier show (toTerm 'a' // Var "x" <> toTerm True // Var "y") `shouldBePermutationOf`
-        [show (toTerm (Var "x" :: Var Char), toTerm 'a'), show (toTerm (Var "y" :: Var Bool), toTerm True)]
+        [show (Var "x" :: Var Char, toTerm 'a'), show (Var "y" :: Var Bool, toTerm True)]
     it "should loop a monad" $ do
       let u = toTerm 'a' // Var "x" <> toTerm True // Var "y"
       let m (v, t) = writer (show v, [show t])
       let (vs, ts) = runWriter $ forMUnifier u m :: ([String], [String])
       vs `shouldBePermutationOf`
-        [show $ toTerm (Var "x" :: Var Char), show $ toTerm (Var "y" :: Var Bool)]
+        [show (Var "x" :: Var Char), show (Var "y" :: Var Bool)]
       ts `shouldBePermutationOf` [show $ toTerm 'a', show $ toTerm True]
   describe "term unification" $ do
     when "both terms are variables" $
@@ -156,7 +156,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           -- ^ This should NOT fail the occurs check!
       it "should fail when the term being substituted contains the variable (occurs check)" $ do
         mgu (toTerm (Var "x" :: Var [Bool]))
-            (List (toTerm True) (toTerm (Var "x" :: Var [Bool]))) `shouldBe` Nothing
+            (List $ VarCons (toTerm True) (Var "x")) `shouldBe` Nothing
         mgu (toTerm (Var "x" :: Var RecursiveType))
             (adt Rec (Var "x" :: Var RecursiveType)) `shouldBe` Nothing
     when "both elements are constants" $ do
@@ -188,7 +188,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
             (toTerm [toTerm (Var "y" :: Var Char), toTerm 'b']) `shouldBe`
           Just (toTerm 'a' // Var "y" <> toTerm 'b' // Var "x")
       it "should unify a variable with the tail of a list" $
-        mgu (toTerm "abc") (List (toTerm 'a') (toTerm (Var "xs" :: Var String))) `shouldBe`
+        mgu (toTerm "abc") (List $ VarCons (toTerm 'a') (Var "xs")) `shouldBe`
           Just (toTerm "bc" // Var "xs")
       it "should fail to unify if any element fails" $ do
         mgu (toTerm [toTerm 'a', toTerm (Var "x" :: Var Char)]) (toTerm ['b', 'c']) `shouldBe` Nothing
@@ -292,8 +292,8 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           toTerm [Fresh 1 :: Var Char, Fresh 4 :: Var Char]
       it "should rename a variable in the tail of the list" $ do
         let r = Renamer $ M.singleton (typeOf "foo") (VarMap $ M.singleton (Var "xs" :: Var String) (Fresh 0))
-        renameWithContext r 1 (List (toTerm 'a') (toTerm $ Var "xs")) `shouldBe`
-          List (toTerm 'a') (toTerm $ Fresh 0)
+        renameWithContext r 1 (List $ VarCons (toTerm 'a') (Var "xs")) `shouldBe`
+          List (VarCons (toTerm 'a') (Fresh 0))
       it "should rename the same variable with the same replacement" $ do
         rename (toTerm [Var "x" :: Var Bool, Var "x" :: Var Bool]) `shouldBe`
           toTerm [Fresh 0 :: Var Bool, Fresh 0 :: Var Bool]
@@ -441,7 +441,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           toTerm [toTerm 'a', toTerm 'b', toTerm $ Var "y"]
       it "should apply the unifier to the tail of a list" $
         unifyTerm (toTerm "xyz" // Var "xs")
-                  (List (toTerm (Var "x" :: Var Char)) (toTerm $ Var "xs")) `shouldBe`
+                  (List $ VarCons (toTerm (Var "x" :: Var Char)) (Var "xs")) `shouldBe`
           toTerm [toTerm $ Var "x", toTerm 'x', toTerm 'y', toTerm 'z']
     context "to an ADT constructor" $
       it "should recursively apply the unifier to the argument" $ do

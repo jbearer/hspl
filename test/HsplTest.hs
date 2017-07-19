@@ -167,31 +167,32 @@ test = describeModule "Control.Hspl" $ do
   describe "list term construction" $ do
     context "via cons" $ do
       it "should prepend a value to a list variable" $
-        'a' <:> Var "x" `shouldBe` Ast.List (toTerm 'a') (toTerm (Var "x" :: Var String))
+        'a' <:> Var "x" `shouldBe` Ast.List (Ast.VarCons (toTerm 'a') (Var "x"))
       it "should prepend a variable to a list" $
-        char "x" <:> "foo" `shouldBe` Ast.List (toTerm (Var "x" :: Var Char)) (toTerm "foo")
+        char "x" <:> "foo" `shouldBe` Ast.List (Ast.Cons (toTerm $ Var "x") (Ast.Cons
+                                                         (toTerm 'f') (Ast.Cons
+                                                         (toTerm 'o') (Ast.Cons
+                                                         (toTerm 'o') Ast.Nil))))
       it "should be right associative" $
-        char "x" <:> char "y" <:> "foo" `shouldBe`
-          Ast.List (toTerm (Var "x" :: Var Char))
-                   (Ast.List (toTerm (Var "y" :: Var Char)) (toTerm "foo"))
+        char "x" <:> char "y" <:> "foo" `shouldBe` char "x" <:> (char "y" <:> "foo")
       it "should prepend a variable to a list variable" $
         char "x" <:> char \* "xs" `shouldBe`
-          Ast.List (toTerm (Var "x" :: Var Char)) (toTerm (Var "xs" :: Var String))
+          Ast.List (Ast.VarCons (toTerm (Var "x" :: Var Char)) (Var "xs"))
     context "via concatenation" $ do
       it "should append a list of variables" $
         "ab" <++> [char "x", char "y"] `shouldBe`
-          Ast.List (toTerm 'a') (Ast.List
-                   (toTerm 'b') (Ast.List
-                   (toTerm (Var "x" :: Var Char)) (Ast.List
-                   (toTerm (Var "y" :: Var Char))
-                   Ast.Nil)))
+          Ast.List (Ast.Cons (toTerm 'a') (Ast.Cons
+                             (toTerm 'b') (Ast.Cons
+                             (toTerm $ Var "x") (Ast.Cons
+                             (toTerm $ Var "y")
+                             Ast.Nil))))
       it "should prepend a list of variables" $
         [char "x", char "y"] <++> "ab" `shouldBe`
-          Ast.List (toTerm (Var "x" :: Var Char)) (Ast.List
-                   (toTerm (Var "y" :: Var Char)) (Ast.List
-                   (toTerm 'a') (Ast.List
+          Ast.List (Ast.Cons (toTerm $ Var "x") (Ast.Cons
+                   (toTerm $ Var "y") (Ast.Cons
+                   (toTerm 'a') (Ast.Cons
                    (toTerm 'b')
-                   Ast.Nil)))
+                   Ast.Nil))))
     context "via nil" $
       it "should create an empty list of any type" $ do
         nil `shouldBe` toTerm ([] :: [Int])

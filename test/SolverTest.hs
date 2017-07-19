@@ -24,13 +24,15 @@ instance NFData Unifier where
 member = [
           -- x is a member of x:xs
           HornClause (predicate "member" ( Var "x" :: Var Int
-                                          , List (toTerm (Var "x" :: Var Int))
-                                                 (toTerm (Var "_" :: Var [Int]))))
+                                         , List $ VarCons (toTerm (Var "x" :: Var Int))
+                                                          (Var "_")
+                                         ))
                       Top
           -- x is a member of _:xs if x is a member of xs
          , HornClause (predicate "member" ( Var "x" :: Var Int
-                                          , List (toTerm (Var "_" :: Var Int))
-                                                 (toTerm (Var "xs" :: Var [Int]))))
+                                          , List $ VarCons (toTerm (Var "_" :: Var Int))
+                                                           (Var "xs")
+                                          ))
                       (PredGoal (predicate "member" (Var "x" :: Var Int, Var "xs" :: Var [Int])) member)
          ]
 
@@ -257,12 +259,12 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       head us `shouldSatisfy` (['a', 'b'] // Var "xs" `isSubunifierOf`)
     it "should succeed even if the inner goal fails" $ do
       let (ps, us) = unzip $ runTest x Bottom xs
-      ps `shouldBe` [FoundAlternatives x Bottom Nil []]
+      ps `shouldBe` [FoundAlternatives x Bottom (List Nil) []]
       length us `shouldBe` 1
-      head us `shouldSatisfy` (Nil // (Var "xs" :: Var [Char]) `isSubunifierOf`)
+      head us `shouldSatisfy` (List Nil // (Var "xs" :: Var [Char]) `isSubunifierOf`)
     it "should fail if the output term does not unify with the alternatives" $ do
       runTest x xIsAOrB (toTerm [Var "y" :: Var Char]) `shouldBe` []
-      runTest x Bottom (List (toTerm (Var "y" :: Var Char)) (toTerm $ Var "ys")) `shouldBe` []
+      runTest x Bottom (List $ VarCons (toTerm (Var "y" :: Var Char)) (Var "ys")) `shouldBe` []
     it "should handle complex templates" $ do
       let (ps, us) = unzip $ runTest (adt Just x) xIsAOrB (toTerm (Var "xs" :: Var [Maybe Char]))
       ps `shouldBe` [FoundAlternatives (adt Just x) xIsAOrB (toTerm [Just 'a', Just 'b'])
