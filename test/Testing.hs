@@ -12,7 +12,9 @@
 -- Abstraction layer on top of HSpec, plus some additional combinators. This is necessary because
 -- versions of HSpec < 2.4 do not include the shouldNotBe expectation, which is used by many tests.
 module Testing (
-    describe
+    TestSuite
+  , Expectation
+  , describe
   , it
   , context
   , describeModule
@@ -45,6 +47,8 @@ import Test.Hspec (shouldBe)
 import Test.HUnit
 
 import Control.Hspl.Internal.Ast
+
+type TestSuite = SpecWith ()
 
 success :: Expectation
 success = assertBool "" True

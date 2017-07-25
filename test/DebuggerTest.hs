@@ -8,6 +8,7 @@ import Testing
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Debugger
 import Control.Hspl.Internal.Solver
+import Control.Hspl.Internal.UI
 
 import Control.Exception
 import Control.Monad.Coroutine
@@ -54,7 +55,7 @@ runTest g commands expectedOutput = do
   output `shouldEqual` unlines expectedOutput
 
 expectTrace :: TermData a => String -> Int -> String -> a -> String
-expectTrace s d pred arg = "(" ++ show d ++ ") " ++ s ++ ": " ++ show (predicate pred arg)
+expectTrace s d pred arg = "(" ++ show d ++ ") " ++ s ++ ": " ++ formatPredicate (predicate pred arg)
 
 expectCall :: TermData a => Int -> String -> a -> String
 expectCall = expectTrace "Call"
@@ -70,112 +71,112 @@ expectFail = expectTrace "Fail"
 
 expectUnknownPred :: TermData a => Int -> String -> a -> String
 expectUnknownPred d pred arg = "(" ++ show d ++ ") Error: Unknown predicate \"" ++
-                                pred ++ " :: " ++ show (predType $ predicate pred arg) ++ "\""
+                                pred ++ " :: " ++ formatType (predType $ predicate pred arg) ++ "\""
 
 expectCanUnifyCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
                         Int -> a -> b -> String
-expectCanUnifyCall d t1 t2 = "(" ++ show d ++ ") Call: " ++ show (CanUnify (toTerm t1) (toTerm t2))
+expectCanUnifyCall d t1 t2 = "(" ++ show d ++ ") Call: " ++ formatGoal (CanUnify (toTerm t1) (toTerm t2))
 
 expectCanUnifyExit :: (TermData a) => Int -> a -> String
-expectCanUnifyExit d t = "(" ++ show d ++ ") Exit: " ++ show (CanUnify (toTerm t) (toTerm t))
+expectCanUnifyExit d t = "(" ++ show d ++ ") Exit: " ++ formatGoal (CanUnify (toTerm t) (toTerm t))
 
 expectCanUnifyFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
-expectCanUnifyFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ show (CanUnify (toTerm t1) (toTerm t2))
+expectCanUnifyFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ formatGoal (CanUnify (toTerm t1) (toTerm t2))
 
 expectIdenticalCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
-expectIdenticalCall d t1 t2 = "(" ++ show d ++ ") Call: " ++ show (Identical (toTerm t1) (toTerm t2))
+expectIdenticalCall d t1 t2 = "(" ++ show d ++ ") Call: " ++ formatGoal (Identical (toTerm t1) (toTerm t2))
 
 expectIdenticalExit :: (TermData a) => Int -> a -> String
-expectIdenticalExit d t = "(" ++ show d ++ ") Exit: " ++ show (Identical (toTerm t) (toTerm t))
+expectIdenticalExit d t = "(" ++ show d ++ ") Exit: " ++ formatGoal (Identical (toTerm t) (toTerm t))
 
 expectIdenticalFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
                         Int -> a -> b -> String
-expectIdenticalFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ show (Identical (toTerm t1) (toTerm t2))
+expectIdenticalFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ formatGoal (Identical (toTerm t1) (toTerm t2))
 
 expectEqualCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
-expectEqualCall d a b = "(" ++ show d ++ ") Call: " ++ show (Equal (toTerm a) (toTerm b))
+expectEqualCall d a b = "(" ++ show d ++ ") Call: " ++ formatGoal (Equal (toTerm a) (toTerm b))
 
 expectEqualExit :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
-expectEqualExit d a b = "(" ++ show d ++ ") Exit: " ++ show (Equal (toTerm a) (toTerm b))
+expectEqualExit d a b = "(" ++ show d ++ ") Exit: " ++ formatGoal (Equal (toTerm a) (toTerm b))
 
 expectEqualFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
-expectEqualFail d a b = "(" ++ show d ++ ") Fail: " ++ show (Equal (toTerm a) (toTerm b))
+expectEqualFail d a b = "(" ++ show d ++ ") Fail: " ++ formatGoal (Equal (toTerm a) (toTerm b))
 
 expectLessThanCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
                       Int -> a -> b -> String
-expectLessThanCall d a b = "(" ++ show d ++ ") Call: " ++ show (LessThan (toTerm a) (toTerm b))
+expectLessThanCall d a b = "(" ++ show d ++ ") Call: " ++ formatGoal (LessThan (toTerm a) (toTerm b))
 
 expectLessThanExit :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
                       Int -> a -> b -> String
-expectLessThanExit d a b = "(" ++ show d ++ ") Exit: " ++ show (LessThan (toTerm a) (toTerm b))
+expectLessThanExit d a b = "(" ++ show d ++ ") Exit: " ++ formatGoal (LessThan (toTerm a) (toTerm b))
 
 expectLessThanFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
                       Int -> a -> b -> String
-expectLessThanFail d a b = "(" ++ show d ++ ") Fail: " ++ show (LessThan (toTerm a) (toTerm b))
+expectLessThanFail d a b = "(" ++ show d ++ ") Fail: " ++ formatGoal (LessThan (toTerm a) (toTerm b))
 
 expectNotCall :: Int -> Goal -> String
-expectNotCall d g = "(" ++ show d ++ ") Call: " ++ show (Not g)
+expectNotCall d g = "(" ++ show d ++ ") Call: " ++ formatGoal (Not g)
 
 expectNotExit :: Int -> Goal -> String
-expectNotExit d g = "(" ++ show d ++ ") Exit: " ++ show (Not g)
+expectNotExit d g = "(" ++ show d ++ ") Exit: " ++ formatGoal (Not g)
 
 expectNotFail :: Int -> Goal -> String
-expectNotFail d g = "(" ++ show d ++ ") Fail: " ++ show (Not g)
+expectNotFail d g = "(" ++ show d ++ ") Fail: " ++ formatGoal (Not g)
 
 expectAndCall :: Int -> Goal -> Goal -> String
-expectAndCall d g1 g2 = "(" ++ show d ++ ") Call: " ++ show (And g1 g2)
+expectAndCall d g1 g2 = "(" ++ show d ++ ") Call: " ++ formatGoal (And g1 g2)
 
 expectAndExit :: Int -> Goal -> Goal -> String
-expectAndExit d g1 g2 = "(" ++ show d ++ ") Exit: " ++ show (And g1 g2)
+expectAndExit d g1 g2 = "(" ++ show d ++ ") Exit: " ++ formatGoal (And g1 g2)
 
 expectAndFail :: Int -> Goal -> Goal -> String
-expectAndFail d g1 g2 = "(" ++ show d ++ ") Fail: " ++ show (And g1 g2)
+expectAndFail d g1 g2 = "(" ++ show d ++ ") Fail: " ++ formatGoal (And g1 g2)
 
 expectOrCall :: Int -> Goal -> Goal -> String
-expectOrCall d g1 g2 = "(" ++ show d ++ ") Call: " ++ show (Or g1 g2)
+expectOrCall d g1 g2 = "(" ++ show d ++ ") Call: " ++ formatGoal (Or g1 g2)
 
 expectOrRedo :: Int -> Goal -> Goal -> String
-expectOrRedo d g1 g2 = "(" ++ show d ++ ") Redo: " ++ show (Or g1 g2)
+expectOrRedo d g1 g2 = "(" ++ show d ++ ") Redo: " ++ formatGoal (Or g1 g2)
 
 expectOrExit :: Int -> Goal -> Goal -> String
-expectOrExit d g1 g2 = "(" ++ show d ++ ") Exit: " ++ show (Or g1 g2)
+expectOrExit d g1 g2 = "(" ++ show d ++ ") Exit: " ++ formatGoal (Or g1 g2)
 
 expectOrFail :: Int -> Goal -> Goal -> String
-expectOrFail d g1 g2 = "(" ++ show d ++ ") Fail: " ++ show (Or g1 g2)
+expectOrFail d g1 g2 = "(" ++ show d ++ ") Fail: " ++ formatGoal (Or g1 g2)
 
 expectTop :: Int -> [String]
-expectTop d = [ "(" ++ show d ++ ") Call: " ++ show Top
-              , "(" ++ show d ++ ") Exit: " ++ show Top
+expectTop d = [ "(" ++ show d ++ ") Call: " ++ formatGoal Top
+              , "(" ++ show d ++ ") Exit: " ++ formatGoal Top
               ]
 
 expectBottom :: Int -> [String]
-expectBottom d = [ "(" ++ show d ++ ") Call: " ++ show Bottom
-                 , "(" ++ show d ++ ") Fail: " ++ show Bottom
+expectBottom d = [ "(" ++ show d ++ ") Call: " ++ formatGoal Bottom
+                 , "(" ++ show d ++ ") Fail: " ++ formatGoal Bottom
                  ]
 
 expectAlternativesCall :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) =>
                           Int -> a -> Goal -> as -> String
 expectAlternativesCall d x g xs = "(" ++ show d ++ ") Call: " ++
-                                  show (Alternatives (toTerm x) g (toTerm xs))
+                                  formatGoal (Alternatives (toTerm x) g (toTerm xs))
 
 expectAlternativesExit :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) =>
                           Int -> a -> Goal -> as -> String
 expectAlternativesExit d x g xs = "(" ++ show d ++ ") Exit: " ++
-                                  show (Alternatives (toTerm x) g (toTerm xs))
+                                  formatGoal (Alternatives (toTerm x) g (toTerm xs))
 
 expectAlternativesFail :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) =>
                           Int -> a -> Goal -> as -> String
 expectAlternativesFail d x g xs = "(" ++ show d ++ ") Fail: " ++
-                                  show (Alternatives (toTerm x) g (toTerm xs))
+                                  formatGoal (Alternatives (toTerm x) g (toTerm xs))
 
 expectOnceCall :: Int -> Goal -> String
-expectOnceCall d g = "(" ++ show d ++ ") Call: " ++ show (Once g)
+expectOnceCall d g = "(" ++ show d ++ ") Call: " ++ formatGoal (Once g)
 
 expectOnceExit :: Int -> Goal -> String
-expectOnceExit d g = "(" ++ show d ++ ") Exit: " ++ show (Once g)
+expectOnceExit d g = "(" ++ show d ++ ") Exit: " ++ formatGoal (Once g)
 
 expectOnceFail :: Int -> Goal -> String
-expectOnceFail d g = "(" ++ show d ++ ") Fail: " ++ show (Once g)
+expectOnceFail d g = "(" ++ show d ++ ") Fail: " ++ formatGoal (Once g)
 
 -- deep(X) :- foo(X).
 -- foo(X) :- bar(X).
@@ -685,9 +686,9 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
               , expectCall 2 "foo" (Var "x" :: Var Char)
               , expectCall 3 "bar" (Var "x" :: Var Char)
               , intercalate "\n"
-                [ "(1) " ++ show (PredGoal (predicate "deep" (Var "x" :: Var Char)) [])
-                , "(2) " ++ show (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
-                , "(3) " ++ show (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
+                [ "(1) " ++ formatGoal (PredGoal (predicate "deep" (Var "x" :: Var Char)) [])
+                , "(2) " ++ formatGoal (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
+                , "(3) " ++ formatGoal (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
                 ]
               , expectCall 3 "bar" (Var "x" :: Var Char)
               , expectExit 2 "foo" 'a'
@@ -700,8 +701,8 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
               , expectCall 2 "foo" (Var "x" :: Var Char)
               , expectCall 3 "bar" (Var "x" :: Var Char)
               , intercalate "\n"
-                [ "(2) " ++ show (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
-                , "(3) " ++ show (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
+                [ "(2) " ++ formatGoal (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
+                , "(3) " ++ formatGoal (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
                 ]
               , expectCall 3 "bar" (Var "x" :: Var Char)
               , expectExit 2 "foo" 'a'
@@ -714,7 +715,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
               , expectCall 2 "foo" (Var "x" :: Var Char)
               , expectCall 3 "bar" (Var "x" :: Var Char)
               , intercalate "\n"
-                [ "(3) " ++ show (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
+                [ "(3) " ++ formatGoal (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
                 ]
               , expectCall 3 "bar" (Var "x" :: Var Char)
               , expectExit 2 "foo" 'a'
@@ -723,7 +724,10 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     withParams [0, -1] $ \arg ->
       it "should fail when the argument is not a positive integer" $
         runTest Top ["goals " ++ show arg, "f"]
-                    ["(1) Call: " ++ show Top, "Argument must be positive.", "(1) Call: " ++ show Top]
+                    ["(1) Call: " ++ formatGoal Top
+                    , "Argument must be positive."
+                    , "(1) Call: " ++ formatGoal Top
+                    ]
 
   describe "the help command" $
     it "should print a usage message" $
@@ -759,6 +763,6 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                                       (Equal (toTerm 'a') (toTerm (Var "x")))]
       let msg = "Variables are not sufficiently instantiated.\n" ++
                 "Goal stack:\n" ++
-                "(1) " ++ show (PredGoal (predicate "foo" (Var "x" :: Var Char)) []) ++ "\n" ++
-                "(2) " ++ show (Equal (toTerm 'a') (toTerm (Var "x")))
+                "(1) " ++ formatGoal (PredGoal (predicate "foo" (Var "x" :: Var Char)) []) ++ "\n" ++
+                "(2) " ++ formatGoal (Equal (toTerm 'a') (toTerm (Var "x")))
       assertError msg $ runTest goal ["n", "n"] []

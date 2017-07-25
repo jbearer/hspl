@@ -83,6 +83,7 @@ import           Text.Parsec hiding (Error, tokens)
 import Control.Hspl.Internal.Ast hiding (predicate)
 import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Tuple
+import Control.Hspl.Internal.UI
 
 -- | Structure used to specify configuration options for the debugger.
 data DebugConfig = DebugConfig {
@@ -300,7 +301,7 @@ showStack mn s =
       truncatedStack = case mn of
                           Just n -> reverse $ take n $ reverse enumeratedStack
                           Nothing -> enumeratedStack
-  in intercalate "\n" ["(" ++ show d ++ ") " ++ show g | (d, g) <- truncatedStack]
+  in intercalate "\n" ["(" ++ show d ++ ") " ++ formatGoal g | (d, g) <- truncatedStack]
 
 showBreakpoints :: [String] -> String
 showBreakpoints bs =
@@ -506,10 +507,10 @@ prompt context@DC { stack = s, status = mtype, msg = m } = do
 callWith0 :: Monad m => MsgType -> [Goal] -> (DebugCont m -> DebugSolverT m ProofResult) ->
                         DebugSolverT m ProofResult
 callWith0 m s cont = do
-  let dc = DC { stack = s, status = m, msg = show (head s) }
+  let dc = DC { stack = s, status = m, msg = formatGoal (head s) }
   yield dc
   ifte (cont $ debugCont s)
-    (\result -> yield dc { status = Exit, msg = show (getSolution result) } >> return result)
+    (\result -> yield dc { status = Exit, msg = formatGoal (getSolution result) } >> return result)
     (yield dc { status = Fail } >> mzero)
 
 -- | Attempt to prove a subgoal, logging a message of the given type on entry and either 'Exit' or
@@ -634,10 +635,10 @@ debugFailUnknownPred s p@(Predicate name _) = do
   let s' = PredGoal p [] : s
   -- Since there are no clauses, there will be no corresponding 'Call' message, rather we will fail
   -- immediately. To make the output a little more intuitive, we explicitly log a 'Call' here.
-  yield DC { stack = s', status = Call, msg = show (head s') }
+  yield DC { stack = s', status = Call, msg = formatGoal (head s') }
   yield DC { stack = s'
            , status = Error
-           , msg = "Unknown predicate \"" ++ name ++ " :: " ++ show (predType p) ++ "\""
+           , msg = "Unknown predicate \"" ++ name ++ " :: " ++ formatType (predType p) ++ "\""
            }
   mzero
 

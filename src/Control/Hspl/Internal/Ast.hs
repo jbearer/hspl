@@ -279,12 +279,9 @@ data Var a where
   -- | Internal constructor used to generate variables which are not equal to any user-defined ones.
   Fresh :: Typeable a => Int -> Var a
   deriving (Typeable)
+deriving instance Show (Var a)
 deriving instance Eq (Var a)
 deriving instance Ord (Var a)
-
-instance Show (Var a) where
-  show (Var x) = x ++ " :: " ++ show (typeOf (undefined :: a))
-  show (Fresh x) = "_" ++ show x ++ " :: " ++ show (typeOf (undefined :: a))
 
 -- | Determine the HSPL type of a variable.
 varType :: forall a. Typeable a => Var a -> TypeRep
@@ -727,10 +724,10 @@ termType _ = typeOf (undefined :: a)
 -- sufficient because the generic nature of 'Term' means that the term could encode a product type
 -- such as a tuple, or (). Thus, 0-ary predicates have the form @Predicate "foo" (Constant ())@ and
 -- n-ary predicates look like @Predicate "bar" (Tup ('a') (Tup ...))@.
-data Predicate = forall f. Typeable f => Predicate String (Term f)
+data Predicate = forall f. TermEntry f => Predicate String (Term f)
 
 instance Show Predicate where
-  show (Predicate name args) = name ++ "(" ++ show args ++ ")"
+  show (Predicate name args) = "Predicate " ++ show name ++ " (" ++ show args ++ ")"
 
 instance Eq Predicate where
   Predicate p t == Predicate p' t' = case cast t' of
@@ -781,20 +778,7 @@ data Goal =
             -- | A goal which succeeds at most once. If the inner goal succeeds multiple times, only
             -- the first result is taken.
           | Once Goal
-
-instance Show Goal where
-  show (PredGoal p _) = show p
-  show (CanUnify t1 t2) = show t1 ++ " |=| " ++ show t2
-  show (Identical t1 t2) = show t1 ++ " |==| " ++ show t2
-  show (Equal t1 t2) = show t1 ++ " `is` " ++ show t2
-  show (LessThan t1 t2) = show t1 ++ " |<| " ++ show t2
-  show (Not g) = "lnot (" ++ show g ++ ")"
-  show (And g1 g2) = show g1 ++ ", " ++ show g2
-  show (Or g1 g2) = show g1 ++ " ||| " ++ show g2
-  show Top = "true"
-  show Bottom = "false"
-  show (Alternatives x g xs) = "findAll (" ++ show x ++ ") (" ++ show g ++ ") (" ++ show xs ++ ")"
-  show (Once g) = "once (" ++ show g ++ ")"
+deriving instance Show Goal
 
 instance Eq Goal where
   -- Here we make the assumption that if two predicates have the same name, they have the same
