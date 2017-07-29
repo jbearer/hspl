@@ -38,27 +38,27 @@ matrix:
   # variable, such as using --stack-yaml to point to a different file.
   - env: BUILD=stack ARGS="" TESTARGS="--coverage --haddock"
     compiler: ": #stack default"
-    addons: {apt: {packages: [libgmp-dev]}}
+    addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
   - env: BUILD=stack ARGS="--resolver lts-2"
     compiler: ": #stack 7.8.4"
-    addons: {apt: {packages: [libgmp-dev]}}
+    addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
   - env: BUILD=stack ARGS="--resolver lts-3" TESTARGS=""
     compiler: ": #stack 7.10.2"
-    addons: {apt: {packages: [libgmp-dev]}}
+    addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
   - env: BUILD=stack ARGS="--resolver lts-6" TESTARGS=""
     compiler: ": #stack 7.10.3"
-    addons: {apt: {packages: [libgmp-dev]}}
+    addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
   - env: BUILD=stack ARGS="--resolver lts-7" TESTARGS="--haddock"
     compiler: ": #stack 8.0.1"
-    addons: {apt: {packages: [libgmp-dev]}}
+    addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
   - env: BUILD=stack ARGS="--resolver lts-8" TESTARGS="--haddock"
     compiler: ": #stack 8.0.2"
-    addons: {apt: {packages: [libgmp-dev]}}
+    addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
   # Build on macOS in addition to Linux
   - env: BUILD=stack ARGS="" TESTARGS="--haddock"
@@ -84,6 +84,9 @@ matrix:
 before_install:
 # Using compiler above sets CC to an invalid value, so unset it
 - unset CC
+
+# We need prolog to run the benchmarks
+- if [ `uname` = "Darwin" ]; then brew install swi-prolog; fi
 
 # Download and unpack the stack executable
 - export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/$CABALVER/bin:$HOME/.local/bin:/opt/alex/$ALEXVER/bin:/opt/happy/$HAPPYVER/bin:$HOME/.cabal/bin:$PATH
@@ -132,7 +135,10 @@ script:
   set -ex
   case "$BUILD" in
     stack)
-      stack --no-terminal $ARGS test $TESTARGS --bench --no-run-benchmarks --no-haddock-deps
+      stack --no-terminal $ARGS test $TESTARGS --bench --no-run-benchmarks --no-haddock-deps hspl
+      for bench in typecheck; do
+        stack --no-terminal $ARGS bench $bench
+      done
       ;;
     cabal)
       cabal install --enable-tests --enable-benchmarks --force-reinstalls --ghc-options=-O0 --reorder-goals --max-backjumps=1 $CABALARGS $PACKAGES
