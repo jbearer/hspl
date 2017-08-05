@@ -62,7 +62,7 @@ import Control.Monad.Identity
 import Control.Monad.Logic
 import Data.Data
 import Data.Maybe
-import Data.Monoid hiding (Sum, Product)
+import Data.Monoid (mempty)
 
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Unification hiding (Unified)
@@ -462,7 +462,7 @@ provePredicateWith cont p c = do
     -- Prolog's)
     Top -> return (Resolved (unifyPredicate u p) ProvedTop, u)
     _ -> do (subProof, u') <- proveWith cont g
-            let netU = u <> u'
+            let netU = u `compose` u'
             return (Resolved (unifyPredicate netU p) subProof, netU)
   where getSubGoal p' c' = do mg <- lift $ unify p' c'
                               case mg of
@@ -516,7 +516,7 @@ proveAndWith :: Monad m => SolverCont m -> Goal -> Goal -> SolverT m ProofResult
 proveAndWith cont g1 g2 =
   do (proofLeft, uLeft) <- proveWith cont g1
      (proofRight, uRight) <- proveWith cont $ unifyGoal uLeft g2
-     return (ProvedAnd proofLeft proofRight, uLeft <> uRight)
+     return (ProvedAnd proofLeft proofRight, uLeft `compose` uRight)
 
 -- | Succeed if and only if the first of the given 'Goal's succeeds.
 proveOrLeftWith :: Monad m => SolverCont m -> Goal -> Goal -> SolverT m ProofResult

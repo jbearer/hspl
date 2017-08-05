@@ -1,9 +1,4 @@
-{-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE Rank2Types #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -19,18 +14,12 @@ necessary before unifying to clauses.
 -}
 module Control.Hspl.Internal.Unification (
   -- * Unifiers
-    SubMap (..)
-  , Unifier (..)
+    Unifier
   -- ** Operations on unifiers
-  , updateSubMap
   , compose
   , (//)
-  , mapUnifier
-  , forMUnifier
   -- ** Querying a unifier
   , UnificationStatus (..)
-  , findVar
-  , findVarWithDefault
   , queryVar
   , isSubunifierOf
   -- * Unification
@@ -44,12 +33,12 @@ module Control.Hspl.Internal.Unification (
   -- ** The unification monad
   , UnificationT
   , Unification
+  , fresh
   , runUnification
   , runUnificationT
   , unifyClause
   -- * Renaming
-  , VarMap (..)
-  , Renamer (..)
+  , Renamer
   , RenamedT
   , Renamed
   , runRenamedT
@@ -61,114 +50,31 @@ module Control.Hspl.Internal.Unification (
   , renameClause
   ) where
 
-import           Control.Exception
-import           Control.Monad.Identity
-import           Control.Monad.State
-import           Data.List
-import qualified Data.Map as M
-import           Data.Maybe
-import           Data.Monoid hiding (Sum, Product)
-import           Data.Typeable
+import Control.Exception
+import Control.Monad.Identity
+import Control.Monad.State
+import Data.Typeable
 
 import Control.Hspl.Internal.Ast
+import Control.Hspl.Internal.VarMap (VarMap)
+import qualified Control.Hspl.Internal.VarMap as M
 
--- | A type-erased wrapper for a map from variables of a particular type to the terms replacing
--- those variables. We will use this to build a generalized 'Unifier' supporting variables of any
--- type. However, this intermediate structure allows the compiler to prove that a variable will
--- never map to a term of the wrong type, a nice property to have.
-data SubMap = forall a. TermEntry a => SubMap (M.Map (Var a) (Term a))
-
-instance Eq SubMap where
-  (==) (SubMap m) (SubMap m') = case cast m' of
-    Just m'' -> m == m''
-    Nothing -> False
-
-instance Show SubMap where
-  show (SubMap m) = intercalate ", " (map showSubstitution $ M.toList m)
-    where showSubstitution (x, t) = "(" ++ show t ++ ") / (" ++ show x ++ ")"
-
--- | The generalized unifier type. Conceptually, a unifier maps variables to terms which are to
--- replace those variables. In this implementation, we use a multi-level mapping: this type maps
--- the /type of a variable/ to the 'SubMap' for that type, which in term maps the name of the
--- variable to its replacement.
-newtype Unifier = Unifier { unUnifier :: M.Map TypeRep SubMap }
-  deriving (Eq)
-
-instance Show Unifier where
-  show (Unifier m) = "[" ++ intercalate ", " (map show $ M.elems m) ++ "]"
-
-instance Monoid Unifier where
-  mempty = Unifier M.empty
-  mappend = compose
-
--- | Apply a function to each variable-term mapping in a unifier. The function must be polymorphic
--- over all possible types which can be represented by the 'Term'. The results of each function
--- application are returned in a list.
-mapUnifier :: (forall a. TermEntry a => (Var a, Term a) -> r) -> Unifier -> [r]
-mapUnifier f (Unifier m) = concatMap go (M.elems m)
-  where go (SubMap sm) = map f (M.toList sm)
-
--- | Lift each variable-term mapping in a unifier into a sequenced monadic computation. The provided
--- "lifting" function must be polymorphic over all 'TermEntry' types.
-forMUnifier :: Monad m => Unifier -> (forall a. TermEntry a => (Var a, Term a) -> m r) -> m [r]
-forMUnifier u f = reduce $ mapUnifier f u
-  where reduce [] = return []
-        reduce (m:ms) = do x <- m
-                           xs <- reduce ms
-                           return $ x:xs
-
--- | Find the term which is to replace a given variable. If no variable of the right name /and/ type
--- exists in the 'Unifier', this returns 'Nothing'.
-findVar :: Typeable a => Unifier -> Var a -> Maybe (Term a)
-findVar (Unifier u) x = do
-  SubMap u' <- M.lookup (varType x) u
-  u'' <- cast u'
-  M.lookup x u''
-
--- | Convenience function to get either the replacement for a variable or some default value if the
--- variable is not found.
-findVarWithDefault :: Typeable a => Term a -> Unifier -> Var a -> Term a
-findVarWithDefault t u x = fromMaybe t $ findVar u x
-
--- | Update the substitutions described by a 'SubMap' after further unification has taken place. For
--- each variable in the 'Unifier', every free ocurrence of that variable in a 'Term' in the 'SubMap'
--- is replaced by the corresponding 'Term' from the 'Unifier'. Then, all substitutions of the right
--- type which are present in the 'Unifier' but not in the 'SubMap' are added to the 'SubMap'.
-updateSubMap :: Unifier -> SubMap -> SubMap
-updateSubMap u (SubMap m) =
-  let
-    -- Apply the second unifier to the substitutions in the first
-    m' = M.map (unifyTerm u) m
-
-    -- Find the corresponding submap in u
-    (x, _) = M.elemAt 0 m'
-    ty = varType x
-    m2 = do
-      SubMap m2Untyped <- M.lookup ty (unUnifier u)
-      cast m2Untyped
-
-  -- Return the left-biased union of the two maps
-  in case m2 of
-    Just m2' -> SubMap $ M.union m' m2'
-    Nothing -> SubMap m'
+-- | A unifier maps variables to terms which are to replace those variables.
+type Unifier = VarMap Term
 
 -- | Compute the composition of two 'Unifier's. This is the net unification that results from
 -- applying the first unifier and then the second in sequence.
+infixr 6 `compose` -- Same as <> for Monoid
 compose :: Unifier -> Unifier -> Unifier
-compose (Unifier u1) gu2@(Unifier u2) =
-  let u1' = M.map (updateSubMap gu2) u1
-  in Unifier $ M.union u1' u2
+compose u1 u2 = M.map (unifyTerm u2) u1 `M.union` u2
 
 -- | A unifier representing the replacement of a variable by a term.
 (//) :: TermData a => a -> Var (HSPLType a) -> Unifier
-t // x = Unifier $ M.singleton (varType x) $ SubMap (M.singleton x (toTerm t))
+t // x = M.singleton x (toTerm t)
 
 -- | @u1 `isSubunifierOf` u2@ if and only if every substitution in @u1@ is also in @u2@.
 isSubunifierOf :: Unifier -> Unifier -> Bool
-isSubunifierOf (Unifier u1) (Unifier u2) = all isSubSubmap $ M.toList u1
-  where isSubSubmap (ty, SubMap m1) = case M.lookup ty u2 >>= \(SubMap m2) -> cast m2 of
-                                        Just m2' -> m1 `M.isSubmapOf` m2'
-                                        Nothing -> False
+isSubunifierOf u1 u2 = and $ M.collect (\k v -> M.containsMapping k v u2) u1
 
 -- | Determine if the variable x is free in the term t. This is useful, for example, when performing
 -- the occurs check before computing a 'Unifier'.
@@ -197,7 +103,7 @@ freeIn x (Modulus t1 t2) = freeIn x t1 || freeIn x t2
 -- 'Nothing' if the two terms cannot be unified.
 mgu :: Term a -> Term a -> Maybe Unifier
 mgu (Variable x) (Variable y)
-  | x == y = Just mempty -- no occurs check if we're unifying to variables
+  | x == y = Just M.empty -- no occurs check if we're unifying to variables
   | otherwise = case y of
     -- When one variable is a program-generated 'Fresh' variable, prefer to replace it with the
     -- other, thereby keeping user-defined variables in play as long as possible. Semantically it
@@ -214,21 +120,21 @@ mgu t (Variable x)
   | otherwise = Just $ t // x
 
 mgu (Constant c) (Constant c')
-  | c == c' = Just mempty
+  | c == c' = Just M.empty
   | otherwise = Nothing
 
 mgu (Constructor c arg) (Constructor c' arg')
   | c == c' = mguETermList arg arg'
   | otherwise = Nothing
   where mguETermList :: [ErasedTerm] -> [ErasedTerm] -> Maybe Unifier
-        mguETermList [] [] = Just mempty
+        mguETermList [] [] = Just M.empty
         mguETermList [] _ = Nothing
         mguETermList _ [] = Nothing
         mguETermList (ETerm t : ts) (ETerm t' : ts') = do u <- cast t' >>= mgu t
                                                           let uts = map (termMap $ ETerm . unifyTerm u) ts
                                                           let uts' = map (termMap $ ETerm . unifyTerm u) ts'
                                                           u' <- mguETermList uts uts'
-                                                          return $ u <> u'
+                                                          return $ u `compose` u'
 
 mgu (Tup tup) (Tup tup') = mguTup tup tup'
   where mguTup :: TermEntry a => TupleTerm a -> TupleTerm a -> Maybe Unifier
@@ -237,12 +143,12 @@ mgu (Tup tup) (Tup tup') = mguTup tup tup'
                                                   let uts = unifyTuple u ts
                                                   let uts' = unifyTuple u ts'
                                                   u' <- mguTup uts uts'
-                                                  return $ u <> u'
+                                                  return $ u `compose` u'
         mguTup _ _ = Nothing
 
 mgu (List l) (List l') = mguList l l'
   where mguList :: ListTerm a -> ListTerm a -> Maybe Unifier
-        mguList Nil Nil = Just mempty
+        mguList Nil Nil = Just M.empty
         mguList (Cons t ts) (Cons t' ts') = mguBinaryTerm (t, List ts) (t', List ts')
         mguList (VarCons t x) (VarCons t' x') = mguBinaryTerm (t, Variable x) (t', Variable x')
         mguList (VarCons t x) (Cons t' ts) = mguBinaryTerm (t, Variable x) (t', List ts)
@@ -266,7 +172,7 @@ mguBinaryTerm (t1, t2) (t1', t2') = do
   let ut2 = unifyTerm mgu1 t2
   let ut2' = unifyTerm mgu1 t2'
   mgu2 <- mgu ut2 ut2'
-  return $ mgu1 <> mgu2
+  return $ mgu1 `compose` mgu2
 
 unifyTuple :: Unifier -> TupleTerm a -> TupleTerm a
 unifyTuple u (Tuple2 t1 t2) = Tuple2 (unifyTerm u t1) (unifyTerm u t2)
@@ -275,7 +181,7 @@ unifyTuple u (TupleN t ts) = TupleN (unifyTerm u t) (unifyTuple u ts)
 -- | Apply a 'Unifier' to a 'Term' and return the new 'Term', in which all free variables appearing
 -- in the unifier are replaced by the corresponding sub-terms.
 unifyTerm :: Unifier -> Term a -> Term a
-unifyTerm u v@(Variable x) = findVarWithDefault v u x
+unifyTerm u v@(Variable x) = M.findWithDefault v x u
 unifyTerm _ c@(Constant _) = c
 unifyTerm u (Constructor c ts) = Constructor c $ map (termMap $ ETerm . unifyTerm u) ts
 unifyTerm u (Tup t) = Tup $ unifyTuple u t
@@ -345,25 +251,14 @@ data UnificationStatus a =
 
 -- | Query the unification status of a variable.
 queryVar :: TermEntry a => Unifier -> Var a -> UnificationStatus a
-queryVar u x = case findVar u x of
+queryVar u x = case M.lookup x u of
   Nothing -> Ununified
   Just t -> case fromTerm t of
     Nothing -> Partial t
     Just c -> Unified c
 
--- | A type-erased wrapper for a map from variables to the variable the should be replaced with upon
--- renaming.
-data VarMap = forall a. Typeable a => VarMap (M.Map (Var a) (Var a))
-deriving instance Show VarMap
-
-instance Eq VarMap where
-  (==) (VarMap m) (VarMap m') = case cast m' of
-    Just m'' -> m == m''
-    Nothing -> False
-
--- | A wrapper around 'VarMap' which contains the renamings for variables of all types.
-data Renamer = Renamer (M.Map TypeRep VarMap)
-  deriving (Show, Eq)
+-- | A renamer maps variables to 'Fresh' variables with which the former should be renamed.
+type Renamer = VarMap Var
 
 -- | Monad encapsulating the state of a renaming operation.
 type RenamedT m = StateT Renamer (UnificationT m)
@@ -373,7 +268,7 @@ type Renamed = RenamedT Identity
 
 -- | Evaluate a computation in a 'RenamedT' monad.
 runRenamedT :: Monad m => RenamedT m a -> m a
-runRenamedT m = runUnificationT $ evalStateT m (Renamer M.empty)
+runRenamedT m = runUnificationT $ evalStateT m M.empty
 
 -- | Special case of 'runRenamedT' for the plain 'Renamed' monad.
 runRenamed :: Renamed a -> a
@@ -386,6 +281,13 @@ type UnificationT = StateT Int
 
 -- | Non-transformer version of the 'UnificationT' monad.
 type Unification = UnificationT Identity
+
+-- | Get a 'Fresh' variable.
+fresh :: (Monad m, TermEntry a) => UnificationT m (Var a)
+fresh = do
+  n <- get
+  put $ n + 1
+  return $ Fresh n
 
 -- | Evaluate a computation in the 'Unification' monad, starting from a state in which no 'Fresh'
 -- variables have been generated.
@@ -400,23 +302,13 @@ runUnificationT m = evalStateT m 0
 -- | Replace a variable with a new, unique name. If this variable appears in the current 'Renamer',
 -- it is replaced with the corresonding new name. Otherwise, a 'Fresh' variable with a unique ID is
 -- generated and added to the 'Renamer'.
-renameVar :: (Typeable a, Monad m) => Var a -> RenamedT m (Var a)
-renameVar x = do
-  fresh <- lift get
-  Renamer m <- get
-  let freshX = Fresh fresh
-  case M.lookup (varType x) m of
-    Nothing ->
-      let m' = M.insert (varType x) (VarMap $ M.singleton x freshX) m
-      in put (Renamer m') >> lift (put (fresh + 1)) >> return freshX
-    Just (VarMap untypedVarMap) -> case cast untypedVarMap of
-      Nothing -> error $ "Found VarMap of incorrect type (" ++ show (typeOf untypedVarMap) ++ ") " ++
-                 "with key of type " ++ show (varType x)
-      Just m' -> case M.lookup x m' of
-        Nothing ->
-          let m'' = VarMap $ M.insert x freshX m'
-          in put (Renamer (M.insert (varType x) m'' m)) >> lift (put (fresh + 1)) >> return freshX
-        Just x' -> return x'
+renameVar :: (TermEntry a, Monad m) => Var a -> RenamedT m (Var a)
+renameVar x = get >>= \m -> case M.lookup x m of
+  Just x' -> return x'
+  Nothing -> do
+    freshX <- lift fresh
+    put $ M.insert x freshX m
+    return freshX
 
 -- | Rename all of the variables in a term.
 renameTerm :: Monad m => Term a -> RenamedT m (Term a)
@@ -503,7 +395,7 @@ renameBinaryGoal constr t1 t2 = do
 
 -- | Rename all of the variables in a clause.
 renameClause :: Monad m => HornClause -> UnificationT m HornClause
-renameClause (HornClause p n) = evalStateT rename (Renamer M.empty)
+renameClause (HornClause p n) = evalStateT rename M.empty
   where rename = do rp <- renamePredicate p
                     rn <- renameGoal n
                     return $ HornClause rp rn

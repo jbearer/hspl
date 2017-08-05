@@ -12,18 +12,19 @@ module UnificationTest where
 import Testing
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Unification
+import Control.Hspl.Internal.VarMap (Entry (..))
+import qualified Control.Hspl.Internal.VarMap as M
 #if __GLASGOW_HASKELL__ >= 800
 import Test.ShouldNotTypecheck
 #endif
 
-import           Control.Exception.Base (evaluate)
-import           Control.Monad.State hiding (when)
-import           Control.Monad.Writer (MonadWriter (..), runWriter)
-import           Data.Data
-import qualified Data.Map as M
-import           Data.Monoid hiding (Sum, Product)
-import           Data.Typeable
-import           GHC.Generics
+import Control.Exception.Base (evaluate)
+import Control.Monad.State hiding (when)
+import Control.Monad.Writer (MonadWriter (..), runWriter)
+import Data.Data
+import Data.Monoid ((<>))
+import Data.Typeable
+import GHC.Generics
 
 data RecursiveType = Base | Rec RecursiveType
   deriving (Show, Eq, Typeable, Data, Generic)
@@ -54,44 +55,32 @@ doRenameClause c = runUnification $ renameClause c
 test = describeModule "Control.Hspl.Internal.Unification" $ do
   describe "a unifier" $ do
     it "should have a singleton substitution operator" $
-      toTerm True // Var "x" `shouldBe`
-        Unifier (M.singleton (typeOf True) $ SubMap $ M.singleton (Var "x") (toTerm True))
+      True // Var "x" `shouldBe` M.singleton (Var "x") (toTerm True)
     when "composed with another" $ do
       it "should result in the union of unifiers if the unifiers are disjoint" $ do
-        (toTerm True // Var "x") <> (toTerm False // Var "y") `shouldBe`
-          Unifier (M.singleton (typeOf True) $
-            SubMap $ M.fromList [(Var "x", toTerm True), (Var "y", toTerm False)])
-        (toTerm True // Var "x") <> (toTerm 'a' // Var "x") `shouldBe`
-          Unifier (M.fromList [ (typeOf True, SubMap $ M.singleton (Var "x") (toTerm True))
-                              , (typeOf 'a', SubMap $ M.singleton (Var "x") (toTerm 'a'))
-                              ])
+        (toTerm True // Var "x" `compose` toTerm False // Var "y") `shouldBe`
+          (toTerm True // Var "x" <> toTerm False // Var "y")
+        (toTerm True // Var "x" `compose` toTerm 'a' // Var "x") `shouldBe`
+          (toTerm True // Var "x" <> toTerm 'a' // Var "x")
       it "should apply substitutions in the rhs to terms in the lhs" $ do
-        (toTerm (Var "y" :: Var Bool) // Var "x") <> (toTerm True // Var "y") `shouldBe`
-          Unifier (M.singleton (typeOf True) $
-            SubMap $ M.fromList [(Var "x", toTerm True), (Var "y", toTerm True)])
-        (toTerm (Var "y" :: Var Bool, 'a') // Var "x") <> (toTerm True // Var "y") `shouldBe`
-          Unifier (M.fromList [ (typeOf True, SubMap $ M.singleton (Var "y") (toTerm True))
-                              , (typeOf (True, 'a'), SubMap $ M.singleton (Var "x") (toTerm (True, 'a')))
-                              ])
-        (toTerm [toTerm $ Var "y", toTerm 'b'] // Var "x") <> (toTerm 'a' // Var "y") `shouldBe`
-          Unifier (M.fromList [ (typeOf ['a'], SubMap $ M.singleton (Var "x") (toTerm ['a', 'b']))
-                              , (typeOf 'a', SubMap $ M.singleton (Var "y") (toTerm 'a'))
-                              ])
-        (adt Just (Var "y" :: Var Char) // Var "x") <> (toTerm 'a' // Var "y") `shouldBe`
-          Unifier (M.fromList [ (typeOf $ Just 'a', SubMap $ M.singleton (Var "x") (adt Just 'a'))
-                              , (typeOf 'a', SubMap $ M.singleton (Var "y") (toTerm 'a'))
-                              ])
+        (toTerm (Var "y" :: Var Bool) // Var "x") `compose` (toTerm True // Var "y") `shouldBe`
+          M.fromList [Entry (Var "x") (toTerm True), Entry (Var "y") (toTerm True)]
+        (toTerm (Var "y" :: Var Bool, 'a') // Var "x") `compose` (toTerm True // Var "y") `shouldBe`
+          M.fromList [Entry (Var "x") (toTerm (True, 'a')), Entry (Var "y") (toTerm True)]
+        (toTerm [toTerm $ Var "y", toTerm 'b'] // Var "x") `compose` (toTerm 'a' // Var "y") `shouldBe`
+          M.fromList [Entry (Var "x") (toTerm ['a', 'b']), Entry (Var "y") (toTerm 'a')]
+        (adt Just (Var "y" :: Var Char) // Var "x") `compose` (toTerm 'a' // Var "y") `shouldBe`
+          M.fromList [Entry (Var "x") (toTerm $ Just 'a'), Entry (Var "y") (toTerm 'a')]
       it "should prefer the lhs when the same variable appears on both sides" $
-        (toTerm True // Var "x") <> (toTerm False // Var "x") `shouldBe`
-          toTerm True // Var "x"
+        (toTerm True // Var "x") `compose` (toTerm False // Var "x") `shouldBe` toTerm True // Var "x"
     when "empty" $ do
       it "should act as an identity of composition" $ do
         let u = toTerm True // Var "x"
-        u <> mempty `shouldBe` u
-        mempty <> u `shouldBe` u
+        u `compose` M.empty `shouldBe` u
+        M.empty `compose` u `shouldBe` u
       it "should act as an identity of unification" $ do
         let t = toTerm (Var "x" :: Var Bool)
-        unifyTerm mempty t `shouldBe` t
+        unifyTerm M.empty t `shouldBe` t
     it "should not allow terms to replace variables of a different type" $ do
 #if __GLASGOW_HASKELL__ >= 800
       -- This should work
@@ -111,34 +100,13 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       'a' // Var "x" <> 'b' // Var "y" `shouldSatisfy` not . (`isSubunifierOf` ('a' // Var "x"))
     it "is not a subunifier of another which does not contain a submap of the first" $
       'a' // Var "x" <> True // Var "y" `shouldSatisfy` not . (`isSubunifierOf` ('a' // Var "y"))
-    when "querying variables" $ do
-      it "should match variables by type first" $ do
-        let u = (toTerm True // Var "x") <> (toTerm 'a' // Var "x")
-        findVar u (Var "x" :: Var Bool) `shouldBe` Just (toTerm True)
-        findVar u (Var "x" :: Var Char) `shouldBe` Just (toTerm 'a')
-      it "should match variables of the same type by name" $ do
-        let u = (toTerm True // Var "x") <> (toTerm False // Var "y")
-        findVar u (Var "x") `shouldBe` Just (toTerm True)
-        findVar u (Var "y") `shouldBe` Just (toTerm False)
-      it "should allow the client to specify a default" $
-        findVarWithDefault (toTerm True) mempty (Var "x") `shouldBe` toTerm True
-      it "should return the unification status of a variable" $ do
-        queryVar mempty (Var "x" :: Var Bool) `shouldBe` Ununified
-        queryVar (toTerm 'a' // Var "x") (Var "x" :: Var Bool) `shouldBe` Ununified
-        queryVar (toTerm True // Var "y") (Var "x" :: Var Bool) `shouldBe` Ununified
-        queryVar (toTerm True // Var "x") (Var "x" :: Var Bool) `shouldBe` Unified True
-        let t = adt Just (Var "y" :: Var Bool)
-        queryVar (t // Var "x") (Var "x" :: Var (Maybe Bool)) `shouldBe` Partial t
-    it "should map a generic function" $
-      mapUnifier show (toTerm 'a' // Var "x" <> toTerm True // Var "y") `shouldBePermutationOf`
-        [show (Var "x" :: Var Char, toTerm 'a'), show (Var "y" :: Var Bool, toTerm True)]
-    it "should loop a monad" $ do
-      let u = toTerm 'a' // Var "x" <> toTerm True // Var "y"
-      let m (v, t) = writer (show v, [show t])
-      let (vs, ts) = runWriter $ forMUnifier u m :: ([String], [String])
-      vs `shouldBePermutationOf`
-        [show (Var "x" :: Var Char), show (Var "y" :: Var Bool)]
-      ts `shouldBePermutationOf` [show $ toTerm 'a', show $ toTerm True]
+    it "should return the unification status of a variable" $ do
+      queryVar M.empty (Var "x" :: Var Bool) `shouldBe` Ununified
+      queryVar (toTerm 'a' // Var "x") (Var "x" :: Var Bool) `shouldBe` Ununified
+      queryVar (toTerm True // Var "y") (Var "x" :: Var Bool) `shouldBe` Ununified
+      queryVar (toTerm True // Var "x") (Var "x" :: Var Bool) `shouldBe` Unified True
+      let t = adt Just (Var "y" :: Var Bool)
+      queryVar (t // Var "x") (Var "x" :: Var (Maybe Bool)) `shouldBe` Partial t
   describe "term unification" $ do
     when "both terms are variables" $
       it "should keep user-defined variables over fresh variables where possible" $ do
@@ -152,7 +120,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         mgu (toTerm True) (toTerm $ Var "x") `shouldBe` Just (toTerm True // Var "x")
         mgu (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldBe`
           Just (toTerm (Var "y" :: Var Char) // Var "x")
-        mgu (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char)) `shouldBe` Just mempty
+        mgu (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char)) `shouldBe` Just M.empty
           -- ^ This should NOT fail the occurs check!
       it "should fail when the term being substituted contains the variable (occurs check)" $ do
         mgu (toTerm (Var "x" :: Var [Bool]))
@@ -161,8 +129,8 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
             (adt Rec (Var "x" :: Var RecursiveType)) `shouldBe` Nothing
     when "both elements are constants" $ do
       it "should unify equal constants" $ do
-        mgu (toTerm True) (toTerm True) `shouldBe` Just mempty
-        mgu (toTerm 'a') (toTerm 'a') `shouldBe` Just mempty
+        mgu (toTerm True) (toTerm True) `shouldBe` Just M.empty
+        mgu (toTerm 'a') (toTerm 'a') `shouldBe` Just M.empty
       it "should fail to unify unequal constants" $ do
         mgu (toTerm True) (toTerm False) `shouldBe` Nothing
         mgu (toTerm 'a') (toTerm 'b') `shouldBe` Nothing
@@ -251,12 +219,11 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       pendingWith "ShouldNotTypecheck tests require GHC >= 8.0"
 #endif
   describe "term renaming" $ do
-    let r = Renamer $ M.fromList [ (typeOf True, VarMap $ M.singleton (Var "x" :: Var Bool) (Fresh 0))
-                                 , (typeOf 'a', VarMap $ M.fromList [ (Var "x" :: Var Char, Fresh 1)
-                                                                    , (Var "y" :: Var Char, Fresh 2)
-                                                                    , (Var "z" :: Var Char, Fresh 3)
-                                                                    ])
-                                 ]
+    let r = M.fromList [ Entry (Var "x" :: Var Bool) (Fresh 0)
+                       , Entry (Var "x" :: Var Char) (Fresh 1)
+                       , Entry (Var "y" :: Var Char) (Fresh 2)
+                       , Entry (Var "z" :: Var Char) (Fresh 3)
+                       ]
     let rename = renameWithContext r 4
     context "of a variable" $ do
       it "should replace the variable if it appears in the renamer" $ do
@@ -291,7 +258,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         rename (toTerm [Var "x" :: Var Char, Var "q" :: Var Char]) `shouldBe`
           toTerm [Fresh 1 :: Var Char, Fresh 4 :: Var Char]
       it "should rename a variable in the tail of the list" $ do
-        let r = Renamer $ M.singleton (typeOf "foo") (VarMap $ M.singleton (Var "xs" :: Var String) (Fresh 0))
+        let r = M.singleton (Var "xs" :: Var String) (Fresh 0)
         renameWithContext r 1 (List $ VarCons (toTerm 'a') (Var "xs")) `shouldBe`
           List (VarCons (toTerm 'a') (Fresh 0))
       it "should rename the same variable with the same replacement" $ do
@@ -338,14 +305,14 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         rename (Modulus (toTerm (Var "x" :: Var Int)) (toTerm $ Var "x")) `shouldBe`
           Modulus (toTerm (Fresh 4 :: Var Int)) (toTerm $ Fresh 4)
   describe "predicate renaming" $ do
-    let r = Renamer $ M.singleton (typeOf True) (VarMap $ M.singleton (Var "x" :: Var Bool) (Fresh 0))
+    let r = M.singleton (Var "x" :: Var Bool) (Fresh 0)
     let rename = renamePredWithContext r 1
     it "should rename variables in the argument if the renamer applies" $
       rename (predicate "foo" (Var "x" :: Var Bool)) `shouldBe` predicate "foo" (Fresh 0 :: Var Bool)
     it "should create fresh variables when the argument contains a variable not in the renamer" $
       rename (predicate "foo" (Var "q" :: Var Bool)) `shouldBe` predicate "foo" (Fresh 1 ::Var Bool)
   describe "goal renaming" $ do
-    let rename = renameGoalWithContext (Renamer M.empty) 0
+    let rename = renameGoalWithContext M.empty 0
     context "of predicate goals" $ do
       it "should rename variables in the predicate" $
         rename (PredGoal (predicate "foo" (Var "x" :: Var Bool)) []) `shouldBe`
@@ -418,7 +385,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         unifyTerm (toTerm 'a' // Var "x") (toTerm (Var "x" :: Var Char)) `shouldBe` toTerm 'a'
       it "should return the original variable if there is no substitution" $ do
         let x = toTerm (Var "x" :: Var Char)
-        unifyTerm mempty x `shouldBe` x
+        unifyTerm M.empty x `shouldBe` x
         unifyTerm (toTerm 'a' // Var "y") x `shouldBe` x -- No substitution for the right name
         unifyTerm (toTerm True // Var "x") x `shouldBe` x -- No substitution for the right type
     context "to a constant" $
@@ -477,7 +444,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         predicate "foo" 'a'
     it "should return the original predicate when the unifier is irrelevant" $ do
       let p = predicate "foo" (Var "x" :: Var Char)
-      unifyPredicate mempty p `shouldBe` p
+      unifyPredicate M.empty p `shouldBe` p
       unifyPredicate (toTerm 'a' // Var "y") p `shouldBe` p
       unifyPredicate (toTerm True // Var "x") p `shouldBe` p
   describe "goal unifier application" $ do
@@ -539,19 +506,19 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         HornClause (predicate "foo" ()) (PredGoal (predicate "bar" 'a') [])
     it "should leave the positive literal unchanged when the unifier does not apply" $ do
       let c = HornClause (predicate "foo" (Var "x" :: Var Char)) Top
-      unifyClause mempty c `shouldBe` c
+      unifyClause M.empty c `shouldBe` c
       unifyClause (toTerm 'a' // Var "y") c `shouldBe` c
       unifyClause (toTerm True // Var "x") c `shouldBe` c
     it "should leave the negative literal unchanged when the unifier does not apply" $ do
       let c = HornClause (predicate "foo" ()) (PredGoal (predicate "bar" (Var "x" :: Var Bool)) [])
       unifyClause (toTerm True // Var "y") c `shouldBe` c
-  describe "full unification" $ do
+  describe "resolution" $ do
     let runTest p c = runUnification (unify p c)
     it "should rename variables in the clause" $
       runTest (predicate "foo" ())
             (HornClause (predicate "foo" ())
                         (PredGoal (predicate "bar" (Var "x" :: Var Bool)) [])) `shouldBe`
-        Just (PredGoal (predicate "bar" (Fresh 0 :: Var Bool)) [], mempty)
+        Just (PredGoal (predicate "bar" (Fresh 0 :: Var Bool)) [], M.empty)
     it "should return any unifications made" $
       runTest (predicate "foo" ('a', Var "x" :: Var Bool))
             (HornClause (predicate "foo" (Var "y" :: Var Char, True)) Top) `shouldBe`

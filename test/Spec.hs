@@ -8,6 +8,7 @@ import qualified HsplTest as Hspl
 import qualified ExamplesTest as Examples
 import qualified TupleTest as Tuple
 import qualified UITest as UI
+import qualified VarMapTest as VarMap
 
 main :: IO ()
 main = hspec $ do
@@ -19,3 +20,4 @@ main = hspec $ do
   Examples.test
   Tuple.test
   UI.test
+  VarMap.test

@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraints
+{-# LANGUAGE TypeSynonymInstances #-}
 
 module SolverTest where
 
@@ -9,6 +11,7 @@ import Control.DeepSeq (NFData (..))
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Unification hiding (Unified)
+import qualified Control.Hspl.Internal.Unification as U
 import Data.Monoid hiding (Sum, Product)
 import Data.Typeable
 
@@ -19,7 +22,7 @@ instance NFData Proof where
   rnf _ = ()
 
 instance NFData Unifier where
-  rnf (Unifier m) = m `seq` ()
+  rnf m = m `seq` ()
 
 member = [
           -- x is a member of x:xs
