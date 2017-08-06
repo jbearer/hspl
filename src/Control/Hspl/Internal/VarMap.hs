@@ -146,7 +146,8 @@ collect f = concatMap mapSubMap . M.toList . unVarMap
 -- | Apply a transformation to each value in the map.
 map :: forall f. Typeable f =>
        (forall a. (TermEntry a, Show (f a), Eq (f a)) => f a -> f a) -> VarMap f -> VarMap f
-map f m = fromList $ collect (\k v -> Entry k $ f v) m
+map f (VarMap m) = VarMap $ M.map mapSubMap m
+  where mapSubMap (SubMap sm) = SubMap $ M.map f sm
 
 -- | Convert a 'VarMap' to a list of 'Entry' mappings. The order of the resulting list is undefined.
 toList :: Typeable f => VarMap f -> [Entry f]
@@ -161,11 +162,7 @@ fromList = foldr insertOne empty
 -- | Executed a monadic action for each mapping in the table.
 for :: forall f r m. (Typeable f, Monad m) =>
        VarMap f -> (forall a. (TermEntry a, Show (f a), Eq (f a)) => Var a -> f a -> m r) -> m [r]
-for varMap f = reduce $ collect f varMap
-  where reduce [] = return []
-        reduce (m:ms) = do r <- m
-                           rs <- reduce ms
-                           return $ r : rs
+for varMap f = sequence $ collect f varMap
 
 -- | Traverse the table, executing a monadic action for its side-effects.
 for_ :: forall f m. (Typeable f, Monad m) =>
