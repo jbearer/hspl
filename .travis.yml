@@ -136,9 +136,7 @@ script:
   case "$BUILD" in
     stack)
       stack --no-terminal $ARGS test $TESTARGS --bench --no-run-benchmarks --no-haddock-deps hspl
-      for bench in typecheck; do
-        stack --no-terminal $ARGS bench $bench
-      done
+      stack --no-terminal --dump-logs $ARGS bench
       ;;
     cabal)
       cabal install --enable-tests --enable-benchmarks --force-reinstalls --ghc-options=-O0 --reorder-goals --max-backjumps=1 $CABALARGS $PACKAGES

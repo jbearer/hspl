@@ -1,0 +1,35 @@
+name:                pseudo-perfect
+version:             0.0.1
+synopsis:            Benchmark testing HSPL arithmetic.
+description:         This benchmark generates numbers of the form (2^(p - 1))(2^p - 1) for small
+                     primes p. The name derives from the fact that when (2^p - 1) is _also_ prime,
+                     then (2^(p - 1))(2^p - 1) is a perfect number. However, the program does not
+                     go to the trouble of finding actual Mersenne primes, it simply takes all prime
+                     exponents. This program is based on the program perfect.pl from the van Roy set
+                     of Prolog benchmarks (https://github.com/SWI-Prolog/bench).
+license:             MIT
+license-file:        LICENSE
+author:              Jeb Bearer
+maintainer:          jbearer@hmc.edu
+copyright:           2017 Jeb Bearer
+category:            Benchmark
+build-type:          Simple
+cabal-version:       >=1.10
+
+library
+  default-language:    Haskell2010
+  hs-source-dirs:      lib
+  build-depends:       base >= 4.0 && < 5
+                     , hspl
+                     , primes
+  exposed-modules:     PseudoPerfect
+
+benchmark pseudo-perfect-bench
+  type:                exitcode-stdio-1.0
+  default-language:    Haskell2010
+  hs-source-dirs:      .
+  main-is:             Main.hs
+  build-depends:       base >= 4.0 && < 5
+                     , hspl
+                     , hspl-bench >= 0.0 && < 1.0
+                     , pseudo-perfect

@@ -58,6 +58,7 @@ data BenchConfig = Config { shouldUseProlog :: Bool
 data BenchResult = BenchResult { benchResultKey :: String
                                , benchResultHspl :: NominalDiffTime
                                , benchResultProlog :: NominalDiffTime
+                               , benchResultFactor :: Double
                                }
   deriving (Typeable, Data, Generic)
 instance Tabulate BenchResult
@@ -101,7 +102,7 @@ parseArgs = do
 compareTo :: FilePath -> Benchmark a -> IO a
 compareTo p b = do
   c <- parseArgs
-  prolog <- findPrologExecutable
+  prolog <- if shouldUseProlog c then findPrologExecutable else return "false"
 
   let initialState = BenchState { benchmarks = []
                                 , prologExecutable = prolog
@@ -112,9 +113,13 @@ compareTo p b = do
   (result, st) <- runStateT b initialState
 
   putStrLn "Results:"
+  let hsplTotal = sum $ map benchResultHspl $ benchmarks st
+  let plTotal = sum $ map benchResultProlog $ benchmarks st
+  let factor = if plTotal == 0 then 0 else toRational hsplTotal / toRational plTotal
   let summary = BenchResult { benchResultKey = "Total"
-                            , benchResultHspl = sum $ map benchResultHspl $ benchmarks st
-                            , benchResultProlog = sum $ map benchResultProlog $ benchmarks st
+                            , benchResultHspl = hsplTotal
+                            , benchResultProlog = plTotal
+                            , benchResultFactor = fromRational factor
                             }
   printBenchResults $ benchmarks st ++ [summary]
 
@@ -166,22 +171,26 @@ bench key gw = do
       hsplStart <- liftIO getCurrentTime
       results <- liftIO $ evaluate $ runHspl gw
       hsplEnd <- liftIO getCurrentTime
+      let hsplResult = diffUTCTime hsplEnd hsplStart
 
-      plResult <-
+      (plResult, factor) <-
         if shouldUseProlog config
           then do
             compiledProlog <- liftIO $ compileProlog prologFile $ execGoalWriter gw
             plStart <- liftIO getCurrentTime
             liftIO $ callProlog prologExecutable compiledProlog
             plEnd <- liftIO getCurrentTime
-            return $ diffUTCTime plEnd plStart
+            let plResult = diffUTCTime plEnd plStart
+            let factor = toRational hsplResult / toRational plResult
+            return (plResult, factor)
           else
-            return 0
+            return (0, 0)
 
       assert "no duplicate keys" $ not $ any ((==key) . benchResultKey) benchmarks
       let benchResult = BenchResult { benchResultKey = key
-                                    , benchResultHspl = diffUTCTime hsplEnd hsplStart
+                                    , benchResultHspl = hsplResult
                                     , benchResultProlog = plResult
+                                    , benchResultFactor = fromRational factor
                                     }
       put $ st { benchmarks = benchResult : benchmarks }
 
