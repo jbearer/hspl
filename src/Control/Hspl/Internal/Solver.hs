@@ -59,12 +59,12 @@ module Control.Hspl.Internal.Solver (
   ) where
 
 import Control.Monad.Identity
-import Control.Monad.Logic
 import Data.Data
 import Data.Maybe
 import Data.Monoid (mempty)
 
 import Control.Hspl.Internal.Ast
+import Control.Hspl.Internal.Logic
 import Control.Hspl.Internal.Unification hiding (Unified)
 
 -- | Abstract representation of a proof. A proof can be thought of as a tree, where each node is a
@@ -248,27 +248,27 @@ runHsplN :: Int -> Goal -> [ProofResult]
 runHsplN n = observeManySolver n . prove
 
 -- | The monad which defines the backtracking control flow of the solver.
-type SolverT m = LogicT (UnificationT m)
+type SolverT m = LogicT () () (UnificationT m)
 
 -- | A non-transformer version of 'SolverT'.
 type Solver = SolverT Identity
 
 -- | Get all results from a 'Solver' computation.
 observeAllSolver :: Solver a -> [a]
-observeAllSolver = runUnification . observeAllT
+observeAllSolver = runIdentity . observeAllSolverT
 
 -- | Get the specified number of results from a 'Solver' computation.
 observeManySolver :: Int -> Solver a -> [a]
-observeManySolver n = runUnification . observeManyT n
+observeManySolver n = runIdentity . observeManySolverT n
 
 -- | Run a 'SolverT' transformed computation, and return a computation in the underlying monad for
 -- each solution to the logic computation.
 observeAllSolverT :: Monad m => SolverT m a -> m [a]
-observeAllSolverT = runUnificationT . observeAllT
+observeAllSolverT m = runUnificationT $ observeAllLogicT m () ()
 
 -- | Like 'observeAllSolverT', but limits the number of results returned.
 observeManySolverT :: Monad m => Int -> SolverT m a -> m [a]
-observeManySolverT n = runUnificationT . observeManyT n
+observeManySolverT n m = runUnificationT $ observeManyLogicT n m () ()
 
 -- | Lift a computation in the underlying monad into the transformed 'SolverT' monad.
 solverLift :: Monad m => m a -> SolverT m a

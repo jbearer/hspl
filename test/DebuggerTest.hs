@@ -18,9 +18,6 @@ import Control.Monad.State hiding (when)
 import Data.Either
 import Data.List
 import Data.Monoid ((<>))
-import Data.Time.Clock
-import System.Directory
-import System.FilePath
 import Text.Parsec.Pos
 import Text.Parsec.Error
 
@@ -28,20 +25,16 @@ import Text.Parsec.Error
 deriving instance Show Message
 
 runTest :: Goal -> [String] -> [String] -> IO ()
-runTest g commands expectedOutput = do
-  tmp <- getTemporaryDirectory
-
-  UTCTime { utctDayTime=ts } <- getCurrentTime
-
-  let config = debugConfig { inputFile = tmp </> "hspl-test-" ++ show ts ++ ".in"
-                           , outputFile = tmp </> "hspl-test-" ++ show ts ++ ".out"
+runTest g commands expectedOutput = tempFile2 $ \inFile outFile -> do
+  let config = debugConfig { inputFile = inFile
+                           , outputFile = outFile
                            , interactive = False
                            , coloredOutput = False
                            }
-  writeFile (inputFile config) $ unlines commands
+  writeFile inFile $ unlines commands
 
   result <- try $ debug config g
-  output <- readFile $ outputFile config
+  output <- readFile outFile
   case result of
     Right _ -> return ()
     Left e ->
@@ -49,9 +42,6 @@ runTest g commands expectedOutput = do
                 "\n--- begin captured stdout ---\n" ++
                 output ++
                 "\n--- end captured stdout ---\n"
-
-  removeFile $ inputFile config
-  removeFile $ outputFile config
   output `shouldEqual` unlines expectedOutput
 
 expectTrace :: TermData a => String -> Int -> String -> a -> String

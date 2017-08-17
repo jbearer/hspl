@@ -9,6 +9,7 @@ import qualified ExamplesTest as Examples
 import qualified TupleTest as Tuple
 import qualified UITest as UI
 import qualified VarMapTest as VarMap
+import qualified LogicTest as Logic
 
 main :: IO ()
 main = hspec $ do
@@ -21,3 +22,4 @@ main = hspec $ do
   Tuple.test
   UI.test
   VarMap.test
+  Logic.test

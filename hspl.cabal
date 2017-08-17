@@ -47,6 +47,7 @@ library
                      , Control.Hspl.Internal.Tuple
                      , Control.Hspl.Internal.UI
                      , Control.Hspl.Internal.VarMap
+                     , Control.Hspl.Internal.Logic
 
 test-suite hspl-test
   type:                exitcode-stdio-1.0
@@ -78,6 +79,7 @@ test-suite hspl-test
                      , TupleTest
                      , UITest
                      , VarMapTest
+                     , LogicTest
 
 source-repository head
   type:     git

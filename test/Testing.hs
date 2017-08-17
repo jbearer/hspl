@@ -35,13 +35,19 @@ module Testing (
   , shouldBeAlphaEquivalentTo
   , failure
   , success
+  , tempFile
+  , tempFile2
   ) where
 
 import Control.DeepSeq (NFData, force)
 import Control.Exception (evaluate, try, ErrorCall (..))
-import Control.Monad (forM_)
+import Control.Monad (forM_, unless)
+import Control.Monad.IO.Class
 import Data.CallStack
 import Data.List
+import Data.Time.Clock
+import System.Directory
+import System.FilePath
 import Test.Hspec hiding (shouldNotBe, shouldNotSatisfy)
 import Test.Hspec (shouldBe)
 import Test.HUnit
@@ -129,3 +135,21 @@ instance {-# OVERLAPPING #-} Show a => AssertError (IO a) where
       Right r -> assertFailure $ "Expected the expression " ++ show r ++ " to raise an error:\n" ++
                                  expected
       Left (ErrorCall msg) -> msg `shouldBe` expected
+
+tempFile :: MonadIO m => (String -> m a) -> m a
+tempFile f = do
+  tmp <- liftIO getTemporaryDirectory
+  UTCTime { utctDayTime=ts } <- liftIO getCurrentTime
+  let file = tmp </> "hspl-test-" ++ show ts
+
+  exists <- liftIO $ doesFileExist file
+  unless exists $ liftIO $ writeFile file ""
+
+  result <- f file
+
+  liftIO $ removeFile file
+
+  return result
+
+tempFile2 :: MonadIO m => (String -> String -> m a) -> m a
+tempFile2 f = tempFile $ \f1 -> tempFile $ \f2 -> f f1 f2
