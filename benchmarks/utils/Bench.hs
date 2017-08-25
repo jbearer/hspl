@@ -75,7 +75,7 @@ type Benchmark = StateT BenchState IO
 type StackFrame = (String, SrcLoc)
 
 printBenchResults :: [BenchResult] -> IO ()
-printBenchResults = printTable
+printBenchResults = printTable . reverse
 
 parseArgs :: IO BenchConfig
 parseArgs = do

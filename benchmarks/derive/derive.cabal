@@ -1,0 +1,31 @@
+name:                derive
+version:             0.0.1
+synopsis:            A benchmark for HSPL.
+description:         This benchmark computes the symbolic derivative of simple mathematical
+                     expressions. It is based on the program derive.pl from the van Roy set of
+                     Prolog benchmarks (https://github.com/SWI-Prolog/bench).
+license:             MIT
+license-file:        LICENSE
+author:              Jeb Bearer
+maintainer:          jbearer@hmc.edu
+copyright:           2017 Jeb Bearer
+category:            Benchmark
+build-type:          Simple
+cabal-version:       >=1.10
+
+library
+  default-language:    Haskell2010
+  hs-source-dirs:      lib
+  build-depends:       base >= 4.0 && < 5
+                     , hspl
+  exposed-modules:     Derive
+
+benchmark derive-bench
+  type:                exitcode-stdio-1.0
+  default-language:    Haskell2010
+  hs-source-dirs:      .
+  main-is:             Main.hs
+  build-depends:       base >= 4.0 && < 5
+                     , hspl
+                     , hspl-bench >= 0.0 && < 1.0
+                     , derive
