@@ -57,8 +57,8 @@ simpleSubGoal = HornClause (predicate "foo" 'a')
 uninstantiatedVariablesError = "Variables are not sufficiently instantiated."
 
 test = describeModule "Control.Hspl.Internal.Solver" $ do
-  describe "provePredicateWith" $ do
-    let runTest p c = observeAllSolver $ provePredicateWith solverCont p c
+  describe "provePredicate" $ do
+    let runTest p c = observeAllSolver (provePredicate p c) () ()
     it "should prove an axiom" $
       runTest (predicate "foo" ('a', 'b')) simpleBinary `shouldBe`
         [(Resolved (predicate "foo" ('a', 'b')) ProvedTop, mempty)]
@@ -73,10 +73,9 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       let (_, us) = unzip $ runTest (predicate "foo" (Var "x" :: Var Char)) simpleSubGoal
       length us `shouldBe` 1
       head us `shouldSatisfy` ('a' // Var "x" `isSubunifierOf`)
-  describe "proveUnifiableWith" $ do
+  describe "proveUnifiable" $ do
     let runTest :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> [ProofResult]
-        runTest t1 t2 =
-          observeAllSolver $ proveUnifiableWith solverCont (toTerm t1) (toTerm t2)
+        runTest t1 t2 = observeAllSolver (proveUnifiable (toTerm t1) (toTerm t2)) () ()
     it "should unify terms when possible" $ do
       let (proofs, us) = unzip $ runTest (Var "x" :: Var String) "foo"
       proofs `shouldBe` [Unified (toTerm "foo") (toTerm "foo")]
@@ -84,10 +83,9 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       head us `shouldSatisfy` ("foo" // Var "x" `isSubunifierOf`)
     it "should fail when terms cannot be unified" $
       runTest "bar" "foo" `shouldBe` []
-  describe "proveIdenticalWith" $ do
+  describe "proveIdentical" $ do
     let runTest :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> [ProofResult]
-        runTest t1 t2 =
-          observeAllSolver $ proveIdenticalWith solverCont (toTerm t1) (toTerm t2)
+        runTest t1 t2 = observeAllSolver (proveIdentical (toTerm t1) (toTerm t2)) () ()
     it "should fail if the terms are not equal" $
       runTest "foo" "bar" `shouldBe` []
     it "should fail if the terms are not yet unified" $
@@ -95,10 +93,9 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should succeed, but not create new bindings, if the terms are identical" $
       runTest "foo" "foo" `shouldBe`
         [(Identified (toTerm "foo") (toTerm "foo"), mempty)]
-  describe "proveEqualWith" $ do
+  describe "proveEqual" $ do
     let runTest :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> [ProofResult]
-        runTest lhs rhs =
-          observeAllSolver $ proveEqualWith solverCont (toTerm lhs) (toTerm rhs)
+        runTest lhs rhs = observeAllSolver (proveEqual (toTerm lhs) (toTerm rhs)) () ()
     it "should unify a variable with a constant" $ do
       let (proofs, us) = unzip $ runTest (Var "x" :: Var Int) (1 :: Int)
       proofs `shouldBe` [Equated (toTerm (1 :: Int)) (toTerm (1 :: Int))]
@@ -124,10 +121,10 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should error when the right-hand side contains uninstantiated variables" $
       assertError uninstantiatedVariablesError $
         runTest (Var "x" :: Var Int) (Sum (toTerm (42 :: Int)) (toTerm (Var "y" :: Var Int)))
-  describe "proveLessThanWith" $ do
+  describe "proveLessThan" $ do
     let runTest :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
                    a -> b -> [ProofResult]
-        runTest lhs rhs = observeAllSolver $ proveLessThanWith solverCont (toTerm lhs) (toTerm rhs)
+        runTest lhs rhs = observeAllSolver (proveLessThan (toTerm lhs) (toTerm rhs)) () ()
     it "should succeed when the left-hand side is less than the right-hand side" $ do
       let (proofs, us) = unzip $ runTest 'a' 'b'
       proofs `shouldBe` [ProvedLessThan 'a' 'b']
@@ -150,15 +147,15 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should error when the right-hand side contains uninstantiated variables" $
       assertError uninstantiatedVariablesError $
         runTest 'a' (Var "x" :: Var Char)
-  describe "proveNotWith" $ do
-    let runTest g = observeAllSolver $ proveNotWith solverCont g
+  describe "proveNot" $ do
+    let runTest g = observeAllSolver (proveNot g) () ()
     it "should fail if the inner goal succeeds" $
       runTest (PredGoal (predicate "foo" ('a', 'b')) [simpleBinary]) `shouldBe` []
     it "should succeed if the inner goal fails" $
       runTest (PredGoal (predicate "foo" ('b', 'a')) [simpleBinary]) `shouldBe`
         [(Negated $ PredGoal (predicate "foo" ('b', 'a')) [simpleBinary], mempty)]
-  describe "proveAndWith" $ do
-    let runTest g1 g2 = observeAllSolver $ proveAndWith solverCont g1 g2
+  describe "proveAnd" $ do
+    let runTest g1 g2 = observeAllSolver (proveAnd g1 g2) () ()
     it "should succeed when both subgoals succeed" $ do
       let (proofs, _) = unzip $ runTest (Identical (toTerm 'a') (toTerm 'a'))
                                         (Identical (toTerm 'b') (toTerm 'b'))
@@ -179,7 +176,7 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       runTest (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
               (CanUnify (toTerm 'b') (toTerm (Var "x" :: Var Char))) `shouldBe` []
   describe "an Or goal" $ do
-    let runTest g1 g2 = observeAllSolver $ proveWith solverCont (Or g1 g2)
+    let runTest g1 g2 = observeAllSolver (prove $ Or g1 g2) () ()
     it "should succeed when only the left goal succeeds" $ do
       -- Left goal succeeds once, right goal fails
       let (proofs, _) = unzip $ runTest (PredGoal (predicate "mortal" "hypatia") [mortal])
@@ -236,14 +233,14 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
                         ]
     it "should fail when both goals fail" $
       runTest (PredGoal (predicate "fake" ()) []) (PredGoal (predicate "fake" ()) []) `shouldBe` []
-  describe "proveTopWith" $
+  describe "proveTop" $
     it "should always succeed" $
-      observeAllSolver (proveTopWith solverCont) `shouldBe` [(ProvedTop, mempty)]
-  describe "proveBottomWith" $
+      observeAllSolver proveTop () () `shouldBe` [(ProvedTop, mempty)]
+  describe "proveBottom" $
     it "should always fail" $
-      observeAllSolver (proveBottomWith solverCont) `shouldBe` []
+      observeAllSolver proveBottom () () `shouldBe` []
   describe "an Alternatives proof" $ do
-    let runTest x g xs = observeAllSolver $ proveAlternativesWith solverCont x g xs
+    let runTest x g xs = observeAllSolver (proveAlternatives x g xs) () ()
     let xIsAOrB = Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
                      (CanUnify (toTerm $ Var "x") (toTerm 'b'))
     let x :: Term Char
@@ -330,8 +327,8 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         ps `shouldBe` [FoundAlternatives x Top (toTerm [x]) [ProvedTop]]
         length us `shouldBe` 1
         head us `shouldSatisfy` ([x] // Var "xs" `isSubunifierOf`)
-  describe "proveOnceWith" $ do
-    let runTest g = observeAllSolver $ proveOnceWith solverCont g
+  describe "proveOnce" $ do
+    let runTest g = observeAllSolver (proveOnce g) () ()
     it "should fail if the inner goal fails" $
       runTest Bottom `shouldBe` []
     it "should succeed if the inner goal succeeds" $ do

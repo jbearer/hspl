@@ -36,18 +36,21 @@ instance Termable TwoChars
 
 renameWithContext :: Renamer -> Int -> Term a -> Term a
 renameWithContext renamer fresh t =
-  let u = evalStateT (renameTerm t) renamer
-  in evalState u fresh
+  let r = put renamer >> renameTerm t
+      u = put fresh >> runRenamedT r
+  in runUnification u
 
 renamePredWithContext :: Renamer -> Int -> Predicate -> Predicate
 renamePredWithContext renamer fresh p =
-  let u = evalStateT (renamePredicate p) renamer
-  in evalState u fresh
+  let r = put renamer >> renamePredicate p
+      u = put fresh >> runRenamedT r
+  in runUnification u
 
 renameGoalWithContext :: Renamer -> Int -> Goal -> Goal
-renameGoalWithContext renamer fresh p =
-  let u = evalStateT (renameGoal p) renamer
-  in evalState u fresh
+renameGoalWithContext renamer fresh g =
+  let r = put renamer >> renameGoal g
+      u = put fresh >> runRenamedT r
+  in runUnification u
 
 doRenameClause :: HornClause -> HornClause
 doRenameClause c = runUnification $ renameClause c

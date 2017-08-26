@@ -1,4 +1,7 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -23,25 +26,25 @@ module Control.Hspl.Internal.Unification (
   , queryVar
   , isSubunifierOf
   -- * Unification
-  -- ** Auxiliary functions
+  -- ** The unification monad
+  , MonadUnification (..)
+  , UnificationT
+  , runUnificationT
+  , Unification
+  , runUnification
+  -- ** Unification algorithm
   , freeIn
   , mgu
   , unifyTerm
   , unifyPredicate
   , unifyGoal
   , unify
-  -- ** The unification monad
-  , UnificationT
-  , Unification
-  , fresh
-  , runUnification
-  , runUnificationT
   , unifyClause
   -- * Renaming
   , Renamer
   , RenamedT
-  , Renamed
   , runRenamedT
+  , Renamed
   , runRenamed
   , renameVar
   , renameTerm
@@ -50,6 +53,7 @@ module Control.Hspl.Internal.Unification (
   , renameClause
   ) where
 
+import Control.Applicative (Applicative)
 import Control.Exception
 import Control.Monad.Identity
 import Control.Monad.State
@@ -58,6 +62,37 @@ import Data.Typeable
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.VarMap (VarMap)
 import qualified Control.Hspl.Internal.VarMap as M
+
+-- | Monad in which all unification operations take place. All unifications in a single run of an
+-- HSPL program should take place in the same 'UnificationT' monad.
+class Monad m => MonadUnification m where
+  -- | Get a 'Fresh' variable.
+  fresh :: TermEntry a => m (Var a)
+
+-- | Concrete instance of the 'MonadUnification' class. This type encapsulates the state necessary
+-- to generate unique 'Fresh' variables.
+newtype UnificationT m a = UnificationT { unUnificationT :: StateT Int m a }
+  deriving (Functor, Applicative, Monad, MonadTrans)
+deriving instance Monad m => MonadState Int (UnificationT m)
+
+instance Monad m => MonadUnification (UnificationT m) where
+  fresh = do
+    n <- get
+    put $ n + 1
+    return $ Fresh n
+
+-- | Non-transformer version of the 'UnificationT' monad.
+type Unification = UnificationT Identity
+
+-- | Evaluate a computation in the 'Unification' monad, starting from a state in which no 'Fresh'
+-- variables have been generated.
+runUnification :: Unification a -> a
+runUnification = runIdentity . runUnificationT
+
+-- | Evaluate a computation in 'UnificationT' transformed monad, starting from a state in which no
+-- 'Fresh' variables have been generated. The result is a compuation in the underlying monad.
+runUnificationT :: Monad m => UnificationT m a -> m a
+runUnificationT m = evalStateT (unUnificationT m) 0
 
 -- | A unifier maps variables to terms which are to replace those variables.
 type Unifier = VarMap Term
@@ -227,7 +262,7 @@ unifyClause u (HornClause p n) = HornClause (unifyPredicate u p) (unifyGoal u n)
 -- predicate unifies with the positive literal of the clause, the 'mgu' is applied to the negative
 -- literal and the resulting goal is returned. Before unification, the 'HornClause' is renamed apart
 -- so that it does not share any free variables with the goal.
-unify :: Monad m => Predicate -> HornClause -> UnificationT m (Maybe (Goal, Unifier))
+unify :: MonadUnification m => Predicate -> HornClause -> m (Maybe (Goal, Unifier))
 unify (Predicate name arg) c@(HornClause (Predicate name' _) _) =
   assert (name == name') $ do
     HornClause (Predicate _ arg') neg <- renameClause c
@@ -261,48 +296,23 @@ queryVar u x = case M.lookup x u of
 type Renamer = VarMap Var
 
 -- | Monad encapsulating the state of a renaming operation.
-type RenamedT m = StateT Renamer (UnificationT m)
+type RenamedT m = StateT Renamer m
 
 -- | Non-transformed version of the 'RenamedT' monad.
-type Renamed = RenamedT Identity
+type Renamed = RenamedT Unification
 
 -- | Evaluate a computation in a 'RenamedT' monad.
-runRenamedT :: Monad m => RenamedT m a -> m a
-runRenamedT m = runUnificationT $ evalStateT m M.empty
+runRenamedT :: MonadUnification m => RenamedT m a -> m a
+runRenamedT m = evalStateT m M.empty
 
 -- | Special case of 'runRenamedT' for the plain 'Renamed' monad.
 runRenamed :: Renamed a -> a
-runRenamed = runIdentity . runRenamedT
-
--- | Monad in which all unification operations take place. This type encapsulates the state
--- necessary to generate unique 'Fresh' variables. All unifications in a single run of an HSPL
--- program should take place in the same 'UnificationT' monad.
-type UnificationT = StateT Int
-
--- | Non-transformer version of the 'UnificationT' monad.
-type Unification = UnificationT Identity
-
--- | Get a 'Fresh' variable.
-fresh :: (Monad m, TermEntry a) => UnificationT m (Var a)
-fresh = do
-  n <- get
-  put $ n + 1
-  return $ Fresh n
-
--- | Evaluate a computation in the 'Unification' monad, starting from a state in which no 'Fresh'
--- variables have been generated.
-runUnification :: Unification a -> a
-runUnification m = evalState m 0
-
--- | Evaluate a computation in 'UnificationT' transformed monad, starting from a state in which no
--- 'Fresh' variables have been generated. The result is a compuation in the underlying monad.
-runUnificationT :: Monad m => UnificationT m a -> m a
-runUnificationT m = evalStateT m 0
+runRenamed = runUnification . runRenamedT
 
 -- | Replace a variable with a new, unique name. If this variable appears in the current 'Renamer',
 -- it is replaced with the corresonding new name. Otherwise, a 'Fresh' variable with a unique ID is
 -- generated and added to the 'Renamer'.
-renameVar :: (TermEntry a, Monad m) => Var a -> RenamedT m (Var a)
+renameVar :: (TermEntry a, MonadUnification m) => Var a -> RenamedT m (Var a)
 renameVar x = get >>= \m -> case M.lookup x m of
   Just x' -> return x'
   Nothing -> do
@@ -311,11 +321,11 @@ renameVar x = get >>= \m -> case M.lookup x m of
     return freshX
 
 -- | Rename all of the variables in a term.
-renameTerm :: Monad m => Term a -> RenamedT m (Term a)
+renameTerm :: MonadUnification m => Term a -> RenamedT m (Term a)
 renameTerm (Variable x) = liftM Variable $ renameVar x
 renameTerm (Constant c) = return $ Constant c
 renameTerm (Tup tup) = liftM Tup $ renameTuple tup
-  where renameTuple :: Monad m => TupleTerm a -> RenamedT m (TupleTerm a)
+  where renameTuple :: MonadUnification m => TupleTerm a -> RenamedT m (TupleTerm a)
         renameTuple (Tuple2 t1 t2) = do
           t1' <- renameTerm t1
           t2' <- renameTerm t2
@@ -325,7 +335,7 @@ renameTerm (Tup tup) = liftM Tup $ renameTuple tup
           ts' <- renameTuple ts
           return $ TupleN t' ts'
 renameTerm (List l) = liftM List $ renameList l
-  where renameList :: Monad m => ListTerm a -> RenamedT m (ListTerm a)
+  where renameList :: MonadUnification m => ListTerm a -> RenamedT m (ListTerm a)
         renameList (Cons t ts) = do
           t' <- renameTerm t
           ts' <- renameList ts
@@ -336,7 +346,7 @@ renameTerm (List l) = liftM List $ renameList l
           return $ VarCons t' x'
         renameList Nil = return Nil
 renameTerm (Constructor c arg) = liftM (Constructor c) $ renameETermList arg
-  where renameETermList :: Monad m => [ErasedTerm] -> RenamedT m [ErasedTerm]
+  where renameETermList :: MonadUnification m => [ErasedTerm] -> RenamedT m [ErasedTerm]
         renameETermList [] = return []
         renameETermList (ETerm t : ts) = do
           t' <- renameTerm t
@@ -350,7 +360,7 @@ renameTerm (IntQuotient t1 t2) = renameBinaryTerm IntQuotient t1 t2
 renameTerm (Modulus t1 t2) = renameBinaryTerm Modulus t1 t2
 
 -- | Helper function for renaming variables in a 'Term' with two subterms.
-renameBinaryTerm :: Monad m =>
+renameBinaryTerm :: MonadUnification m =>
                     (Term a -> Term b -> Term c) -> Term a -> Term b -> RenamedT m (Term c)
 renameBinaryTerm constr t1 t2 = do
   rt1 <- renameTerm t1
@@ -358,11 +368,11 @@ renameBinaryTerm constr t1 t2 = do
   return $ constr rt1 rt2
 
 -- | Rename all of the variables in a predicate.
-renamePredicate :: Monad m => Predicate -> RenamedT m Predicate
+renamePredicate :: MonadUnification m => Predicate -> RenamedT m Predicate
 renamePredicate (Predicate name arg) = liftM (Predicate name) $ renameTerm arg
 
 -- | Rename all of the variables in a goal.
-renameGoal :: Monad m => Goal -> RenamedT m Goal
+renameGoal :: MonadUnification m => Goal -> RenamedT m Goal
 renameGoal (PredGoal p cs) = renamePredicate p >>= \p' -> return (PredGoal p' cs)
 renameGoal (CanUnify t1 t2) = renameBinaryGoal CanUnify t1 t2
 renameGoal (Identical t1 t2) = renameBinaryGoal Identical t1 t2
@@ -387,15 +397,16 @@ renameGoal (Alternatives x g xs) = do
 renameGoal (Once g) = liftM Once $ renameGoal g
 
 -- | Helper function for renaming variables in a 'Goal' with two 'Term' arguments.
-renameBinaryGoal :: Monad m => (Term a -> Term b -> Goal) -> Term a -> Term b -> RenamedT m Goal
+renameBinaryGoal :: MonadUnification m =>
+                    (Term a -> Term b -> Goal) -> Term a -> Term b -> RenamedT m Goal
 renameBinaryGoal constr t1 t2 = do
   t1' <- renameTerm t1
   t2' <- renameTerm t2
   return $ constr t1' t2'
 
 -- | Rename all of the variables in a clause.
-renameClause :: Monad m => HornClause -> UnificationT m HornClause
-renameClause (HornClause p n) = evalStateT rename M.empty
+renameClause :: MonadUnification m => HornClause -> m HornClause
+renameClause (HornClause p n) = runRenamedT rename
   where rename = do rp <- renamePredicate p
                     rn <- renameGoal n
                     return $ HornClause rp rn

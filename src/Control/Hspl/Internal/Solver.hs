@@ -1,7 +1,9 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
@@ -30,34 +32,34 @@ module Control.Hspl.Internal.Solver (
   , runHsplN
   -- * Solver
   -- ** The Solver monad
-  , Solver
+  -- *** Class
+  , MonadSolver (..)
+  -- *** Monad transformer
   , SolverT
-  , solverLift
-  , observeAllSolver
-  , observeManySolver
   , observeAllSolverT
   , observeManySolverT
+  -- *** Monad
+  , Solver
+  , observeAllSolver
+  , observeManySolver
   -- ** The proof-generating algorithm
-  -- $prover
-  , SolverCont (..)
-  , solverCont
-  , provePredicateWith
-  , proveUnifiableWith
-  , proveIdenticalWith
-  , proveEqualWith
-  , proveLessThanWith
-  , proveNotWith
-  , proveAndWith
-  , proveOrLeftWith
-  , proveOrRightWith
-  , proveTopWith
-  , proveBottomWith
-  , proveAlternativesWith
-  , proveOnceWith
-  , proveWith
+  , provePredicate
+  , proveUnifiable
+  , proveIdentical
+  , proveEqual
+  , proveLessThan
+  , proveNot
+  , proveAnd
+  , proveOrLeft
+  , proveOrRight
+  , proveTop
+  , proveBottom
+  , proveAlternatives
+  , proveOnce
   , prove
   ) where
 
+import Control.Applicative
 import Control.Monad.Identity
 import Data.Data
 import Data.Maybe
@@ -241,218 +243,159 @@ getAllSolutions = map getSolution
 -- represent various alternative ways of proving the theorem. If there are variables in the goal,
 -- they may unify with different values in each alternative proof.
 runHspl :: Goal -> [ProofResult]
-runHspl = observeAllSolver . prove
+runHspl g = observeAllSolver (prove g) () ()
 
 -- | Like 'runHspl', but return at most the given number of proofs.
 runHsplN :: Int -> Goal -> [ProofResult]
-runHsplN n = observeManySolver n . prove
+runHsplN n g = observeManySolver n (prove g) () ()
 
--- | The monad which defines the backtracking control flow of the solver.
-type SolverT m = LogicT () () (UnificationT m)
+-- | The monad which defines the backtracking control flow of the solver. This type is parameterized
+-- by the type of backtracking and global state, implementing the 'MonadLogicState' interface.
+newtype SolverT bs gs m a = SolverT { unSolverT :: LogicT bs gs (UnificationT m) a }
+  deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadLogic, MonadLogicCut)
+
+instance MonadTrans (SolverT bs gs) where
+  lift = SolverT . lift . lift
+
+instance Monad m => MonadUnification (SolverT bs gs m) where
+  fresh = SolverT $ lift fresh
+
+instance Monad m => MonadLogicState bs gs (SolverT bs gs m)  where
+  stateGlobal = SolverT . stateGlobal
+  stateBacktracking = SolverT . stateBacktracking
 
 -- | A non-transformer version of 'SolverT'.
-type Solver = SolverT Identity
+type Solver bs gs = SolverT bs gs Identity
 
 -- | Get all results from a 'Solver' computation.
-observeAllSolver :: Solver a -> [a]
-observeAllSolver = runIdentity . observeAllSolverT
+observeAllSolver :: Solver bs gs a -> bs -> gs -> [a]
+observeAllSolver m bs gs = runIdentity $ observeAllSolverT m bs gs
 
 -- | Get the specified number of results from a 'Solver' computation.
-observeManySolver :: Int -> Solver a -> [a]
-observeManySolver n = runIdentity . observeManySolverT n
+observeManySolver :: Int -> Solver bs gs a -> bs -> gs -> [a]
+observeManySolver n m bs gs = runIdentity $ observeManySolverT n m bs gs
 
 -- | Run a 'SolverT' transformed computation, and return a computation in the underlying monad for
 -- each solution to the logic computation.
-observeAllSolverT :: Monad m => SolverT m a -> m [a]
-observeAllSolverT m = runUnificationT $ observeAllLogicT m () ()
+observeAllSolverT :: Monad m => SolverT bs gs m a -> bs -> gs -> m [a]
+observeAllSolverT m bs gs = runUnificationT $ observeAllLogicT (unSolverT m) bs gs
 
 -- | Like 'observeAllSolverT', but limits the number of results returned.
-observeManySolverT :: Monad m => Int -> SolverT m a -> m [a]
-observeManySolverT n m = runUnificationT $ observeManyLogicT n m () ()
+observeManySolverT :: Monad m => Int -> SolverT bs gs m a -> bs -> gs -> m [a]
+observeManySolverT n m bs gs = runUnificationT $ observeManyLogicT n (unSolverT m) bs gs
 
--- | Lift a computation in the underlying monad into the transformed 'SolverT' monad.
-solverLift :: Monad m => m a -> SolverT m a
-solverLift = lift . lift
+-- | This class encapsulates the algorithms required for proving each type of 'Goal'. The proof-
+-- generating algorithm defined by 'prove' uses these functions to prove the goal specified by the
+-- user and any sub-goal. Each algorithm has an associated "zero-overhead" version -- for example,
+-- 'tryPredicate' and 'provePredicateWith'. These represent the minimal work needed to prove a
+-- certain type of goal. But monads of this class can define more complex behavior; see the
+-- "Control.Hspl.Internal.Debugger" for an example.
+class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
+  -- | Attempt to prove a predicate using the first alternative (the first 'HornClause' with a
+  -- matching positive literal). In addition to effects performed in the monad, this computation
+  -- should have the following semantics:
+  --
+  --   1. Attempt to unify the predicate with the positive literal of the clause.
+  --   2. Apply the resulting unifier to each negative literal of the clause.
+  --   3. Attempt to prove each negative literal, producing a sub-proof for each.
+  --   4. Combine the sub-proofs into a 'Resolved' proof.
+  --
+  -- The zero-overhead version is 'provePredicate'.
+  tryPredicate :: Predicate -> HornClause -> m ProofResult
+  -- | Attempt to prove a predicate using subsequent alternatives. 'retryPredicate' should have the
+  -- same semantics as 'tryPredicate', modulo side-effects. The zero-overhead version is
+  -- 'provePredicate'.
+  retryPredicate :: Predicate -> HornClause -> m ProofResult
+  -- | Attempt to prove that two terms can be unified. The resulting computation should either fail
+  -- with 'mzero' or produce a unifier and a trivial proof of the unified terms. The zero-overhead
+  -- version is 'proveUnifiable'.
+  tryUnifiable :: TermEntry a => Term a -> Term a -> m ProofResult
+  -- | Attempt to prove that two terms are identical. No new unifications are created. The resulting
+  -- computation should either fail with 'mzero' or produce a trivial proof of the equality of the
+  -- terms. The zero-overhead version is 'proveIdentical'.
+  tryIdentical ::TermEntry a => Term a -> Term a -> m ProofResult
+  -- | Attempt to prove equality of terms. The resulting computation should evaluate the right-hand
+  -- side and, if successful, attempt to unify the resulting constant with the 'Term' on the left-
+  -- hand side. If the right- hand side does not evaluate to a constant (for example, because it
+  -- contains one or more free variables) the program should terminate with a runtime error as if by
+  -- invoking 'errorUninstantiatedVariables'. The zero-overhead version is 'proveEqual'.
+  tryEqual :: TermEntry a => Term a -> Term a -> m ProofResult
+  -- | Attempt to prove one 'Term' is less than another. No new unifications are created. The
+  -- resulting computation should evaluate both terms and, if successful, succeed if the evaluated
+  -- left-hand side compares less than the evaluated right-hand side. If /either/ side does not
+  -- evaluate to a constant, the program should terminate with a runtime error as if by invoking
+  -- 'errorUninstantiatedVariables'. The zero-overhead version is 'proveLessThan'.
+  tryLessThan :: (TermEntry a, Ord a) => Term a -> Term a -> m ProofResult
+  -- | Attempt to prove the negation of a goal. No new unifications are created. The resulting
+  -- computation should either fail with 'mzero' (if the negated goal succeeds at least once) or
+  -- produce a trivial proof of the negation of the goal. The zero-overhead version is
+  -- 'proveNot'.
+  tryNot :: Goal -> m ProofResult
+  -- | Attempt to prove the conjunction of two goals. The resulting computation should succeed,
+  -- emitting a 'ProvedAnd' result with subproofs for each subgoal, if and only if both subgoals
+  -- succeed. Further, it is important that unifications made while proving the left-hand side are
+  -- applied to the right-hand side before proving it. The zero-overhead version is 'proveAnd'.
+  tryAnd :: Goal -> Goal -> m ProofResult
+  -- | Attempt to prove the first subgoal in a disjunction. The resulting computation should either
+  -- fail with 'mzero', or emit a 'ProvedLeft' proof for each time the left subgoal succeeds. The
+  -- zero-overhead version is 'proveOrLeft'.
+  tryOrLeft :: Goal -> Goal -> m ProofResult
+  -- | Attempt to prove the second subgoal in a disjunction. The resulting computaiton should have
+  -- the same semantics as 'tryOr', modulo effects in the underlying monad and the fact that it
+  -- emits 'provedRight' proofs rather than 'provedLeft' proofs. The zero-overhead version is
+  -- 'proveOrRight'.
+  tryOrRight :: Goal -> Goal -> m ProofResult
+  -- | Emit a proof of 'Top'. This computation should always succeed with 'ProvedTop', perhaps after
+  -- performing side-effects in the monad. The zero- overhead version is 'proveTop'.
+  tryTop :: m ProofResult
+  -- | Attempt to prove 'Bottom'. This computation should always fail with 'mzero', perhaps after
+  -- performing effects in the monad. The zero-overhead version is 'proveBottom'.
+  tryBottom :: m ProofResult
+  -- | Attempt to prove an 'Alternatives' goal. In addition to any effects performed in the monad,
+  -- this computation should have the following semantics:
+  --
+  --   1. Obtain all solutions of the inner goal, as if through 'runHspl'.
+  --   2. For each solution, apply the unifier to the template 'Term' (first argument).
+  --   3. Attempt to unify the resulting list with the output 'Term' (third argument).
+  --
+  -- The proof should succeed if and only if step 3 succeeds. In particular, note that the failure
+  -- of the inner goal does not imply the failure of the proof. It should simply try to unify an
+  -- empty list with the output term.
+  --
+  -- The zero-overhead version is 'proveAlternatives'.
+  tryAlternatives :: TermEntry a => Term a -> Goal -> Term [a] -> m ProofResult
+  -- | Attempt to prove a 'Once' goal. This computation should extract the first 'ProofResult' from
+  -- the inner goal and return it. It should ignore any further solutions to the inner goal. The
+  -- zero-overhead version is 'proveOnce'.
+  tryOnce :: Goal -> m ProofResult
+  -- | Computation to be invoked when a goal fails because there are no matching clauses. This
+  -- computation should result in 'mzero', but may perform effects in the underlying monad first.
+  failUnknownPred :: Predicate -> m ProofResult
+  -- | Computation to be invoked when attempting to evaluate a 'Term' which contains ununified
+  -- variables. As the type suggests, this should result in a call to 'error'.
+  errorUninstantiatedVariables :: m a
 
-{- $prover
-The basic algorithm is fairly simple. We maintain a set of goals which need to be proven. Initially,
-this set consists only of the client's input goal. While the set is not empty, we remove a goal and
-find all clauses in the program whose positive literal is the same predicate (name and type) as the
-current goal. For each such alternative, we attempt to unify the goal with the positive literal. If
-unification succeeds, we apply the unifier to the negative literal of the clause and add that
-literal to the set of goals. If unification fails or if there are no matching clauses, the goal
-fails and we backtrack until we reach a choice point, at which we try the next alternative goal. If
-a goal fails and all choice-points have been exhaustively tried, then the whole proof fails. If a
-goal succeeds and there are untried choice-points, we backtrack and generate additional proofs if
-possible.
+instance Monad m => MonadSolver (SolverT bs gs m) where
+  tryPredicate = provePredicate
+  retryPredicate = provePredicate
+  tryUnifiable = proveUnifiable
+  tryIdentical = proveIdentical
+  tryEqual = proveEqual
+  tryLessThan = proveLessThan
+  tryNot = proveNot
+  tryAnd = proveAnd
+  tryOrLeft = proveOrLeft
+  tryOrRight = proveOrRight
+  tryTop = proveTop
+  tryBottom = proveBottom
+  tryAlternatives = proveAlternatives
+  tryOnce = proveOnce
+  failUnknownPred = const mzero
+  errorUninstantiatedVariables = error "Variables are not sufficiently instantiated."
 
-Non-predicate goals have different semantics:
-
-* For 'CanUnify' goals, instead of looking for matching clauses and adding new subgoals, we simply
-  try to find a unifier for the relevant terms and succeed or fail accordingly.
-* For 'Identical' goals, we compare the terms using the '==' operator for 'Term' and succeed or fail
-  if the result is 'True' or 'False', respectively.
-* For 'Equal' goals, we evaluate the right-hand side using 'fromTerm'. If that succeeds, we convert
-  the now-simplified constant back to its abstract 'Term' representation using 'toTerm', and then
-  attempt to unify that 'Term' with the left-hand side.
-* For 'LessThan' goals, we evaluate both sides and compare the results using '<'.
-* For 'Not' goals, we attempt to prove the negated goal, and fail if the inner proof succeeds or
-  vice versa.
-* For 'And' goals, we first attempt to prove the left-hand side. If that succeeds, we apply the
-  resulting unifier to the right-hand side and then attempt to prove the unified goal.
-* For 'Or' goals, we introduce a choice-point and nondeterministically attempt to prove both
-  subgoals. If either subgoal succeeds, the proof will succeed at least once. If both succeed, the
-  prover will backtrack over both possible alternatives, succeeding once for each time either
-  subgoal suceeds.
-* For 'Top', we simply emit a trivial proof with an empty 'Unifier'.
-* For 'Bottom', we immediately fail.
-
-There is an additional layer of complexity here. We do not proceed from one step of the algorithm to
-the next directly. Instead, at each intermediate step, we invoke one of the continuation functions
-defined in 'SolverCont'. With the right choice of continuations (see 'solverCont') we can move from
-one step to the next seamlessly, running the basic algorithm with no overhead. However, these
-continuations make it possible to hook additional behavior into crucial events in the algorithm,
-which make possible things like the interactive debugger in "Control.Hspl.Internal.Debugger".
--}
-
--- | Unified structure containing all of the continuations which may be invoked by the prover
--- algorithm.
-data SolverCont (m :: * -> *) =
-  SolverCont {
-               -- | Continuation to be invoked when attempting to prove a predicate using the first
-               -- alternative (the first 'HornClause' with a matching positive literal). The
-               -- resulting computation in the 'SolverT' monad should either fail with 'mzero' or
-               -- produce a proof of the predicate. The zero-overhead version of this continuation
-               -- is 'provePredicateWith'.
-               tryPredicate :: Predicate -> HornClause -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove a predicate using subsequent
-               -- alternatives. This continuation should have the same semantics as 'tryPredicate',
-               -- modulo effects in the underlying monad. The zero-overhead version of this
-               -- continuation is 'provePredicateWith'.
-             , retryPredicate :: Predicate -> HornClause -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove that two terms can be
-               -- unified. The resulting computation in the 'SolverT' monad should either fail with
-               -- 'mzero' or produce a unifier and a trivial proof of the unified terms. The zero-
-               -- overhead version of this continuation is 'proveUnifiableWith'.
-             , tryUnifiable :: forall a. TermEntry a => Term a -> Term a -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove that two terms are identical
-               -- after applying the current unifier. No new unifications are created. The resulting
-               -- computation in the 'SolverT' monad should either fail with 'mzero' or produce a
-               -- trivial proof of the equality of the terms. The zero-overhead version of this
-               -- continuation is 'proveIdenticalWith'.
-             , tryIdentical :: forall a. TermEntry a => Term a -> Term a -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove equality of terms. The
-               -- resulting computation in the 'SolverT' monad should evaluate the right-hand side
-               -- and, if successful, attempt to unify the resulting constant with the 'Term' on the
-               -- left-hand side. If the right-hand side does not evaluate to a constant (for
-               -- example, because it contains one or more free variables) the program should
-               -- terminate with a runtime error. The zero-overhead version of this continuation is
-               -- 'proveEqualWith'.
-             , tryEqual :: forall a. TermEntry a => Term a -> Term a -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove one 'Term' is less than
-               -- another. No new unifications are created. The resulting computation in the
-               -- 'SolverT' monad should evaluate both terms and, if successful, succeed if the
-               -- evaluated left-hand side compares less than the evaluated right-hand side. If
-               -- /either/ side does not evaluate to a constant, the program should terminate with a
-               -- runtime error. The zero-overhead version of this continuation is
-               -- 'proveLessThanWith'.
-             , tryLessThan :: forall a. (TermEntry a, Ord a) => Term a -> Term a -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove the negation of a goal. No
-               -- new unifications are created. The resulting computation in the 'SolverT' monad
-               -- should either fail with 'mzero' (if the negated goal succeeds at least once) or
-               -- produce a trivial proof of the negation of the goal. The zero-overhead version of
-               -- this continuation is 'proveNotWith'.
-             , tryNot :: Goal -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove the conjunction of two
-               -- goals. The resulting computation in the 'SolverT' monad should succeed, emitting a
-               -- 'ProvedAnd' result with subproofs for each subgoal, if and only if both subgoals
-               -- succeed. Further, it is important that unifications made while proving the left-
-               -- hand side are applied to the right-hand side before proving it. The zero-overhead
-               -- version of this continuation is 'proveAndWith'.
-             , tryAnd :: Goal -> Goal -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove the first subgoal in a
-               -- disjunction. The resulting computation in the 'SolverT' monad should either fail
-               -- with 'mzero', or emit 'ProvedLeft' and 'ProvedRight' proofs for each time the left
-               -- and right subgoals succeed, respectively. The zero-overhead version of this
-               -- continuation is 'proveOrLeftWith'.
-             , tryOrLeft :: Goal -> Goal -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove the second subgoal in a
-               -- disjunction. This continuation should have the same semantics as 'tryOr', modulo
-               -- effects in the underlying monad. The zero-overhead version of this continuation is
-               -- 'proveOrRightWith'.
-             , tryOrRight :: Goal -> Goal -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove 'Top'. This continuation
-               -- should always succeed with 'ProvedTop', perhaps after performing effects in the
-               -- underlying monad. The zero-overhead version of this continuation is
-               -- 'proveTopWith'.
-             , tryTop :: SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove 'Bottom'. This continuation
-               -- should always fail with 'mzero', perhaps after performing effects in the
-               -- underlying monad. The zero-overhead version of this continuation is
-               -- 'proveBottomWith'.
-             , tryBottom :: SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove an 'Alternatives' goal. In
-               -- addition to any effects performed in the underlying monad, this continuation
-               -- should have the following semantics:
-               --
-               --   1. Obtain all solutions of the inner goal, as if through 'runHspl'.
-               --   2. For each solution, apply the unifier to the template 'Term' (first argument).
-               --   3. Attempt to unify the resulting list with the output 'Term' (third argument).
-               --
-               -- The proof should succeed if and only if step 3. succeeds. In particular, note that
-               -- the failure of the inner goal does not imply the failure of the proof. It should
-               -- simply try to unify an empty list with the output term.
-               --
-               -- The zero-overhead version of this continuation is 'proveAlternativesWith'.
-             , tryAlternatives :: forall a. TermEntry a =>
-                                  Term a -> Goal -> Term [a] -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to prove a 'Once' goal'. This
-               -- continuation should extract the first 'ProofResult' from the inner goal using, for
-               -- example, 'proveWith', and return it. It should ignore any further solutions to the
-               -- inner goal. The zero-overhead version of this continuation is 'proveOnceWith'.
-             , tryOnce :: Goal -> SolverT m ProofResult
-               -- | Continuation to be invoked when a goal fails because there are no matching
-               -- clauses. This computation should result in 'mzero', but may perform effects in the
-               -- underlying monad first.
-             , failUnknownPred :: Predicate -> SolverT m ProofResult
-               -- | Continuation to be invoked when attempting to evaluate a 'Term' which contains
-               -- ununified variables. This is a runtime error.
-             , errorUninstantiatedVariables :: forall a. a
-             }
-
--- | Continuations which, when passed to 'proveWith', will allow statements to be proven with no
--- additional behavior and no interprative overhead.
-solverCont :: SolverCont Identity
-solverCont = SolverCont { tryPredicate = provePredicateWith solverCont
-                        , retryPredicate = provePredicateWith solverCont
-                        , tryUnifiable = proveUnifiableWith solverCont
-                        , tryIdentical = proveIdenticalWith solverCont
-                        , tryEqual = proveEqualWith solverCont
-                        , tryLessThan = proveLessThanWith solverCont
-                        , tryNot = proveNotWith solverCont
-                        , tryAnd = proveAndWith solverCont
-                        , tryOrLeft = proveOrLeftWith solverCont
-                        , tryOrRight = proveOrRightWith solverCont
-                        , tryTop = proveTopWith solverCont
-                        , tryBottom = proveBottomWith solverCont
-                        , tryAlternatives = proveAlternativesWith solverCont
-                        , tryOnce = proveOnceWith solverCont
-                        , failUnknownPred = const mzero
-                        , errorUninstantiatedVariables =
-                            error "Variables are not sufficiently instantiated."
-                        }
-
--- | Run the minimal, zero-overhead version of the algorithm by supplying the appropriate
--- continuations to 'proveWith'.
-prove :: Goal -> Solver ProofResult
-prove = proveWith solverCont
-
--- | Produce a proof of the predicate from the given 'HornClause'. The clause's positive literal
--- should match with the predicate; that is, it should have the same name and type. If the positive
--- literal also unifies with the predicate, then the unifier is applied to each negative literal,
--- and each unified negative literal is proven as a subgoal using the given continuations.
-provePredicateWith :: Monad m => SolverCont m -> Predicate -> HornClause -> SolverT m ProofResult
-provePredicateWith cont p c = do
+-- | Zero-overhead version of 'tryPredicate' and 'retryPredicate'.
+provePredicate :: MonadSolver m => Predicate -> HornClause -> m ProofResult
+provePredicate p c = do
   (g, u) <- getSubGoal p c
   case g of
     -- Exit early (without invoking any continuations) if the subgoal is Top. This isn't strictly
@@ -461,117 +404,111 @@ provePredicateWith cont p c = do
     -- further calls. It just makes the control flow a bit more intuitive (i.e. more similar to
     -- Prolog's)
     Top -> return (Resolved (unifyPredicate u p) ProvedTop, u)
-    _ -> do (subProof, u') <- proveWith cont g
+    _ -> do (subProof, u') <- prove g
             let netU = u `compose` u'
             return (Resolved (unifyPredicate netU p) subProof, netU)
-  where getSubGoal p' c' = do mg <- lift $ unify p' c'
+  where getSubGoal p' c' = do mg <- unify p' c'
                               case mg of
                                 Just g -> return g
                                 Nothing -> mzero
 
--- | Check if the given terms can unify. If so, produce the unifier and a trivial proof of their
--- unifiability. Use the given continuations when proving subgoals.
-proveUnifiableWith :: (TermEntry a, Monad m) =>
-                      SolverCont m -> Term a -> Term a -> SolverT m ProofResult
-proveUnifiableWith _ t1 t2 = case mgu t1 t2 of
+-- | Zero-overhead version of 'tryUnifiable'.
+proveUnifiable :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m ProofResult
+proveUnifiable t1 t2 = case mgu t1 t2 of
   Just u -> return (Unified (unifyTerm u t1) (unifyTerm u t2), u)
   Nothing -> mzero
 
--- | Check if the given terms are identical (i.e. they have already been unified). If so, produce a
--- trivial proof of their equality. Use the given continuations when proving subgoals.
-proveIdenticalWith :: (TermEntry a, Monad m) =>
-                      SolverCont m -> Term a -> Term a -> SolverT m ProofResult
-proveIdenticalWith _ t1 t2 = if t1 == t2
+-- | Zero-overhead version of 'tryIdentical'.
+proveIdentical :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m ProofResult
+proveIdentical t1 t2 = if t1 == t2
   then return (Identified t1 t2, mempty)
   else mzero
 
--- | Check if the value of the right-hand side unifies with the left-hand side.
-proveEqualWith :: (TermEntry a, Monad m) =>
-                  SolverCont m -> Term a -> Term a -> SolverT m ProofResult
-proveEqualWith cont lhs rhs = case mgu lhs (eval rhs) of
+-- | Zero-overhead version of 'tryEqual'.
+proveEqual :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m ProofResult
+proveEqual lhs rhs = do
+  rhs' <- eval rhs
+  case mgu lhs rhs' of
     Just u -> return (Equated (unifyTerm u lhs) (unifyTerm u rhs), u)
     Nothing -> mzero
-  where eval :: TermEntry a => Term a -> Term a
-        eval t = case fromTerm t of
-          Just t' -> toTerm t'
-          Nothing -> errorUninstantiatedVariables cont
+  where eval t = case fromTerm t of
+          Just t' -> return $ toTerm t'
+          Nothing -> errorUninstantiatedVariables
 
--- | Check if the left-hand side is less than the right-hand side. No new bindings are created.
-proveLessThanWith :: (TermEntry a, Ord a, Monad m) =>
-                     SolverCont m -> Term a -> Term a -> SolverT m ProofResult
-proveLessThanWith cont lhs rhs = case (fromTerm lhs, fromTerm rhs) of
+-- | Zero-overhead version of 'tryLessThan'.
+proveLessThan :: (TermEntry a, Ord a, MonadSolver m) => Term a -> Term a -> m ProofResult
+proveLessThan lhs rhs = case (fromTerm lhs, fromTerm rhs) of
   (Just l, Just r) | l < r -> return (ProvedLessThan l r, mempty)
   (Just _, Just _) -> mzero
-  _ -> errorUninstantiatedVariables cont
+  _ -> errorUninstantiatedVariables
 
--- | Succeed if and only if the given 'Goal' fails. No new bindings are created in the process.
-proveNotWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
-proveNotWith cont g = ifte (once $ proveWith cont g)
-                           (const mzero)
-                           (return (Negated g, mempty))
+-- | Zero-overhead version of 'tryNot'.
+proveNot :: MonadSolver m => Goal -> m ProofResult
+proveNot g = lnot (prove g) >> return (Negated g, mempty)
 
--- | Succeed if and only if both goals succeed in sequence. Unifications made while proving the
--- first goal will be applied to the second goal before proving it.
-proveAndWith :: Monad m => SolverCont m -> Goal -> Goal -> SolverT m ProofResult
-proveAndWith cont g1 g2 =
-  do (proofLeft, uLeft) <- proveWith cont g1
-     (proofRight, uRight) <- proveWith cont $ unifyGoal uLeft g2
+-- | Zero-overhead version of 'tryAnd'.
+proveAnd :: MonadSolver m => Goal -> Goal -> m ProofResult
+proveAnd g1 g2 =
+  do (proofLeft, uLeft) <- prove g1
+     (proofRight, uRight) <- prove $ unifyGoal uLeft g2
      return (ProvedAnd proofLeft proofRight, uLeft `compose` uRight)
 
--- | Succeed if and only if the first of the given 'Goal's succeeds.
-proveOrLeftWith :: Monad m => SolverCont m -> Goal -> Goal -> SolverT m ProofResult
-proveOrLeftWith cont g1 g2 =
-  do (proof, u) <- proveWith cont g1
+-- | Zero-overhead version of 'tryOrLeft'.
+proveOrLeft :: MonadSolver m => Goal -> Goal -> m ProofResult
+proveOrLeft g1 g2 =
+  do (proof, u) <- prove g1
      return (ProvedLeft proof g2, u)
 
--- | Succeed if and only if the second of the given 'Goal's succeeds.
-proveOrRightWith :: Monad m => SolverCont m -> Goal -> Goal -> SolverT m ProofResult
-proveOrRightWith cont g1 g2 =
-  do (proof, u) <- proveWith cont g2
+-- | Zero-overhead version of 'tryOrRight'.
+proveOrRight :: MonadSolver m => Goal -> Goal -> m ProofResult
+proveOrRight g1 g2 =
+  do (proof, u) <- prove g2
      return (ProvedRight g1 proof, u)
 
--- | Always succeed, creating no new bindings.
-proveTopWith :: Monad m => SolverCont m -> SolverT m ProofResult
-proveTopWith _ = return (ProvedTop, mempty)
+-- | Zero-overhead version of 'tryTop'.
+proveTop :: Monad m => m ProofResult
+proveTop = return (ProvedTop, mempty)
 
--- | Always fail.
-proveBottomWith :: Monad m => SolverCont m -> SolverT m ProofResult
-proveBottomWith _ = mzero
+-- | Zero-overhead version of 'tryBottom'.
+proveBottom :: MonadSolver m => m ProofResult
+proveBottom = mzero
 
--- | Succeed if and only if the list term unifies with the alternatives of the template term when
--- proving the given goal.
-proveAlternativesWith :: (Monad m, TermEntry a) =>
-                         SolverCont m -> Term a -> Goal -> Term [a] -> SolverT m ProofResult
-proveAlternativesWith cont x g xs = do
-  results <- solverLift $ observeAllSolverT $ proveWith cont g
+-- | Zero-overhead version of 'tryAlternatives'.
+proveAlternatives :: (MonadSolver m, TermEntry a) => Term a -> Goal -> Term [a] -> m ProofResult
+proveAlternatives x g xs = do
+  results <- getAlternatives $ prove g
   let (ps, us) = unzip results
   let alternatives = toTerm $ map (`unifyTerm` x) us
   let mu = mgu xs alternatives
   guard $ isJust mu
   let u = fromJust mu
   return (FoundAlternatives x g (unifyTerm u xs) ps, u)
+  where getAlternatives m = do split <- msplit m
+                               case split of
+                                  Just (a, fk) -> (a:) `liftM` getAlternatives fk
+                                  Nothing -> return []
 
--- | Produce at most one proof of the inner goal.
-proveOnceWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
-proveOnceWith cont g = do
-  (p, u) <- once $ proveWith cont g
+-- | Zero-overhead version of 'tryOnce'.
+proveOnce :: MonadSolver m => Goal -> m ProofResult
+proveOnce g = do
+  (p, u) <- once $ prove g
   return (ProvedOnce p, u)
 
 -- | Produce a proof of the goal. This function will either fail, or backtrack over all possible
 -- proofs. It will invoke the appropriate continuations in the given 'SolverCont' whenever a
 -- relevant event occurs during the course of the proof.
-proveWith :: Monad m => SolverCont m -> Goal -> SolverT m ProofResult
-proveWith cont g = case g of
-  PredGoal p [] -> failUnknownPred cont p
-  PredGoal p (c:cs) -> tryPredicate cont p c `mplus` msum (map (retryPredicate cont p) cs)
-  CanUnify t1 t2 -> tryUnifiable cont t1 t2
-  Identical t1 t2 -> tryIdentical cont t1 t2
-  Equal t1 t2 -> tryEqual cont t1 t2
-  LessThan t1 t2 -> tryLessThan cont t1 t2
-  Not g' -> tryNot cont g'
-  And g1 g2 -> tryAnd cont g1 g2
-  Or g1 g2 -> tryOrLeft cont g1 g2 `mplus` tryOrRight cont g1 g2
-  Top -> tryTop cont
-  Bottom -> tryBottom cont
-  Alternatives x g' xs -> tryAlternatives cont x g' xs
-  Once g' -> tryOnce cont g'
+prove :: MonadSolver m => Goal -> m ProofResult
+prove g = case g of
+  PredGoal p [] -> failUnknownPred p
+  PredGoal p (c:cs) -> tryPredicate p c `mplus` msum (map (retryPredicate p) cs)
+  CanUnify t1 t2 -> tryUnifiable t1 t2
+  Identical t1 t2 -> tryIdentical t1 t2
+  Equal t1 t2 -> tryEqual t1 t2
+  LessThan t1 t2 -> tryLessThan t1 t2
+  Not g' -> tryNot g'
+  And g1 g2 -> tryAnd g1 g2
+  Or g1 g2 -> tryOrLeft g1 g2 `mplus` tryOrRight g1 g2
+  Top -> tryTop
+  Bottom -> tryBottom
+  Alternatives x g' xs -> tryAlternatives x g' xs
+  Once g' -> tryOnce g'

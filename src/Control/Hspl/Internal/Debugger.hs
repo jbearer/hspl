@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 #if __GLASGOW_HASKELL__ < 710
 {-# LANGUAGE OverlappingInstances #-}
@@ -56,21 +57,18 @@ module Control.Hspl.Internal.Debugger (
   , SolverCoroutine
   , solverCoroutine
   , DebugSolverT
-  , DebugCont
+  -- , DebugCont
   -- * Entry points
   , debug
   , unsafeDebug
   ) where
 
-#if __GLASGOW_HASKELL__ < 710
 import           Control.Applicative hiding ((<|>))
-#endif
 import           Control.Exception (finally)
 import           Control.Monad.Coroutine
 import           Control.Monad.Coroutine.SuspensionFunctors hiding (yield)
 import qualified Control.Monad.Coroutine.SuspensionFunctors as CR
 import           Control.Monad.Identity
-import           Control.Monad.Logic
 import           Control.Monad.State
 import           Data.Char
 import           Data.List
@@ -81,9 +79,11 @@ import           System.IO.Unsafe
 import           Text.Parsec hiding (Error, tokens)
 
 import Control.Hspl.Internal.Ast hiding (predicate)
+import Control.Hspl.Internal.Logic
 import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Tuple
 import Control.Hspl.Internal.UI
+import Control.Hspl.Internal.Unification (MonadUnification)
 
 -- | Structure used to specify configuration options for the debugger.
 data DebugConfig = DebugConfig {
@@ -261,36 +261,68 @@ type SolverCoroutine m = Coroutine (Yield DebugContext) m
 
 -- | Monad transformer which, when executed using 'observeAllSolverT' or 'observeManySolverT',
 -- yields a 'SolverCoroutine'.
-type DebugSolverT m = SolverT (SolverCoroutine m)
+newtype DebugSolverT m a = DebugSolverT { unDebugSolverT :: SolverT [Goal] () (SolverCoroutine m) a }
+  deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadLogic, MonadLogicCut, MonadUnification)
+
+-- | Same as callWith, but for unitary provers.
+callWith :: Monad m => MsgType -> DebugSolverT m ProofResult -> DebugSolverT m ProofResult
+callWith m cont = do
+  s <- getBacktracking
+  let dc = DC { stack = s, status = m, msg = formatGoal (head s) }
+  yield dc
+  ifte cont
+    (\result -> yield dc { status = Exit, msg = formatGoal (getSolution result) } >> return result)
+    (yield dc { status = Fail } >> mzero)
+
+-- | Attempt to prove a subgoal and log 'Call', 'Exit', and 'Fail' messages as appropriate.
+call :: Monad m => DebugSolverT m ProofResult -> DebugSolverT m ProofResult
+call = callWith Call
+
+-- | Run a 'DebugSolverT' action with the given goal at the top of the goal stack.
+goalFrame :: Monad m => Goal -> DebugSolverT m a -> DebugSolverT m a
+goalFrame g m = modifyBacktracking (g:) *> m <* modifyBacktracking tail
+
+instance MonadTrans DebugSolverT where
+  lift = DebugSolverT . lift . lift
+
+instance Monad m => MonadLogicState [Goal] () (DebugSolverT m) where
+  stateGlobal = DebugSolverT . stateGlobal
+  stateBacktracking = DebugSolverT . stateBacktracking
+
+instance Monad m => MonadSolver (DebugSolverT m) where
+  tryPredicate p c = goalFrame (PredGoal p []) (call $ provePredicate p c)
+  retryPredicate p c = goalFrame (PredGoal p []) (callWith Redo $ provePredicate p c)
+  tryUnifiable t1 t2 = goalFrame (CanUnify t1 t2) (call $ proveUnifiable t1 t2)
+  tryIdentical t1 t2 = goalFrame (Identical t1 t2) (call $ proveIdentical t1 t2)
+  tryEqual lhs rhs = goalFrame (Equal lhs rhs) (call $ proveEqual lhs rhs)
+  tryLessThan lhs rhs = goalFrame (LessThan lhs rhs) (call $ proveLessThan lhs rhs)
+  tryNot g = goalFrame (Not g) (call $ proveNot g)
+  tryAnd = proveAnd -- No 'call' here, we don't trace the 'And' itself. To the user, proving a
+                    -- conjunction just looks like proving each subgoal in sequence.
+  tryOrLeft g1 g2 = goalFrame (Or g1 g2) (call $ proveOrLeft g1 g2)
+  tryOrRight g1 g2 = goalFrame (Or g1 g2) (callWith Redo $ proveOrRight g1 g2)
+  tryTop = goalFrame Top (call proveTop)
+  tryBottom = goalFrame Bottom (call proveBottom)
+  tryAlternatives x g xs = goalFrame (Alternatives x g xs) (call $ proveAlternatives x g xs)
+  tryOnce g = goalFrame (Once g) (call $ proveOnce g)
+
+  failUnknownPred p@(Predicate name _) = do
+    s <- getsBacktracking (PredGoal p [] :)
+    -- Since there are no clauses, there will be no corresponding 'Call' message, rather we will fail
+    -- immediately. To make the output a little more intuitive, we explicitly log a 'Call' here.
+    yield DC { stack = s, status = Call, msg = formatGoal (head s) }
+    yield DC { stack = s
+             , status = Error
+             , msg = "Unknown predicate \"" ++ name ++ " :: " ++ formatType (predType p) ++ "\""
+             }
+    mzero
+
+  errorUninstantiatedVariables = getBacktracking >>= \s -> error $
+    "Variables are not sufficiently instantiated.\nGoal stack:\n" ++ showStack Nothing s
 
 -- | Suspend a 'SolverCoroutine' with the given context.
 yield :: Monad m => DebugContext -> DebugSolverT m ()
-yield dc = solverLift $ CR.yield dc
-
--- | Instance of the 'SolverCont' continuation structure which uses a 'SolverCoroutine' as the
--- underlying monad.
-type DebugCont m = SolverCont (SolverCoroutine m)
-
--- | Continuation functions which run the debugger one step at a time, yielding control and context
--- at each important event.
-debugCont :: Monad m => [Goal] -> DebugCont m
-debugCont s = SolverCont { tryPredicate = debugFirstAlternative s
-                         , retryPredicate = debugNextAlternative s
-                         , tryUnifiable = debugUnifiable s
-                         , tryIdentical = debugIdentical s
-                         , tryEqual = debugEqual s
-                         , tryLessThan = debugLessThan s
-                         , tryNot = debugNot s
-                         , tryAnd = debugAnd s
-                         , tryOrLeft = debugOrLeft s
-                         , tryOrRight = debugOrRight s
-                         , tryTop = debugTop s
-                         , tryBottom = debugBottom s
-                         , tryAlternatives = debugAlternatives s
-                         , tryOnce = debugOnce s
-                         , failUnknownPred = debugFailUnknownPred s
-                         , errorUninstantiatedVariables = debugErrorUninstantiatedVariables s
-                         }
+yield dc = DebugSolverT $ lift $ CR.yield dc
 
 -- | Format a goal stack in a manner suitable for displaying to the user. If a number @n@ is
 -- specified, then just the top @n@ goals are shown from the stack. Otherwise, the entire stack is
@@ -503,154 +535,9 @@ prompt context@DC { stack = s, status = mtype, msg = m } = do
     printLine m
     repl context
 
--- | Same as callWith, but for unitary provers.
-callWith0 :: Monad m => MsgType -> [Goal] -> (DebugCont m -> DebugSolverT m ProofResult) ->
-                        DebugSolverT m ProofResult
-callWith0 m s cont = do
-  let dc = DC { stack = s, status = m, msg = formatGoal (head s) }
-  yield dc
-  ifte (cont $ debugCont s)
-    (\result -> yield dc { status = Exit, msg = formatGoal (getSolution result) } >> return result)
-    (yield dc { status = Fail } >> mzero)
-
--- | Attempt to prove a subgoal, logging a message of the given type on entry and either 'Exit' or
--- 'Fail' as appropriate.
-callWith :: Monad m => MsgType -> [Goal] -> (DebugCont m -> a -> DebugSolverT m ProofResult) ->
-            a -> DebugSolverT m ProofResult
-callWith m s cont g = callWith0 m s (\c -> cont c g)
-
--- | Same as call, but for 2-ary provers.
-callWith2 :: Monad m => MsgType -> [Goal] -> (DebugCont m -> a -> b -> DebugSolverT m ProofResult) ->
-                        a -> b -> DebugSolverT m ProofResult
-callWith2 m s cont a b = callWith m s (\c (x, y) -> cont c x y) (a, b)
-
--- | Same as call, but for 3-ary provers.
-callWith3 :: Monad m => MsgType -> [Goal] ->
-                        (DebugCont m -> a -> b -> c -> DebugSolverT m ProofResult) ->
-                        a -> b -> c -> DebugSolverT m ProofResult
-callWith3 m s cont a b c = callWith m s (\cont' (x, y, z) -> cont cont' x y z) (a, b, c)
-
--- | Attempt to prove a subgoal and log 'Call', 'Exit', and 'Fail' messages as appropriate.
-call :: Monad m =>
-        [Goal] -> (DebugCont m -> a -> DebugSolverT m ProofResult) -> a -> DebugSolverT m ProofResult
-call = callWith Call
-
--- | Same as call, but for 2-ary provers.
-call2 :: Monad m => [Goal] -> (DebugCont m -> a -> b -> DebugSolverT m ProofResult) ->
-                    a -> b -> DebugSolverT m ProofResult
-call2 = callWith2 Call
-
--- | Same as call, but for 3-ary provers.
-call3 :: Monad m => [Goal] -> (DebugCont m -> a -> b -> c -> DebugSolverT m ProofResult) ->
-                    a -> b -> c -> DebugSolverT m ProofResult
-call3 = callWith3 Call
-
--- | Same as call, but for unitary provers.
-call0 :: Monad m => [Goal] -> (DebugCont m -> DebugSolverT m ProofResult) -> DebugSolverT m ProofResult
-call0 = callWith0 Call
-
--- | Continuation hook for trying the first alternative clause which matches the goal.
-debugFirstAlternative :: Monad m => [Goal] -> Predicate -> HornClause -> DebugSolverT m ProofResult
-debugFirstAlternative s p c =
-  let s' = PredGoal p [] : s
-  in callWith2 Call s' provePredicateWith p c
-
--- | Continuation hook for trying additional alternative clauses which match the goal.
-debugNextAlternative :: Monad m => [Goal] -> Predicate -> HornClause -> DebugSolverT m ProofResult
-debugNextAlternative s p c =
-  let s' = PredGoal p [] : s
-  in callWith2 Redo s' provePredicateWith p c
-
--- | Continaution hook for proving a 'CanUnify' goal.
-debugUnifiable :: (Monad m, TermEntry a) => [Goal] -> Term a -> Term a -> DebugSolverT m ProofResult
-debugUnifiable s t1 t2 =
-  let s' = CanUnify t1 t2 : s
-  in call2 s' proveUnifiableWith t1 t2
-
--- | Continaution hook for proving an 'Identical' goal.
-debugIdentical :: (Monad m, TermEntry a) => [Goal] -> Term a -> Term a -> DebugSolverT m ProofResult
-debugIdentical s t1 t2 =
-  let s' = Identical t1 t2 : s
-  in call2 s' proveIdenticalWith t1 t2
-
--- | Continuation hook for proving an 'Equal' goal.
-debugEqual :: (Monad m, TermEntry a) => [Goal] -> Term a -> Term a -> DebugSolverT m ProofResult
-debugEqual s lhs rhs =
-  let s' = Equal lhs rhs : s
-  in call2 s' proveEqualWith lhs rhs
-
--- | Continuation hook for proving a 'LessThan' goal.
-debugLessThan :: (Monad m, TermEntry a, Ord a) =>
-                 [Goal] -> Term a -> Term a -> DebugSolverT m ProofResult
-debugLessThan s lhs rhs =
-  let s' = LessThan lhs rhs : s
-  in call2 s' proveLessThanWith lhs rhs
-
--- | Continuation hook for proving a 'Not' goal.
-debugNot :: Monad m => [Goal] -> Goal -> DebugSolverT m ProofResult
-debugNot s g =
-  let s' = Not g : s
-  in call s' proveNotWith g
-
-debugAnd :: Monad m => [Goal] -> Goal -> Goal -> DebugSolverT m ProofResult
--- No 'call' here, we don't trace the 'And' itself. To the user, proving a conjunction just loooks
--- like proving each subgoal in sequence.
-debugAnd s = proveAndWith (debugCont s)
-
--- | Continuation hook for proving one branch of an 'Or' goal.
-debugOrLeft :: Monad m => [Goal] -> Goal -> Goal -> DebugSolverT m ProofResult
-debugOrLeft s g1 g2 =
-  let s' = Or g1 g2 : s
-  in call2 s' proveOrLeftWith g1 g2
-
-debugOrRight :: Monad m => [Goal] -> Goal -> Goal -> DebugSolverT m ProofResult
-debugOrRight s g1 g2 =
-  let s' = Or g1 g2 : s
-  in callWith2 Redo s' proveOrRightWith g1 g2
-
-debugTop :: Monad m => [Goal] -> DebugSolverT m ProofResult
-debugTop s =
-  let s' = Top : s
-  in call0 s' proveTopWith
-
-debugBottom :: Monad m => [Goal] -> DebugSolverT m ProofResult
-debugBottom s =
-  let s' = Bottom : s
-  in call0 s' proveBottomWith
-
-debugAlternatives :: (Monad m, TermEntry a) =>
-                     [Goal] -> Term a -> Goal -> Term [a] -> DebugSolverT m ProofResult
-debugAlternatives s x g xs =
-  let s' = Alternatives x g xs : s
-  in call3 s' proveAlternativesWith x g xs
-
-debugOnce :: Monad m => [Goal] -> Goal -> DebugSolverT m ProofResult
-debugOnce s g =
-  let s' = Once g : s
-  in call s' proveOnceWith g
-
--- | Continuation hook invoked when a goal with no matching clauses is encountered.
-debugFailUnknownPred :: Monad m => [Goal] -> Predicate -> DebugSolverT m ProofResult
-debugFailUnknownPred s p@(Predicate name _) = do
-  let s' = PredGoal p [] : s
-  -- Since there are no clauses, there will be no corresponding 'Call' message, rather we will fail
-  -- immediately. To make the output a little more intuitive, we explicitly log a 'Call' here.
-  yield DC { stack = s', status = Call, msg = formatGoal (head s') }
-  yield DC { stack = s'
-           , status = Error
-           , msg = "Unknown predicate \"" ++ name ++ " :: " ++ formatType (predType p) ++ "\""
-           }
-  mzero
-
--- | Continuation hook resulting in a runtime error when attempting to evaluate a 'Term' containing
--- ununified variables.
-debugErrorUninstantiatedVariables :: [Goal] -> a
-debugErrorUninstantiatedVariables s = error $
-  "Variables are not sufficiently instantiated.\nGoal stack:\n" ++ showStack Nothing s
-
 -- | A coroutine which controls the HSPL solver, yielding control at every important event.
 solverCoroutine :: Monad m => Goal -> SolverCoroutine m [ProofResult]
-solverCoroutine g = observeAllSolverT $ proveWith (debugCont []) g
+solverCoroutine g = observeAllSolverT (unDebugSolverT $ prove g) [] ()
 
 -- | A coroutine which controls the interactive debugger terminal, periodically yielding control to
 -- the solver.
