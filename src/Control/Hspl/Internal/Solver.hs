@@ -61,6 +61,7 @@ module Control.Hspl.Internal.Solver (
 
 import Control.Applicative
 import Control.Monad.Identity
+import Control.Monad.State
 import Data.Data
 import Data.Maybe
 import Data.Monoid (mempty)
@@ -243,46 +244,45 @@ getAllSolutions = map getSolution
 -- represent various alternative ways of proving the theorem. If there are variables in the goal,
 -- they may unify with different values in each alternative proof.
 runHspl :: Goal -> [ProofResult]
-runHspl g = observeAllSolver (prove g) () ()
+runHspl g = observeAllSolver (prove g) ()
 
 -- | Like 'runHspl', but return at most the given number of proofs.
 runHsplN :: Int -> Goal -> [ProofResult]
-runHsplN n g = observeManySolver n (prove g) () ()
+runHsplN n g = observeManySolver n (prove g) ()
 
 -- | The monad which defines the backtracking control flow of the solver. This type is parameterized
 -- by the type of backtracking and global state, implementing the 'MonadLogicState' interface.
-newtype SolverT bs gs m a = SolverT { unSolverT :: LogicT bs gs (UnificationT m) a }
+newtype SolverT s m a = SolverT { unSolverT :: LogicT s (UnificationT m) a }
   deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadLogic, MonadLogicCut)
 
-instance MonadTrans (SolverT bs gs) where
+instance MonadTrans (SolverT s) where
   lift = SolverT . lift . lift
 
-instance Monad m => MonadUnification (SolverT bs gs m) where
+instance Monad m => MonadUnification (SolverT s m) where
   fresh = SolverT $ lift fresh
 
-instance Monad m => MonadLogicState bs gs (SolverT bs gs m)  where
-  stateGlobal = SolverT . stateGlobal
-  stateBacktracking = SolverT . stateBacktracking
+instance (Monad m, SplittableState s) => MonadState s (SolverT s m) where
+  state = SolverT . state
 
 -- | A non-transformer version of 'SolverT'.
-type Solver bs gs = SolverT bs gs Identity
+type Solver s = SolverT s Identity
 
 -- | Get all results from a 'Solver' computation.
-observeAllSolver :: Solver bs gs a -> bs -> gs -> [a]
-observeAllSolver m bs gs = runIdentity $ observeAllSolverT m bs gs
+observeAllSolver :: SplittableState s => Solver s a -> s -> [a]
+observeAllSolver m s = runIdentity $ observeAllSolverT m s
 
 -- | Get the specified number of results from a 'Solver' computation.
-observeManySolver :: Int -> Solver bs gs a -> bs -> gs -> [a]
-observeManySolver n m bs gs = runIdentity $ observeManySolverT n m bs gs
+observeManySolver :: SplittableState s => Int -> Solver s a -> s -> [a]
+observeManySolver n m s = runIdentity $ observeManySolverT n m s
 
 -- | Run a 'SolverT' transformed computation, and return a computation in the underlying monad for
 -- each solution to the logic computation.
-observeAllSolverT :: Monad m => SolverT bs gs m a -> bs -> gs -> m [a]
-observeAllSolverT m bs gs = runUnificationT $ observeAllLogicT (unSolverT m) bs gs
+observeAllSolverT :: (Monad m, SplittableState s) => SolverT s m a -> s -> m [a]
+observeAllSolverT m s = runUnificationT $ observeAllLogicT (unSolverT m) s
 
 -- | Like 'observeAllSolverT', but limits the number of results returned.
-observeManySolverT :: Monad m => Int -> SolverT bs gs m a -> bs -> gs -> m [a]
-observeManySolverT n m bs gs = runUnificationT $ observeManyLogicT n (unSolverT m) bs gs
+observeManySolverT :: (Monad m, SplittableState s) => Int -> SolverT s m a -> s -> m [a]
+observeManySolverT n m s = runUnificationT $ observeManyLogicT n (unSolverT m) s
 
 -- | This class encapsulates the algorithms required for proving each type of 'Goal'. The proof-
 -- generating algorithm defined by 'prove' uses these functions to prove the goal specified by the
@@ -375,7 +375,7 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   -- variables. As the type suggests, this should result in a call to 'error'.
   errorUninstantiatedVariables :: m a
 
-instance Monad m => MonadSolver (SolverT bs gs m) where
+instance Monad m => MonadSolver (SolverT s m) where
   tryPredicate = provePredicate
   retryPredicate = provePredicate
   tryUnifiable = proveUnifiable

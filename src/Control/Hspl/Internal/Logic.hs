@@ -1,8 +1,8 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -21,13 +21,14 @@ operation. It also adds backtracking state (effects performed in one branch of t
 not visible in a parallel branch).
 
 We provide several mtl-style classes encapsulating the various behaviors, as well as concrete types
-implementing this classes.
+implementing those classes.
 -}
 
 module Control.Hspl.Internal.Logic (
     module Control.Monad
   , module Control.Monad.Trans
   , module Control.Monad.Logic.Class
+  , module Control.Monad.State.Class
   -- * Finer control over backtracking via 'cut'
   -- ** The cut class
   , MonadLogicCut (..)
@@ -43,27 +44,26 @@ module Control.Hspl.Internal.Logic (
   , observeManyCutT
   -- * Backtrackable state
   -- ** The state class
-  , MonadLogicState (..)
-  , modifyGlobal
-  , modifyBacktracking
-  , getsGlobal
-  , getsBacktracking
+  , SplittableState (..)
+  , LogicState (..)
+  , Global (..)
+  , Backtracking (..)
   -- ** The state monad transformer
   , LogicT
-  , runManyLogicT
-  , execManyLogicT
-  , observeManyLogicT
   , runAllLogicT
   , execAllLogicT
   , observeAllLogicT
+  , runManyLogicT
+  , execManyLogicT
+  , observeManyLogicT
   -- ** The state monad
   , Logic
-  , runManyLogic
-  , execManyLogic
-  , observeManyLogic
   , runAllLogic
   , execAllLogic
   , observeAllLogic
+  , runManyLogic
+  , execManyLogic
+  , observeManyLogic
   ) where
 
 import Control.Applicative
@@ -71,6 +71,7 @@ import Control.Monad
 import Control.Monad.Identity
 import Control.Monad.Logic.Class
 import Control.Monad.State
+import Control.Monad.State.Class
 import Control.Monad.Trans
 
 -- | Class of logic monads which allow control of backtracking via cut. We use a stack-based model
@@ -109,60 +110,64 @@ class MonadLogic m => MonadLogicCut m where
 
   {-# MINIMAL (cut | commit), cutFrame #-}
 
--- | Class of logic monads which provide both backtracking and global state. Effects performed on
--- the global state in one branch are visible in subsequently explored parallel branches. In this
--- way, the global state exposes the order in which nondeterministic results are tried. Effects
--- performed on the backtracking state are not visible in parallel branches.
-class MonadLogic m => MonadLogicState bs gs m | m -> bs, m -> gs where
-  -- | Return the global state.
-  getGlobal :: m gs
-  getGlobal = stateGlobal $ \s -> (s, s)
+-- | Types which can be split into two components and recombined. Used by 'LogicT' to split a state
+-- into backtracking and global components.
+class SplittableState s where
+  -- | The type of the backtracking component of the state.
+  type BacktrackingState s
 
-  -- | Replace the global state.
-  putGlobal :: gs -> m ()
-  putGlobal s = stateGlobal $ const ((), s)
+  -- | The type of the global component of the state.
+  type GlobalState s
 
-  -- | Embed an action on the global state into the monad.
-  stateGlobal :: (gs -> (a, gs)) -> m a
-  stateGlobal f = do
-    gs <- getGlobal
-    let (a, gs') = f gs
-    putGlobal gs'
-    return a
+  -- | Split a state into its backtracking and global components.
+  splitState :: s -> (BacktrackingState s, GlobalState s)
 
-  -- | Get the backtracking state.
-  getBacktracking :: m bs
-  getBacktracking = stateBacktracking $ \s -> (s, s)
+  -- | Reconstruct a state object from backtracking and global components.
+  combineState :: BacktrackingState s -> GlobalState s -> s
 
-  -- | Replace the backtracking state.
-  putBacktracking :: bs -> m ()
-  putBacktracking s = stateBacktracking $ const ((), s)
+  -- | Extract the backtracking component of a state. Useful with 'gets'.
+  backtracking :: s -> BacktrackingState s
+  backtracking = fst . splitState
 
-  -- | Embed an action on the backtracking state into the monad.
-  stateBacktracking :: (bs -> (a, bs)) -> m a
-  stateBacktracking f = do
-    bs <- getBacktracking
-    let (a, bs') = f bs
-    putBacktracking bs'
-    return a
+  -- | Extract the global component of a state. Useful with 'gets'.
+  global :: s -> GlobalState s
+  global = snd . splitState
 
-  {-# MINIMAL (stateGlobal | getGlobal, putGlobal), (stateBacktracking | getBacktracking, putBacktracking) #-}
+instance SplittableState () where
+  type BacktrackingState () = ()
+  type GlobalState () = ()
+  splitState () = ((), ())
+  combineState () () = ()
 
--- | Modify the global state by applying a function.
-modifyGlobal :: MonadLogicState bs gs m => (gs -> gs) -> m ()
-modifyGlobal f = getGlobal >>= putGlobal . f
+-- | Simple state type with backtracking and global components.
+data LogicState bs gs = LogicState bs gs
+  deriving (Show, Eq)
 
--- | Get a specific comonent of the global state using a projection function.
-getsGlobal :: MonadLogicState bs gs m => (gs -> a) -> m a
-getsGlobal f = liftM f getGlobal
+instance SplittableState (LogicState bs gs) where
+  type BacktrackingState (LogicState bs gs) = bs
+  type GlobalState (LogicState bs gs) = gs
+  splitState (LogicState bs gs)  = (bs, gs)
+  combineState = LogicState
 
--- | Modify the backtracking state by applying a function.
-modifyBacktracking :: MonadLogicState bs gs m => (bs -> bs) -> m ()
-modifyBacktracking f = getBacktracking >>= putBacktracking . f
+-- | Simple state type containing only a global component, with no backtracking state.
+newtype Global s = Global s
+  deriving (Show, Eq, Num)
 
--- | Get a specific component of the backtracking state using a projection function.
-getsBacktracking :: MonadLogicState bs gs m => (bs -> a) -> m a
-getsBacktracking f = liftM f getBacktracking
+instance SplittableState (Global s) where
+  type GlobalState (Global s) = s
+  type BacktrackingState (Global s) = ()
+  splitState (Global s) = ((), s)
+  combineState = const Global
+
+-- | Simple state type containing only a backtracking component, with no global state.
+newtype Backtracking s = Backtracking s
+  deriving (Show, Eq, Num)
+
+instance SplittableState (Backtracking s) where
+  type BacktrackingState (Backtracking s) = s
+  type GlobalState (Backtracking s) = ()
+  splitState (Backtracking s) = (s, ())
+  combineState s () = Backtracking s
 
 -- | A monad transformer for performing backtracking computations layered over another monad 'm',
 -- with the ability to 'cut', or discard any unexplored choice points, at any time. 'CutT' also
@@ -284,83 +289,77 @@ instance Monad m => MonadLogicCut (CutT s m) where
 -- with the ability to 'cut', or discard any unexplored choice points, at any time. 'LogicT' also
 -- embeds both backtracking and global state into the computation, implementing the
 -- 'MonadLogicState' interface.
-newtype LogicT bs gs m a = LogicT { unLogicT :: CutT bs (StateT gs m) a }
+newtype LogicT s m a = LogicT { unLogicT :: CutT (BacktrackingState s) (StateT (GlobalState s) m) a }
   deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadIO, MonadLogic, MonadLogicCut)
 
-instance MonadTrans (LogicT bs gs) where
+instance MonadTrans (LogicT s) where
   lift m = LogicT $ lift $ lift m
 
-instance Monad m => MonadState (bs, gs) (LogicT bs gs m) where
-  get = LogicT $ lift get >>= \gs -> get >>= \bs -> return (bs, gs)
-  put (bs, gs) = LogicT $ lift (put gs) >> put bs
+instance (Monad m, SplittableState s) => MonadState s (LogicT s m) where
+  get = liftM2 combineState (LogicT get) (LogicT $ lift get)
+  put s =
+    let (bs, gs) = splitState s
+    in LogicT (put bs) >> LogicT (lift $ put gs)
 
-instance Monad m => MonadLogicState bs gs (LogicT bs gs m) where
-  stateGlobal = LogicT . lift . state
-  stateBacktracking = LogicT . state
+-- | Extract all results from a 'LogicT' computation, along with the final state for each branch.
+-- Note that the global component of each resulting state is the global state
+-- /at the time that branch was evaluated/. Thus, the final global state can be obtained via
+-- @snd $ last $ runAllLogicT m s@.
+runAllLogicT :: (Monad m, SplittableState s) => LogicT s m a -> s -> m [(a, s)]
+runAllLogicT m s = observeAllLogicT (liftM2 (,) m get) s
 
--- | Extract all results from a 'LogicT' computation, along with the final backtracking state for
--- each branch and the final global state.
-runAllLogicT :: Monad m => LogicT bs gs m a -> bs -> gs -> m ([(a, bs)], gs)
-runAllLogicT m bs gs =
-  let cutT = unLogicT m
-      st = runAllCutT cutT bs
-  in runStateT st gs
-
--- | Extract the final backtracking state from each branch of a 'LogicT' computation, as well as the
--- final global state.
-execAllLogicT :: Monad m => LogicT bs gs m a -> bs -> gs -> m ([bs], gs)
-execAllLogicT m bs gs = do
-  (results, gs') <- runAllLogicT m bs gs
-  return (map snd results, gs')
+-- | Extract the final state from each branch of a 'LogicT' computation. As with 'runAllLogicT', the
+-- global component of each state object is the global state at the time that result was obtained.
+execAllLogicT :: (Monad m, SplittableState s) => LogicT s m a -> s -> m [s]
+execAllLogicT m s = map snd `liftM` runAllLogicT m s
 
 -- | Extract all results from a 'LogicT' computation.
-observeAllLogicT :: Monad m => LogicT bs gs m a -> bs -> gs -> m [a]
-observeAllLogicT m bs gs = do
-  (results, _) <- runAllLogicT m bs gs
-  return $ map fst results
+observeAllLogicT :: (Monad m, SplittableState s) => LogicT s m a -> s -> m [a]
+observeAllLogicT m s =
+  let (bs, gs) = splitState s
+      cutT = unLogicT m
+      st = observeAllCutT cutT bs
+  in evalStateT st gs
 
 -- | Similar to 'runAllLogicT', but extracts only up to a maximum number of results.
-runManyLogicT :: Monad m => Int -> LogicT bs gs m a -> bs -> gs -> m ([(a, bs)], gs)
-runManyLogicT n m bs gs =
-  let cutT = unLogicT m
-      st = runManyCutT n cutT bs
-  in runStateT st gs
+runManyLogicT :: (Monad m, SplittableState s) => Int -> LogicT s m a -> s -> m [(a, s)]
+runManyLogicT n m s = observeManyLogicT n (liftM2 (,) m get) s
 
 -- | Similar to 'execAllLogicT', but extracts only up to a maximum number of results.
-execManyLogicT :: Monad m => Int -> LogicT bs gs m a -> bs -> gs -> m ([bs], gs)
-execManyLogicT n m bs gs = do
-  (results, gs') <- runManyLogicT n m bs gs
-  return (map snd results, gs')
+execManyLogicT :: (Monad m, SplittableState s) => Int -> LogicT s m a -> s -> m [s]
+execManyLogicT n m s = map snd `liftM` runManyLogicT n m s
 
 -- | Similar to 'observeAllLogicT', but extracts only up to a maximum number of results.
-observeManyLogicT :: Monad m => Int -> LogicT bs gs m a -> bs -> gs -> m [a]
-observeManyLogicT n m bs gs = do
-  (results, _) <- runManyLogicT n m bs gs
-  return $ map fst results
+observeManyLogicT :: (Monad m, SplittableState s) => Int -> LogicT s m a -> s -> m [a]
+observeManyLogicT n m s =
+  let (bs, gs) = splitState s
+      cutT = unLogicT m
+      st = observeManyCutT n cutT bs
+  in evalStateT st gs
 
 -- | Non-transformer version of 'LogicT'.
-type Logic bs gs = LogicT bs gs Identity
+type Logic s = LogicT s Identity
 
 -- | Analagous to 'runAllLogicT'.
-runAllLogic :: Logic bs gs a -> bs -> gs -> ([(a, bs)], gs)
-runAllLogic m bs gs = runIdentity $ runAllLogicT m bs gs
+runAllLogic :: SplittableState s => Logic s a -> s -> [(a, s)]
+runAllLogic m s = runIdentity $ runAllLogicT m s
 
 -- | Analagous to 'execAllLogicT'.
-execAllLogic :: Logic bs gs a -> bs -> gs -> ([bs], gs)
-execAllLogic m bs gs = runIdentity $ execAllLogicT m bs gs
+execAllLogic :: SplittableState s => Logic s a -> s -> [s]
+execAllLogic m s = runIdentity $ execAllLogicT m s
 
 -- | Analagous to 'observeAllLogicT'.
-observeAllLogic :: Logic bs gs a -> bs -> gs -> [a]
-observeAllLogic m bs gs = runIdentity $ observeAllLogicT m bs gs
+observeAllLogic :: SplittableState s => Logic s a -> s -> [a]
+observeAllLogic m s = runIdentity $ observeAllLogicT m s
 
 -- | Analagous to 'runManyLogicT'.
-runManyLogic :: Int -> Logic bs gs a -> bs -> gs -> ([(a, bs)], gs)
-runManyLogic n m bs gs = runIdentity $ runManyLogicT n m bs gs
+runManyLogic :: SplittableState s => Int -> Logic s a -> s -> [(a, s)]
+runManyLogic n m s = runIdentity $ runManyLogicT n m s
 
 -- | Analagous to 'execManyLogicT'.
-execManyLogic :: Int -> Logic bs gs a -> bs -> gs -> ([bs], gs)
-execManyLogic n m bs gs = runIdentity $ execManyLogicT n m bs gs
+execManyLogic :: SplittableState s => Int -> Logic s a -> s -> [s]
+execManyLogic n m s = runIdentity $ execManyLogicT n m s
 
 -- | Analagous to 'observeManyLogicT'.
-observeManyLogic :: Int -> Logic bs gs a -> bs -> gs -> [a]
-observeManyLogic n m bs gs = runIdentity $ observeManyLogicT n m bs gs
+observeManyLogic :: SplittableState s => Int -> Logic s a -> s -> [a]
+observeManyLogic n m s = runIdentity $ observeManyLogicT n m s

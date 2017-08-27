@@ -8,6 +8,7 @@
 #if __GLASGOW_HASKELL__ < 710
 {-# LANGUAGE OverlappingInstances #-}
 #endif
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
@@ -259,15 +260,29 @@ type TerminalCoroutine = Coroutine (Await (Maybe DebugContext)) (DebugStateT IO)
 -- step of the computation.
 type SolverCoroutine m = Coroutine (Yield DebugContext) m
 
+-- | State maintained by the solver coroutine.
+data SolverState = Solver {
+                     -- | The current goal stack. @head goalStack@ is the current goal,
+                     -- @goalStack !! 1@ is the parent of that goal, and so on, so that
+                     -- @last goalStack@ is the top-level goal we are ultimately trying to prove.
+                     goalStack :: [Goal]
+                   }
+
+instance SplittableState SolverState where
+  type BacktrackingState SolverState = [Goal]
+  type GlobalState SolverState = ()
+  splitState s = (goalStack s, ())
+  combineState gs () = Solver { goalStack = gs }
+
 -- | Monad transformer which, when executed using 'observeAllSolverT' or 'observeManySolverT',
 -- yields a 'SolverCoroutine'.
-newtype DebugSolverT m a = DebugSolverT { unDebugSolverT :: SolverT [Goal] () (SolverCoroutine m) a }
+newtype DebugSolverT m a = DebugSolverT { unDebugSolverT :: SolverT SolverState (SolverCoroutine m) a }
   deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadLogic, MonadLogicCut, MonadUnification)
 
 -- | Same as callWith, but for unitary provers.
 callWith :: Monad m => MsgType -> DebugSolverT m ProofResult -> DebugSolverT m ProofResult
 callWith m cont = do
-  s <- getBacktracking
+  s <- gets goalStack
   let dc = DC { stack = s, status = m, msg = formatGoal (head s) }
   yield dc
   ifte cont
@@ -280,14 +295,18 @@ call = callWith Call
 
 -- | Run a 'DebugSolverT' action with the given goal at the top of the goal stack.
 goalFrame :: Monad m => Goal -> DebugSolverT m a -> DebugSolverT m a
-goalFrame g m = modifyBacktracking (g:) *> m <* modifyBacktracking tail
+goalFrame g m = do
+  s <- get
+  put $ s { goalStack = g : goalStack s }
+  r <- m
+  put s
+  return r
 
 instance MonadTrans DebugSolverT where
   lift = DebugSolverT . lift . lift
 
-instance Monad m => MonadLogicState [Goal] () (DebugSolverT m) where
-  stateGlobal = DebugSolverT . stateGlobal
-  stateBacktracking = DebugSolverT . stateBacktracking
+instance Monad m => MonadState SolverState (DebugSolverT m) where
+  state = DebugSolverT . state
 
 instance Monad m => MonadSolver (DebugSolverT m) where
   tryPredicate p c = goalFrame (PredGoal p []) (call $ provePredicate p c)
@@ -307,7 +326,7 @@ instance Monad m => MonadSolver (DebugSolverT m) where
   tryOnce g = goalFrame (Once g) (call $ proveOnce g)
 
   failUnknownPred p@(Predicate name _) = do
-    s <- getsBacktracking (PredGoal p [] :)
+    s <- gets $ (PredGoal p [] :) . goalStack
     -- Since there are no clauses, there will be no corresponding 'Call' message, rather we will fail
     -- immediately. To make the output a little more intuitive, we explicitly log a 'Call' here.
     yield DC { stack = s, status = Call, msg = formatGoal (head s) }
@@ -317,7 +336,7 @@ instance Monad m => MonadSolver (DebugSolverT m) where
              }
     mzero
 
-  errorUninstantiatedVariables = getBacktracking >>= \s -> error $
+  errorUninstantiatedVariables = gets goalStack >>= \s -> error $
     "Variables are not sufficiently instantiated.\nGoal stack:\n" ++ showStack Nothing s
 
 -- | Suspend a 'SolverCoroutine' with the given context.
@@ -537,7 +556,7 @@ prompt context@DC { stack = s, status = mtype, msg = m } = do
 
 -- | A coroutine which controls the HSPL solver, yielding control at every important event.
 solverCoroutine :: Monad m => Goal -> SolverCoroutine m [ProofResult]
-solverCoroutine g = observeAllSolverT (unDebugSolverT $ prove g) [] ()
+solverCoroutine g = observeAllSolverT (unDebugSolverT $ prove g) Solver { goalStack = [] }
 
 -- | A coroutine which controls the interactive debugger terminal, periodically yielding control to
 -- the solver.
