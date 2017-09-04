@@ -9,6 +9,7 @@
 
 module AstTest where
 
+import Control.Monad (forM_)
 import Data.Data
 import Data.Monoid hiding (Sum, Product)
 import GHC.Generics
@@ -519,12 +520,12 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
           constr (PredGoal (predicate "foo'" ()) []) (PredGoal (predicate "bar" ()) [])
         constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
           constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar'" ()) [])
-  describe "unitary logic goals" $
-    withParams [Top, Bottom] $ \constr -> do
+  describe "unitary goals" $ do
+    let ugoals = [Top, Bottom, Cut]
+    withParams ugoals $ \constr -> do
       it "should equal itself" $
         constr `shouldEqual` constr
-      it "should not equal any other goal" $ do
-        constr `shouldNotEqual` case constr of { Top -> Bottom; Bottom -> Top }
+      it "should not equal any other goal" $
         constr `shouldNotEqual` And constr constr
   describe "Alternatives goals" $ do
     context "of the same type" $

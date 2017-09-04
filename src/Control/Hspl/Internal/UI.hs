@@ -143,6 +143,7 @@ formatGoal Bottom = "false"
 formatGoal (Alternatives x g xs) =
   "findAll " ++ parensTerm x ++ " " ++ parensGoal g ++ " " ++ parensTerm xs
 formatGoal (Once g) = "once " ++ parensGoal g
+formatGoal Cut = "cut"
 
 -- | Similar to 'formatGoal', but wraps the output in parentheses if it is not a single token.
 parensGoal :: Goal -> String
@@ -151,6 +152,7 @@ parensGoal g
   | otherwise = formatGoal g
   where needsParens Top = False
         needsParens Bottom = False
+        needsParens Cut = False
         needsParens _ = True
 
 -- | Get a user-showable representation of a 'HornClause'.

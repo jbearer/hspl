@@ -158,6 +158,10 @@ test = describeModule "Control.Hspl" $ do
       execGoalWriter (once $ helem?(v"x", ['a', 'b', 'c'])) `shouldBe`
         Once (execGoalWriter $ helem? (v"x", ['a', 'b', 'c']))
 
+  describe "the cut predicate" $
+    it "should create a Cut goal" $
+      execGoalWriter cut `shouldBe` Cut
+
   describe "The enum predicate" $
     it "should backtrack over all elements of a bounded enumerable type" $ do
       let us = getAllUnifiers $ runHspl $ enum? (v"x" :: Var BoundedEnum)

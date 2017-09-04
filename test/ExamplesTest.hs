@@ -35,7 +35,7 @@ test = describeModule "Control.Hspl.Examples" $ do
     it "should unify a variable with a string" $
       getAllSolutions (runHspl $ couldBeFoo? string "x") `shouldBe`
         [PredGoal (predicate "couldBeFoo" "foo") []]
-  describe "odds" $ do
+  describe "odds" $
     it "should compute the first n odd numbers" $
       getAllSolutions (runHsplN 5 $ odds? int "x") `shouldBe`
         [ PredGoal (predicate "odds" (1 :: Int)) []

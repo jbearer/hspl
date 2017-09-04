@@ -188,7 +188,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
           let g = execGoalWriter gw
           formatGoal (execGoalWriter (gw `op` gw)) `shouldBe`
             (parensGoal g ++ " " ++ sop ++ " " ++ parensGoal g)
-    withParams [(Top, "true"), (Bottom, "false")] $ \(g, sg) ->
+    withParams [(Top, "true"), (Bottom, "false"), (Cut, "cut")] $ \(g, sg) ->
       it "should format unitary goals" $
         formatGoal g `shouldBe` sg
     withParams [toTerm $ v"x", Just $$ char "x"] $ \x ->
@@ -211,7 +211,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
                ] $ \g ->
       it "should add parentheses where necessary" $
         parensGoal g `shouldBe` ("(" ++ formatGoal g ++ ")")
-    withParams [Top, Bottom] $ \g ->
+    withParams [Top, Bottom, Cut] $ \g ->
       it "should not add parentheses where they are not needed" $
         parensGoal g `shouldBe` formatGoal g
 

@@ -168,6 +168,11 @@ expectOnceExit d g = "(" ++ show d ++ ") Exit: " ++ formatGoal (Once g)
 expectOnceFail :: Int -> Goal -> String
 expectOnceFail d g = "(" ++ show d ++ ") Fail: " ++ formatGoal (Once g)
 
+expectCut :: Int -> [String]
+expectCut d = [ "(" ++ show d ++ ") Call: " ++ formatGoal Cut
+              , "(" ++ show d ++ ") Exit: " ++ formatGoal Cut
+              ]
+
 -- deep(X) :- foo(X).
 -- foo(X) :- bar(X).
 -- bar(a).
@@ -474,6 +479,11 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     let onceFailTrace = [expectOnceCall 1 Bottom] ++
                          expectBottom 2 ++
                         [expectOnceFail 1 Bottom]
+
+    let cutGoal = Or Cut Top
+    let cutTrace = [ expectOrCall 1 Cut Top] ++
+                     expectCut 2 ++
+                   [ expectOrExit 1 Cut Top]
     let run g t c = runTest g (map (const c) [1..length t]) t
 
     it "should prompt after every step of computation" $ do
@@ -504,6 +514,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       go alternativesFailGoal alternativesFailTrace
       go onceGoal onceTrace
       go onceFailGoal onceFailTrace
+      go cutGoal cutTrace
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do

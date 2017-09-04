@@ -778,6 +778,9 @@ data Goal =
             -- | A goal which succeeds at most once. If the inner goal succeeds multiple times, only
             -- the first result is taken.
           | Once Goal
+            -- | A goal with a side-effects. Always succeeds, but causes unexplored choice points
+            -- created since the last predicate to be discarded.
+          | Cut
 deriving instance Show Goal
 
 instance Eq Goal where
@@ -810,6 +813,7 @@ instance Eq Goal where
     Just t' -> (x, xs) == t' && g == g'
     Nothing -> False
   (==) (Once g) (Once g') = g == g'
+  (==) Cut Cut = True
   (==) _ _ = False
 
 instance Monoid Goal where

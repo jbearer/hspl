@@ -56,6 +56,7 @@ module Control.Hspl.Internal.Solver (
   , proveBottom
   , proveAlternatives
   , proveOnce
+  , proveCut
   , prove
   ) where
 
@@ -104,6 +105,8 @@ data Proof =
            | forall a. TermEntry a => FoundAlternatives (Term a) Goal (Term [a]) [Proof]
              -- | A proof of a 'Once' goal.
            | ProvedOnce Proof
+             -- | A (trivial) proof of 'Cut'.
+           | ProvedCut
 
 instance Eq Proof where
   (==) proof1 proof2 = case (proof1, proof2) of
@@ -122,6 +125,7 @@ instance Eq Proof where
          xs'' <- cast xs'
          return $ x == x'' && g == g' && xs == xs'' && ps == ps'
     (ProvedOnce p, ProvedOnce p') -> p == p'
+    (ProvedCut, ProvedCut) -> True
     _ -> False
     where compareBinaryProof t t' = maybe False (t==) $ cast t'
 
@@ -144,6 +148,7 @@ instance Show Proof where
     "FoundAlternatives (" ++ show x ++ ") (" ++ show g ++ ") (" ++ show xs ++ ") (" ++ show ps ++ ")"
   show ProvedTop = "ProvedTop"
   show (ProvedOnce p) = "ProvedOnce (" ++ show p ++ ")"
+  show ProvedCut = "ProvedCut"
 
 -- | The output of the solver. This is meant to be treated as an opaque data type which can be
 -- inspected via the functions defined in this module.
@@ -193,7 +198,8 @@ searchProof (proof, unifier) goal = searchProof' proof (runRenamed $ renameGoal 
               return $ Alternatives (unifyTerm u x) g'' (unifyTerm u xs)
             Nothing -> Nothing
 
-        matchGoal (Once g) (Once g') = fmap Once $ matchGoal g g'
+        matchGoal (Once g) (Once g') = Once `fmap` matchGoal g g'
+        matchGoal Cut Cut = Just Cut
 
         matchGoal _ _ = Nothing
 
@@ -234,6 +240,7 @@ getSolution (proof, _) = case proof of
   ProvedTop -> Top
   FoundAlternatives x g xs _ -> Alternatives x g xs
   ProvedOnce p -> Once $ getSolution (p, mempty)
+  ProvedCut -> Cut
 
 -- | Get the set of theorems which were proven by each 'Proof' tree in a forest.
 getAllSolutions :: [ProofResult] -> [Goal]
@@ -253,7 +260,7 @@ runHsplN n g = observeManySolver n (prove g) ()
 -- | The monad which defines the backtracking control flow of the solver. This type is parameterized
 -- by the type of backtracking and global state, implementing the 'MonadLogicState' interface.
 newtype SolverT s m a = SolverT { unSolverT :: LogicT s (UnificationT m) a }
-  deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadLogic, MonadLogicCut)
+  deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadIO, MonadLogic, MonadLogicCut)
 
 instance MonadTrans (SolverT s) where
   lift = SolverT . lift . lift
@@ -368,6 +375,10 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   -- the inner goal and return it. It should ignore any further solutions to the inner goal. The
   -- zero-overhead version is 'proveOnce'.
   tryOnce :: Goal -> m ProofResult
+  -- | Emit a proof of 'Cut'. This computation always succeeds, and the proof is always trivial.
+  -- However, it should perform the side-effect of discarding all unexplored choicepoints created
+  -- since entering the last clause of a predicate. The zero-overhead version is 'proveCut'.
+  tryCut :: m ProofResult
   -- | Computation to be invoked when a goal fails because there are no matching clauses. This
   -- computation should result in 'mzero', but may perform effects in the underlying monad first.
   failUnknownPred :: Predicate -> m ProofResult
@@ -390,6 +401,7 @@ instance Monad m => MonadSolver (SolverT s m) where
   tryBottom = proveBottom
   tryAlternatives = proveAlternatives
   tryOnce = proveOnce
+  tryCut = proveCut
   failUnknownPred = const mzero
   errorUninstantiatedVariables = error "Variables are not sufficiently instantiated."
 
@@ -494,13 +506,17 @@ proveOnce g = do
   (p, u) <- once $ prove g
   return (ProvedOnce p, u)
 
+-- | Zero-overhead version of 'tryCut'.
+proveCut :: MonadSolver m => m ProofResult
+proveCut = commit (ProvedCut, mempty)
+
 -- | Produce a proof of the goal. This function will either fail, or backtrack over all possible
 -- proofs. It will invoke the appropriate continuations in the given 'SolverCont' whenever a
 -- relevant event occurs during the course of the proof.
 prove :: MonadSolver m => Goal -> m ProofResult
 prove g = case g of
   PredGoal p [] -> failUnknownPred p
-  PredGoal p (c:cs) -> tryPredicate p c `mplus` msum (map (retryPredicate p) cs)
+  PredGoal p (c:cs) -> cutFrame $ tryPredicate p c `mplus` msum (map (retryPredicate p) cs)
   CanUnify t1 t2 -> tryUnifiable t1 t2
   Identical t1 t2 -> tryIdentical t1 t2
   Equal t1 t2 -> tryEqual t1 t2
@@ -512,3 +528,4 @@ prove g = case g of
   Bottom -> tryBottom
   Alternatives x g' xs -> tryAlternatives x g' xs
   Once g' -> tryOnce g'
+  Cut -> tryCut

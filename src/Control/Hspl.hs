@@ -46,6 +46,7 @@ module Control.Hspl (
   , findAll
   , bagOf
   , once
+  , cut
   -- *** Unification, identity, equality, and inequality
   , (|=|)
   , (|\=|)
@@ -286,6 +287,10 @@ bagOf x gw xs =
 -- solution of @g@. If @g@ fails, then @once g@ also fails.
 once :: GoalWriter a -> GoalWriter ()
 once gw = tell $ Once $ execGoalWriter gw
+
+-- | Discard all choicepoints created since entering the current predicate.
+cut :: GoalWriter ()
+cut = tell Cut
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
 infix 2 |=|

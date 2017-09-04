@@ -49,6 +49,8 @@ module Control.Hspl.Internal.Logic (
   , Global (..)
   , Backtracking (..)
   -- ** The state monad transformer
+  , LTBS (..)
+  , LTGS (..)
   , LogicT
   , runAllLogicT
   , execAllLogicT
@@ -285,21 +287,31 @@ instance Monad m => MonadLogicCut (CutT s m) where
           pop (_:cuts) = cuts
           pop [] = fail "popCutFrame: cut stack underflow"
 
+-- | Wrapper around the backtracking component of an arbitrary 'SplittableState' type. This wrapper
+-- is only necessary for GHC 7.10, because the typechecker gets confused by the type family
+-- 'BacktrackingState'.
+newtype LTBS s = LTBS { unLTBS :: BacktrackingState s }
+
+-- | Wrapper around the global component of an arbitrary 'SplittableState' type. This wrapper is
+-- only necessary for GHC 7.10, because the typechecker gets confused by the type family
+-- 'GlobalState'.
+newtype LTGS s = LTGS { unLTGS :: GlobalState s }
+
 -- | A monad transformer for performing backtracking computations layered over another monad 'm',
 -- with the ability to 'cut', or discard any unexplored choice points, at any time. 'LogicT' also
 -- embeds both backtracking and global state into the computation, implementing the
 -- 'MonadLogicState' interface.
-newtype LogicT s m a = LogicT { unLogicT :: CutT (BacktrackingState s) (StateT (GlobalState s) m) a }
+newtype LogicT s m a = LogicT { unLogicT :: CutT (LTBS s) (StateT (LTGS s) m) a }
   deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadIO, MonadLogic, MonadLogicCut)
 
 instance MonadTrans (LogicT s) where
   lift m = LogicT $ lift $ lift m
 
 instance (Monad m, SplittableState s) => MonadState s (LogicT s m) where
-  get = liftM2 combineState (LogicT get) (LogicT $ lift get)
+  get = liftM2 combineState (LogicT $ gets unLTBS) (LogicT $ lift $ gets unLTGS)
   put s =
     let (bs, gs) = splitState s
-    in LogicT (put bs) >> LogicT (lift $ put gs)
+    in LogicT (put $ LTBS bs) >> LogicT (lift $ put $ LTGS gs)
 
 -- | Extract all results from a 'LogicT' computation, along with the final state for each branch.
 -- Note that the global component of each resulting state is the global state
@@ -318,8 +330,8 @@ observeAllLogicT :: (Monad m, SplittableState s) => LogicT s m a -> s -> m [a]
 observeAllLogicT m s =
   let (bs, gs) = splitState s
       cutT = unLogicT m
-      st = observeAllCutT cutT bs
-  in evalStateT st gs
+      st = observeAllCutT cutT (LTBS bs)
+  in evalStateT st (LTGS gs)
 
 -- | Similar to 'runAllLogicT', but extracts only up to a maximum number of results.
 runManyLogicT :: (Monad m, SplittableState s) => Int -> LogicT s m a -> s -> m [(a, s)]
@@ -334,8 +346,8 @@ observeManyLogicT :: (Monad m, SplittableState s) => Int -> LogicT s m a -> s ->
 observeManyLogicT n m s =
   let (bs, gs) = splitState s
       cutT = unLogicT m
-      st = observeManyCutT n cutT bs
-  in evalStateT st gs
+      st = observeManyCutT n cutT (LTBS bs)
+  in evalStateT st (LTGS gs)
 
 -- | Non-transformer version of 'LogicT'.
 type Logic s = LogicT s Identity

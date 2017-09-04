@@ -72,7 +72,7 @@ class Monad m => MonadUnification m where
 -- | Concrete instance of the 'MonadUnification' class. This type encapsulates the state necessary
 -- to generate unique 'Fresh' variables.
 newtype UnificationT m a = UnificationT { unUnificationT :: StateT Int m a }
-  deriving (Functor, Applicative, Monad, MonadTrans)
+  deriving (Functor, Applicative, Monad, MonadIO, MonadTrans)
 deriving instance Monad m => MonadState Int (UnificationT m)
 
 instance Monad m => MonadUnification (UnificationT m) where
@@ -253,6 +253,7 @@ unifyGoal _ Top = Top
 unifyGoal _ Bottom = Bottom
 unifyGoal u (Alternatives x g xs) = Alternatives (unifyTerm u x) (unifyGoal u g) (unifyTerm u xs)
 unifyGoal u (Once g) = Once $ unifyGoal u g
+unifyGoal _ Cut = Cut
 
 -- | Apply a 'Unifier' to all 'Predicate's in a 'HornClause'.
 unifyClause :: Unifier -> HornClause -> HornClause
@@ -395,6 +396,7 @@ renameGoal (Alternatives x g xs) = do
   xs' <- renameTerm xs
   return $ Alternatives x' g' xs'
 renameGoal (Once g) = liftM Once $ renameGoal g
+renameGoal Cut = return Cut
 
 -- | Helper function for renaming variables in a 'Goal' with two 'Term' arguments.
 renameBinaryGoal :: MonadUnification m =>

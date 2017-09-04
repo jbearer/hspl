@@ -7,11 +7,13 @@
 module SolverTest where
 
 import Testing
+import Control.Applicative
 import Control.DeepSeq (NFData (..))
 import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Unification hiding (Unified)
 import qualified Control.Hspl.Internal.Unification as U
+import Control.Monad.IO.Class
 import Data.Monoid hiding (Sum, Product)
 import Data.Typeable
 
@@ -239,6 +241,25 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
   describe "proveBottom" $
     it "should always fail" $
       observeAllSolver proveBottom () `shouldBe` []
+  describe "proveCut" $ do
+    let runTest g = observeAllSolver (prove g) ()
+    it "should discard choicepoints created since the last predicate" $
+      runTest (Or Cut Top) `shouldBe` [(ProvedLeft ProvedCut Top, mempty)]
+    it "should not discard choiceoints created after the last predicate" $ do
+      let p = PredGoal (predicate "foo" ()) [ HornClause (predicate "foo" ()) Cut
+                                            , HornClause (predicate "foo" ()) Top
+                                            ]
+      runTest (Or p (CanUnify (toTerm 'a') (toTerm 'a'))) `shouldBe`
+        [ (ProvedLeft (Resolved (predicate "foo" ())
+                                ProvedCut)
+                      (CanUnify (toTerm 'a') (toTerm 'a')), mempty)
+        , (ProvedRight p $ Unified (toTerm 'a') (toTerm 'a'), mempty)
+        ]
+    it "should prevent side-effects in unexplored branches" $
+      tempFile $ \f -> do
+        observeAllSolverT (proveCut <|> (liftIO (writeFile f "foo") >> proveTop)) ()
+        output <- readFile f
+        output `shouldBe` ""
   describe "an Alternatives proof" $ do
     let runTest x g xs = observeAllSolver (proveAlternatives x g xs) ()
     let xIsAOrB = Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
@@ -437,9 +458,10 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         search (Negated $ Identical (toTerm 'a') (toTerm 'b'))
                (Not $ Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
           [Not (Identical (toTerm 'a') (toTerm 'b'))]
-    context "of unitary logic proofs" $
-      it "should unify a query goal" $
-        search ProvedTop Top `shouldBe` [Top]
+    withParams [(Top, ProvedTop), (Cut, ProvedCut)] $ \(goal, proof) ->
+      context "of unitary proofs" $
+        it "should unify a query goal" $
+          search proof goal `shouldBe` [goal]
     context "of a ProvedOnce proof" $ do
       it "should unify a query goal" $
         search (ProvedOnce ProvedTop) (Once Top) `shouldBe` [Once Top]
@@ -465,6 +487,8 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
                       (Equated (toTerm 'a') (toTerm 'a'))) `shouldBe`
         Or (Identical (toTerm 'a') (toTerm 'b')) (Equal (toTerm 'a') (toTerm 'a'))
       get ProvedTop `shouldBe` Top
+      get (Negated Top) `shouldBe` Not Top
+      get (ProvedOnce ProvedTop) `shouldBe` Once Top
       get (FoundAlternatives (toTerm (Var "x" :: Var Char))
                                      (Equal (toTerm $ Var "x") (toTerm 'a'))
                                      (toTerm ['a'])
@@ -472,6 +496,7 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         Alternatives (toTerm (Var "x" :: Var Char))
                      (Equal (toTerm $ Var "x") (toTerm 'a'))
                      (toTerm ['a'])
+      get ProvedCut `shouldBe` Cut
     it "should get all solutions from a forest of proof tress" $
       getAllSolutions [ (Resolved (predicate "p" ()) ProvedTop, mempty)
                       , (Resolved (predicate "q" ()) ProvedTop, mempty)] `shouldBe`

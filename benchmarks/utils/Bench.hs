@@ -265,7 +265,7 @@ genPrologGoal Bottom = "false"
 genPrologGoal (Alternatives x g xs) =
   "findall(" ++ genPrologTerm x ++ "," ++ genPrologGoal g ++ "," ++ genPrologTerm xs ++ ")"
 
-genPrologGoal (Once g) = "once(" ++ genPrologGoal g ++ ")"
+genPrologGoal Cut = "!"
 
 prologAtomCase :: String -> String
 prologAtomCase "" = ""

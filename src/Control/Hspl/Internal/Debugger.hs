@@ -324,6 +324,7 @@ instance Monad m => MonadSolver (DebugSolverT m) where
   tryBottom = goalFrame Bottom (call proveBottom)
   tryAlternatives x g xs = goalFrame (Alternatives x g xs) (call $ proveAlternatives x g xs)
   tryOnce g = goalFrame (Once g) (call $ proveOnce g)
+  tryCut = goalFrame Cut (call proveCut)
 
   failUnknownPred p@(Predicate name _) = do
     s <- gets $ (PredGoal p [] :) . goalStack

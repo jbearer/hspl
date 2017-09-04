@@ -351,8 +351,8 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
                      (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
             constr (PredGoal (predicate "foo" (Fresh 0 :: Var Char)) [])
                (PredGoal (predicate "bar" (Fresh 0 :: Var Char)) [])
-    context "of unitary logic goals" $
-      withParams [Top, Bottom] $ \constr ->
+    context "of unitary goals" $
+      withParams [Top, Bottom, Cut] $ \constr ->
         it "should be a noop" $
           rename constr `shouldBe` constr
     context "of Alternatives goals" $ do
@@ -486,8 +486,8 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
                     (constr (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
                             (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
             constr (PredGoal (predicate "foo" 'a') []) (PredGoal (predicate "bar" 'a') [])
-    context "to a unitary logic goal" $
-      withParams [Top, Bottom] $ \constr ->
+    context "to a unitary goal" $
+      withParams [Top, Bottom, Cut] $ \constr ->
         it "should be a noop" $
           unifyGoal (toTerm 'a' // Var "x") constr `shouldBe` constr
     context "to an Alternatives goal" $
