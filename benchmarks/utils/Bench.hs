@@ -75,7 +75,7 @@ type Benchmark = StateT BenchState IO
 type StackFrame = (String, SrcLoc)
 
 printBenchResults :: [BenchResult] -> IO ()
-printBenchResults = printTable . reverse
+printBenchResults = printTable
 
 parseArgs :: IO BenchConfig
 parseArgs = do
@@ -192,7 +192,7 @@ bench key gw = do
                                     , benchResultProlog = plResult
                                     , benchResultFactor = fromRational factor
                                     }
-      put $ st { benchmarks = benchResult : benchmarks }
+      put $ st { benchmarks = benchmarks ++ [benchResult] }
 
       return $ Just results
     else
@@ -265,6 +265,7 @@ genPrologGoal Bottom = "false"
 genPrologGoal (Alternatives x g xs) =
   "findall(" ++ genPrologTerm x ++ "," ++ genPrologGoal g ++ "," ++ genPrologTerm xs ++ ")"
 
+genPrologGoal (Once g) = "once(" ++ genPrologGoal g ++ ")"
 genPrologGoal Cut = "!"
 
 prologAtomCase :: String -> String

@@ -1,17 +1,5 @@
-% generated: 25 October 1989
-% option(s):
-%
-%   (deriv) ops8
-%
-%   David H. D. Warren
-%
-%   symbolic derivative of (x+1)*((^(x,2)+2)*(^(x,3)+3))
-
-%% top:-ops8,log10,divide10.
-
-log10 :- d(log(log(log(log(log(log(log(log(log(log(var(x))))))))))), x, D), print(D).
-
-%% divide10 :- d((((((((quotient(var(x), var(x)))/x)/x)/x)/x)/x)/x)/x)/x,x,_).
+% Compute the symbolic derivative of simple algebraic expressions.
+% Based on derive.pl from the van Roy benchmark set (https://github.com/SWI-Prolog/bench)
 
 d(sum(U, V), X, sum(DU, DV)) :- !,
     d(U, X, DU),
