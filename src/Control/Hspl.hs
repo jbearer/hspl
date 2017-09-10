@@ -103,15 +103,13 @@ module Control.Hspl (
   , (|/|)
   , (|\|)
   , (|%|)
+  , successor
+  , predecessor
   -- ** Lists
   -- $lists
   , (<:>)
   , (<++>)
   , nil
-  , helem
-  , hlength
-  , hat
-  , hdelete
   -- ** ADTs
   -- $adts
   , ($$)
@@ -444,6 +442,27 @@ infixl 9 |%|
          a -> b -> Term (HSPLType a)
 a |%| b = Ast.Modulus (toTerm a) (toTerm b)
 
+-- | @successor? (x, y)@ succeeds if @y@ is the successor of @x@. In other words, if
+--
+-- @
+--  x |+| 1 |==| y
+-- @
+successor :: forall a. (TermEntry a, Num a) => Predicate (a, a)
+successor = predicate "successor" $
+  match (v"x", v"y") |-
+    v"y" |==| v"x" |+| (1::a)
+
+-- | Opposite of 'successor'. @predecessor? (x, y)@ succeeds if @y@ is the predecessor of @x@. In
+-- other words, if
+--
+-- @
+--  x |-| 1 |==| y
+-- @
+predecessor :: forall a. (TermEntry a, Num a) => Predicate (a, a)
+predecessor = predicate "predecessor" $
+  match (v"x", v"y") |-
+    v"y" |==| v"x" |-| (1::a)
+
 -- | Query an HSPL program for a given goal. The 'ProofResult's returned can be inspected using
 -- functions like `getAllSolutions`, `searchProof`, etc.
 runHspl :: GoalWriter a -> [ProofResult]
@@ -580,8 +599,7 @@ infixr 3 $$
 -- >>> getAllSolutions $ runHspl $ enum? bool "x"
 -- [enum(False), enum(True)]
 enum :: forall a. (TermEntry a, Bounded a, Enum a) => Predicate a
-enum = predicate "enum" $
-  match(v"x") |- helem?(v"x" :: Var a, enumFromTo minBound maxBound :: [a])
+enum = predicate "enum" $ forM (enumFromTo minBound maxBound :: [a]) match
 
 {- $lists
 Lists can also be used as HSPL terms. Lists consisting entirely of constants or of variables can be
@@ -589,6 +607,10 @@ created directly from the corresponding Haskell lists. Non-homogeneous lists (li
 combination of constants and variabes) can be created with the '<:>' and '<++>' combinators. These
 lists can then be pattern matched against other lists, unifying the variables in each list against
 matching elements in the other list. See 'Control.Hspl.Examples.lists' for an example.
+
+The functions defined here merely provide primitives for constructing and using lists in HSPL. For
+some higher-level predicates for working with lists (such as 'Control.Hspl.List.length') see
+"Control.Hspl.List".
 -}
 
 -- | Prepend an element to a list of terms. This may be necessary (and ':' insufficient) when the
@@ -610,63 +632,17 @@ t <:> ts = Ast.List $ case Ast.getListTerm $ toTerm ts of
 --
 -- >>> [char "x", char "y"] <++> "foo"
 -- x :: Char, y :: Char, 'f', 'o', 'o'
-(<++>) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => [a] -> [b] -> Term [HSPLType a]
+--
+-- >>> [v"x", v"y"] <++> v"zs"
+(<++>) :: (TermData a, TermData b, [HSPLType a] ~ HSPLType b) => [a] -> b -> Term [HSPLType a]
 [] <++> ts = toTerm ts
 (t:ts) <++> ts' = t <:> (ts <++> ts')
 
 -- | A term representing an empty list. Note that for most lists which do not contain variables, the
--- list itself can be used as a term, e.g. @helem? (char "c", ['a', 'b', 'c'])@. However, for empty
+-- list itself can be used as a term, e.g. @member? (char "c", ['a', 'b', 'c'])@. However, for empty
 -- lists, the compiler cannot tell the difference between a list of type @[a]@ and a list of type
 -- @[Var a]@. Either would typecheck, and so the type is ambiguous. (Of course, in HSPL, the
 -- semantics would be the same, but GHC doesn't know that). The type annotation for 'nil' informs
 -- the compiler that it is an empty list of terms, not variables, and so there is no ambiguity.
 nil :: forall a. TermEntry a => Term [a]
 nil = toTerm ([] :: [a])
-
--- | @helem? (x, xs)@ succeeds if @x@ is a member of @xs@. There are three primary modes of use:
--- 1. If both arguments are instantiated, 'helem' can be used to determine if an element is in a
---    given list.
--- 2. If the first argument is a variable, but the second argument is instantiated, 'helem' will
---    nondeterministically bind the variable to each member of the list.
--- 3. If the first argument is instantiated, but the second argument is a variable, 'helem' will
---    generate lists, placing the given element at each position in the list. This usage will
---    succeed infinitely many times.
-helem :: forall a. TermEntry a => Predicate (a, [a])
-helem = predicate "helem" $ do
-  match (v"x", v"x" <:> v"xs")
-  match (v"x", v"y" <:> v"xs") |- helem? (v"x" :: Var a, v"xs")
-
--- | @hlength? (xs, l)@ succeeds if @l@ is the length of @xs@. If @l@ is a variable, it is bound to
--- the length of the list.
-hlength :: forall a. TermEntry a => Predicate ([a], Int)
-hlength = predicate "hlength" $ do
-  match ([] :: [a], 0 :: Int)
-  match (v"x" <:> v"xs", v"l") |- do
-    hlength? (v"xs" :: Var [a], v"l2")
-    int "l" |==| int "l2" |+| (1 :: Int)
-
--- | Delete matching elements from a list. @hdelete? (xs, x, ys)@ succeeds when @ys@ is a list
--- containing all elements from @xs@ except those which unify with @x@.
-hdelete :: forall a. TermEntry a => Predicate ([a], a, [a])
-hdelete = predicate "hdelete" $
-  match (v"in", v"elem", v"out") |-
-    findAll (v"x" :: Var a) (select? (v"in", v"elem", v"x")) (v"out")
-  where select :: Predicate ([a], a, a)
-        select = predicate "hdelete.select" $
-                    match (v"xs", v"ignore", v"x") |- do
-                      helem? (v"x" :: Var a, v"xs")
-                      v"x" |\=| (v"ignore" :: Var a)
-
--- | @hat? (i, xs, x)@ succeeds if @x@ is the element of @xs@ at position @i@ (counting starts at
--- 0). There are three primary modes of use:
--- 1. If @xs@ and @x@ are instantiated, but @i@ is a variable, 'hat' will bind @i@ to the index of
---    @x@.
--- 2. If @i@ and @xs@ are instantiated, but @x@ is a variable, 'hat' will bind @x@ to the element of
---    @xs@ at position @i@.
--- 3. If neither @i@ nor @x@ are instantiated, 'hat' will enumerate the list @xs@.
-hat :: forall a. TermEntry a => Predicate (Int, [a], a)
-hat = predicate "hat" $ do
-  match (0 :: Int, v"x" <:> v"xs", v"x")
-  match (v"i", v"x" <:> v"xs", v"y") |- do
-    hat? (v"j", v"xs" :: Var [a], v"y")
-    int "i" |==| int "j" |+| (1 :: Int)

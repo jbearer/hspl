@@ -10,6 +10,7 @@ import qualified TupleTest as Tuple
 import qualified UITest as UI
 import qualified VarMapTest as VarMap
 import qualified LogicTest as Logic
+import qualified ListTest as List
 
 main :: IO ()
 main = hspec $ do
@@ -23,3 +24,4 @@ main = hspec $ do
   UI.test
   VarMap.test
   Logic.test
+  List.test

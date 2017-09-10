@@ -4,6 +4,7 @@
 module Typecheck where
 
 import Control.Hspl
+import qualified Control.Hspl.List as L
 
 import Data.Data
 import GHC.Generics
@@ -41,38 +42,48 @@ env = Var
 
 wellTypedWithEnv :: Predicate (Env, Expr, Type)
 wellTypedWithEnv = predicate "wellTyped" $ do
-  match (v"env", Variable $$ v"x", v"t") |- helem? ((v"x", v"t"), env "env")
+  match (v"env", Variable $$ v"x", v"t") |- do
+    cut
+    once $ L.member? ((v"x", v"t"), env "env")
 
-  match (v"env", IntLiteral $$ v"x", IntType)
-  match (v"env", BoolLiteral $$ v"b", BoolType)
+  match (v"env", IntLiteral $$ v"x", IntType) |- cut
+  match (v"env", BoolLiteral $$ v"b", BoolType) |- cut
 
-  match (v"env", Lambda $$ (v"x", v"expr"), FuncType $$ (v"arg", v"result")) |-
+  match (v"env", Lambda $$ (v"x", v"expr"), FuncType $$ (v"arg", v"result")) |- do
+    cut
     wellTypedWithEnv? ((v"x", v"arg") <:> v"env", v"expr", v"result")
 
   match (v"env", App $$ (v"f", v"x"), v"type") |- do
+    cut
     wellTypedWithEnv? (v"env", v"f", FuncType $$ (v"arg", v"type"))
     wellTypedWithEnv? (v"env", v"x", v"arg")
 
   match (v"env", Let $$ (v"x", v"letExpr", v"inExpr"), v"type") |- do
+    cut
     wellTypedWithEnv? (v"env", v"letExpr", v"letType")
     wellTypedWithEnv? ((v"x", v"letType") <:> v"env", v"inExpr", v"type")
 
   match (v"env", If $$ (v"cond", v"ifTrue", v"ifFalse"), v"type") |- do
+    cut
     wellTypedWithEnv? (v"env", v"cond", BoolType)
     wellTypedWithEnv? (v"env", v"ifTrue", v"type")
     wellTypedWithEnv? (v"env", v"ifFalse", v"type")
 
-  match (v"env", PreOp $$ (Negate, v"expr"), IntType) |-
+  match (v"env", PreOp $$ (Negate, v"expr"), IntType) |- do
+    cut
     wellTypedWithEnv? (v"env", v"expr", IntType)
-  match (v"env", PreOp $$ (Not, v"expr"), BoolType) |-
+  match (v"env", PreOp $$ (Not, v"expr"), BoolType) |- do
+    cut
     wellTypedWithEnv? (v"env", v"expr", BoolType)
 
   match (v"env", BinOp $$ (v"l", v"op", v"r"), IntType) |- do
-    helem? (v"op", [Plus, Minus, Times, Divide])
+    once $ L.member? (v"op", [Plus, Minus, Times, Divide])
+    cut
     wellTypedWithEnv? (v"env", v"l", IntType)
     wellTypedWithEnv? (v"env", v"r", IntType)
   match (v"env", BinOp $$ (v"l", v"op", v"r"), BoolType) |- do
-    helem? (v"op", [And, Or])
+    once $ L.member? (v"op", [And, Or])
+    cut
     wellTypedWithEnv? (v"env", v"l", BoolType)
     wellTypedWithEnv? (v"env", v"r", BoolType)
 

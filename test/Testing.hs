@@ -53,6 +53,7 @@ import Test.Hspec (shouldBe)
 import Test.HUnit
 
 import Control.Hspl.Internal.Ast
+import Control.Hspl.Internal.UI
 
 type TestSuite = SpecWith ()
 
@@ -120,7 +121,10 @@ shouldBeSubsetOf xs ys
   | otherwise = failure $ "Expected: " ++ show xs ++ "\nto be a subset of: " ++ show ys
 
 shouldBeAlphaEquivalentTo :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Assertion
-shouldBeAlphaEquivalentTo a b = toTerm a `shouldSatisfy` alphaEquivalent (toTerm b)
+shouldBeAlphaEquivalentTo a b
+  | alphaEquivalent (toTerm a) (toTerm b) = success
+  | otherwise = failure $
+    "Expected: " ++ formatTerm (toTerm a) ++ "\nto be alphaEquivalent to: " ++ formatTerm (toTerm b)
 
 class AssertError a where
   assertError :: String -> a -> Assertion

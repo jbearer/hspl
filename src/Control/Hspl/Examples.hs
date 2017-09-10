@@ -36,6 +36,7 @@ import Data.Data
 import GHC.Generics
 
 import Control.Hspl
+import qualified Control.Hspl.List as L
 
 -- $syllogism
 -- A classic example of modus ponens: all humans are mortal, and Hypatia is human. Therefore,
@@ -83,7 +84,7 @@ goodWidget = predicate "goodWidget" $
 -- >>> getAllSolutions $ runHspl $ cross? (['a', 'b'], [True, False], v"xs")
 -- [cross('a', 'b', True, False, 'a', True),cross('a', 'b', True, False, 'a', False),cross('a', 'b', True, False, 'b', True),cross('a', 'b', True, False, 'b', False)]
 
--- | Similar to 'helem', but if the first variable is unbound, 'distinct' succeeds only once for
+-- | Similar to 'member', but if the first variable is unbound, 'distinct' succeeds only once for
 -- each distinct element of the list.
 distinct :: forall a. TermEntry a => Predicate (a, [a])
 distinct = predicate "distinct" $ do
@@ -96,8 +97,8 @@ distinct = predicate "distinct" $ do
 cross :: forall a b. (TermEntry a, TermEntry b) => Predicate ([a], [b], (a, b))
 cross = predicate "cross" $
   match (v"xs" :: Var [a], v"ys" :: Var [b], (v"x", v"y")) |- do
-    helem? (v"x" :: Var a, v"xs")
-    helem? (v"y" :: Var b, v"ys")
+    L.member? (v"x" :: Var a, v"xs")
+    L.member? (v"y" :: Var b, v"ys")
 
 -- $equals
 -- Example illustrating the difference between 'is' and '|=|'.

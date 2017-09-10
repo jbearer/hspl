@@ -39,6 +39,7 @@ library
   if flag(ShowTerms)
     cpp-options:       -DSHOW_TERMS
   exposed-modules:     Control.Hspl
+                     , Control.Hspl.List
                      , Control.Hspl.Examples
                      , Control.Hspl.Internal.Ast
                      , Control.Hspl.Internal.Unification
@@ -81,6 +82,7 @@ test-suite hspl-test
                      , UITest
                      , VarMapTest
                      , LogicTest
+                     , ListTest
 
 source-repository head
   type:     git
