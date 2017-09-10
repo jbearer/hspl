@@ -63,7 +63,7 @@ d = predicate "d" $ do
     cut
     string "x" |\=| v"y"
 
-  match(Const $$ v"n", v"x", Const 0)
+  match(Const $$ __, __, Const 0)
 
 -- | Clone of 'd' above, written in Haskell and therefore (presumable) correct. Used to check the
 -- output of HSPL.

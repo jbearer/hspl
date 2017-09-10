@@ -69,12 +69,15 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
         ("x :: " ++ formatType (typeOf $ Just True))
     it "should show Fresh variables with an underscore" $
       formatVariable (Fresh 0 :: Var Bool) `shouldBe` ("_0 :: " ++ formatType (typeOf True))
+    it "should show Anon variables with two underscores" $
+      formatVariable (Anon :: Var Bool) `shouldBe` ("__ :: " ++ formatType (typeOf True))
   describe "parensVariable" $
     it "should always add parentheses" $ do
       let runTest x = parensVariable x `shouldBe` ("(" ++ formatVariable x ++ ")")
       runTest (Var "x" :: Var Bool)
       runTest (Var "x" :: Var (Maybe Bool))
       runTest (Fresh 0 :: Var Bool)
+      runTest (Anon :: Var Bool)
 
   describe "formatTerm" $ do
     let format :: TermData a => a -> String

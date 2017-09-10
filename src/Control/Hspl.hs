@@ -94,6 +94,8 @@ module Control.Hspl (
   , (\*)
   , auto
   , v
+  -- *** Anonymous variablse
+  , __
   -- ** Numbers
   -- | HSPL provides special semantics for numeric types. Arithmetic expressions can be created
   -- using the following operators and evaluated using 'is'.
@@ -549,12 +551,16 @@ infixr 9 \*
 (\*) _ = Var
 
 -- | Construct a variable and let the Haskell compiler try to deduce its type.
-auto :: Typeable a => String -> Var a
+auto :: String -> Var a
 auto = Var
 
 -- | Terser, but less readable, synonym for 'auto'.
-v :: Typeable a => String -> Var a
+v :: String -> Var a
 v = auto
+
+-- | Anonymous variable. '__' unifies with any term, creating no bindings.
+__ :: Var a
+__ = Ast.Anon
 
 {- $adts
 Algebraic data types can be used as normal HSPL terms as long as they are instances of 'Termable'.

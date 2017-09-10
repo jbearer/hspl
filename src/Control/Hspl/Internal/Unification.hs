@@ -137,8 +137,10 @@ freeIn x (Modulus t1 t2) = freeIn x t1 || freeIn x t2
 -- cannot be created by composing (@<>@) two smaller unifiers. This function will fail with
 -- 'Nothing' if the two terms cannot be unified.
 mgu :: Term a -> Term a -> Maybe Unifier
+mgu (Variable Anon) _ = Just M.empty
+mgu _ (Variable Anon) = Just M.empty
 mgu (Variable x) (Variable y)
-  | x == y = Just M.empty -- no occurs check if we're unifying to variables
+  | x == y = Just M.empty -- no occurs check if we're unifying two variables
   | otherwise = case y of
     -- When one variable is a program-generated 'Fresh' variable, prefer to replace it with the
     -- other, thereby keeping user-defined variables in play as long as possible. Semantically it
@@ -316,6 +318,7 @@ runRenamed = runUnification . runRenamedT
 -- it is replaced with the corresonding new name. Otherwise, a 'Fresh' variable with a unique ID is
 -- generated and added to the 'Renamer'.
 renameVar :: (TermEntry a, MonadUnification m) => Var a -> RenamedT m (Var a)
+renameVar Anon = return Anon
 renameVar x = get >>= \m -> case M.lookup x m of
   Just x' -> return x'
   Nothing -> do

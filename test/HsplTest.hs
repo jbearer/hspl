@@ -125,6 +125,11 @@ test = describeModule "Control.Hspl" $ do
       v"x" `shouldBe` (Var "x" :: Var Char)
       v"x" `shouldBe` (Var "x" :: Var String)
 
+  describe "anonymous variables" $
+    it "should be constructible with __" $ do
+      __ `shouldBe` (Anon :: Var Bool)
+      __ `shouldBe` (Anon :: Var Char)
+
   describe "ADT term construction" $ do
     it "should work with constructors of all arities" $ do
       A1 $$ 'a' `shouldBe` Ast.adt A1 'a'

@@ -20,15 +20,15 @@ isComposite = predicate "isComposite" $
 
 selectPrime :: Predicate ([Integer], Integer)
 selectPrime = predicate "selectPrime" $ do
-  match(v"x" <:> v"xs", v"x") |- do
+  match(v"x" <:> __, v"x") |- do
     v"x" |>| (1 :: Integer)
     lnot $ isComposite? v"x"
-  match(v"x" <:> v"xs", v"y") |-
+  match(__ <:> v"xs", v"y") |-
     selectPrime? (v"xs", v"y")
 
 power :: Predicate (Integer, Integer, Integer)
 power = semiDetPredicate "power" $ do
-  match(v"b", 0 :: Integer, 1 :: Integer)
+  match(__, 0 :: Integer, 1 :: Integer)
   match(v"b", v"p", v"r") |- do
     v"p1" |==| v"p" |-| (1 :: Integer)
     power? (v"b", v"p1", v"r1")
@@ -45,8 +45,8 @@ pseudoPerfect = predicate "pseudoPerfect" $
 
 selectPerfect :: Predicate ([Integer], Integer)
 selectPerfect = predicate "selectPerfect" $ do
-  match(v"p" <:> v"ps", v"r") |- pseudoPerfect? (v"p", v"r")
-  match(v"p" <:> v"ps", v"r") |- selectPerfect? (v"ps", v"r")
+  match(v"p" <:> __, v"r") |- pseudoPerfect? (v"p", v"r")
+  match(__ <:> v"ps", v"r") |- selectPerfect? (v"ps", v"r")
 
 perfect :: Predicate Integer
 perfect = predicate "perfect" $

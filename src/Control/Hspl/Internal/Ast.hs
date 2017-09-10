@@ -275,9 +275,13 @@ variables, terms, predicates, and clauses.
 
 -- | A variable is a term which unifies with any other 'Term'.
 data Var a where
-  Var :: Typeable a => String -> Var a
+  -- | A basic named variable.
+  Var :: String -> Var a
+  -- | A variable without a name. Anonymous variables unify with all terms, but do not create any
+  -- bindings.
+  Anon :: Var a
   -- | Internal constructor used to generate variables which are not equal to any user-defined ones.
-  Fresh :: Typeable a => Int -> Var a
+  Fresh :: Int -> Var a
   deriving (Typeable)
 deriving instance Show (Var a)
 deriving instance Eq (Var a)
@@ -476,6 +480,8 @@ alphaEquivalent term1 term2 = isJust $ evalStateT (alpha term1 term2) (M.empty, 
 
         alphaVar :: TermEntry a => Var a -> Var a ->
                     StateT (M.Map ErasedVar ErasedVar, M.Map ErasedVar ErasedVar) Maybe ()
+        alphaVar Anon _ = return ()
+        alphaVar _ Anon = return ()
         alphaVar x y = do (ml, mr) <- get
                           case (M.lookup (EVar x) ml, M.lookup (EVar y) mr) of
                             -- We haven't seen either of these variables for. Make a note that they

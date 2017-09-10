@@ -46,8 +46,8 @@ wellTypedWithEnv = predicate "wellTyped" $ do
     cut
     once $ L.member? ((v"x", v"t"), env "env")
 
-  match (v"env", IntLiteral $$ v"x", IntType) |- cut
-  match (v"env", BoolLiteral $$ v"b", BoolType) |- cut
+  match (__, IntLiteral $$ __, IntType) |- cut
+  match (__, BoolLiteral $$ __, BoolType) |- cut
 
   match (v"env", Lambda $$ (v"x", v"expr"), FuncType $$ (v"arg", v"result")) |- do
     cut

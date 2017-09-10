@@ -50,6 +50,7 @@ formatVariable :: TermEntry a => Var a -> String
 formatVariable v = case v of
   Var x -> x ++ " :: " ++ formatType (varType v)
   Fresh i -> "_" ++ show i ++ " :: " ++ formatType (varType v)
+  Anon -> "__ :: " ++ formatType (varType v)
 
 -- | Similar to 'formatVariable', but 'parensVariable' will wrap the result in parentheses.
 parensVariable :: TermEntry a => Var a -> String

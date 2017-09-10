@@ -119,9 +119,24 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       varType (Var "x" :: Var Bool) `shouldBe` typeOf True
       varType (Var "x" :: Var (Bool, ())) `shouldBe` typeOf (True, ())
       varType (Var "x" :: Var (Tree Bool)) `shouldBe` typeOf (Leaf True)
+      varType (Anon :: Var Bool) `shouldBe` typeOf True
+      varType (Anon :: Var (Bool, ())) `shouldBe` typeOf (True, ())
+      varType (Anon :: Var (Tree Bool)) `shouldBe` typeOf (Leaf True)
+      varType (Fresh 0 :: Var Bool) `shouldBe` typeOf True
+      varType (Fresh 0 :: Var (Bool, ())) `shouldBe` typeOf (True, ())
+      varType (Fresh 0 :: Var (Tree Bool)) `shouldBe` typeOf (Leaf True)
     it "should compare based on name" $ do
       (Var "x" :: Var Bool) `shouldEqual` (Var "x" :: Var Bool)
       (Var "x" :: Var ()) `shouldNotEqual` (Var "y" :: Var ())
+
+      (Anon :: Var Bool) `shouldEqual` (Anon :: Var Bool)
+
+      (Fresh 0 :: Var Bool) `shouldEqual` (Fresh 0 :: Var Bool)
+      (Fresh 0 :: Var ()) `shouldNotEqual` (Fresh 1 :: Var ())
+
+      (Var "x" :: Var Bool) `shouldNotEqual` Anon
+      (Var "x" :: Var Bool) `shouldNotEqual` Fresh 0
+      (Fresh 0 :: Var Bool) `shouldNotEqual` Anon
   describe "terms" $ do
     it "can be constructed from HSPL primitives" $ do
       toTerm () `shouldBe` Constant ()
@@ -237,6 +252,9 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       toTerm (Var "x" :: Var Bool) `shouldBe` Variable (Var "x" :: Var Bool)
       toTerm (Var "x" :: Var (Tree Bool)) `shouldBe` Variable (Var "x" :: Var (Tree Bool))
       toTerm (Var "x" :: Var (Bool, String)) `shouldBe` Variable (Var "x" :: Var (Bool, String))
+      toTerm (Anon :: Var Bool) `shouldBe` Variable (Anon :: Var Bool)
+      toTerm (Anon :: Var (Tree Bool)) `shouldBe` Variable (Anon :: Var (Tree Bool))
+      toTerm (Anon :: Var (Bool, String)) `shouldBe` Variable (Anon :: Var (Bool, String))
       toTerm (Fresh 0 :: Var Bool) `shouldBe` Variable (Fresh 0 :: Var Bool)
       toTerm (Fresh 0 :: Var (Tree Bool)) `shouldBe` Variable (Fresh 0 :: Var (Tree Bool))
       toTerm (Fresh 0 :: Var (Bool, String)) `shouldBe` Variable (Fresh 0 :: Var (Bool, String))
@@ -366,11 +384,23 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
                     , ETerm $ toTerm (Var "x" :: Var (Tree Char))
                     ]
   describe "alpha equivalence" $ do
-    context "of variables" $
+    context "of variables" $ do
       it "should succeed" $ do
         (Var "x" :: Var Char) `shouldBeAlphaEquivalentTo` (Var "y" :: Var Char)
         (Var "x" :: Var Char) `shouldBeAlphaEquivalentTo` (Fresh 0 :: Var Char)
         (Fresh 0 :: Var Char) `shouldBeAlphaEquivalentTo` (Var "x" :: Var Char)
+      it "should work for anonymous variables" $ do
+        Anon `shouldBeAlphaEquivalentTo` (Anon :: Var Char)
+        Anon `shouldBeAlphaEquivalentTo` (Var "x" :: Var Char)
+        (Var "x" :: Var Char) `shouldBeAlphaEquivalentTo` Anon
+        (Var "x" :: Var Char, Var "y" :: Var Char) `shouldBeAlphaEquivalentTo` (Anon, Anon)
+        (Anon, Anon) `shouldBeAlphaEquivalentTo` (Var "x" :: Var Char, Var "y" :: Var Char)
+        (Anon, Var "x" :: Var Char) `shouldBeAlphaEquivalentTo` (Var "y" :: Var Char, Anon)
+    withParams [Var "x" :: Var Char, Fresh 0, Anon] $ \x ->
+      context "of a variable and a non-variable" $
+        it "should fail" $ do
+          toTerm x `shouldNotSatisfy` alphaEquivalent (Constant 'a')
+          Constant 'a' `shouldNotSatisfy` alphaEquivalent (toTerm x)
     context "of constants" $ do
       it "should succeed when they are equal" $
         Constant 'a' `shouldBeAlphaEquivalentTo` Constant 'a'

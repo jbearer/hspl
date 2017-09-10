@@ -43,7 +43,7 @@ import Control.Hspl
 --    succeed infinitely many times.
 member :: forall a. TermEntry a => Predicate (a, [a])
 member = predicate "member" $ do
-  match (v"x", v"x" <:> v"xs")
+  match (v"x", v"x" <:> __)
   match (v"x", v"y" <:> v"xs") |- member? (v"x" :: Var a, v"xs")
 
 -- | @length? (xs, l)@ succeeds if @l@ is the length of @xs@. If @l@ is a variable, it is bound to
@@ -51,7 +51,7 @@ member = predicate "member" $ do
 length :: forall a. TermEntry a => Predicate ([a], Int)
 length = predicate "length" $ do
   match ([] :: [a], 0 :: Int)
-  match (v"x" <:> v"xs", v"l") |- do
+  match (__ <:> v"xs", v"l") |- do
     length? (v"xs" :: Var [a], v"l2")
     int "l" |==| int "l2" |+| (1 :: Int)
 
@@ -82,9 +82,9 @@ delete = predicate "delete" $
 nth :: forall a. TermEntry a => Predicate (Int, [a], a)
 nth = predicate "nth" $ do
   match (v"index", v"list", v"elem") |- do
-    unified? (v"index" :: Var a)
+    unified? (int "index")
     cut
-    nthDet? (v"index", v"list", v"elem")
+    nthDet? (int "index", v"list", v"elem")
 
   match (v"index", v"head" <:> v"tail", v"elem") |-
     nthGen? (v"tail", v"elem", v"head", 0::Int, v"index")
@@ -93,21 +93,21 @@ nth = predicate "nth" $ do
     -- Take the nth element deterministically, with 6-way loop unrolling
     nthDet :: Predicate (Int, [a], a)
     nthDet = predicate "nthDet" $ do
-      match (0::Int, v"e0" <:> v"_", v"e0") |- cut
-      match (1::Int, [v"e0", v"e1"] <++> v"_", v"e1") |- cut
-      match (2::Int, [v"e0", v"e1", v"e2"] <++> v"_", v"e2") |- cut
-      match (3::Int, [v"e0", v"e1", v"e2", v"e3"] <++> v"_", v"e3") |- cut
-      match (4::Int, [v"e0", v"e1", v"e2", v"e3", v"e4"] <++> v"_", v"e4") |- cut
-      match (5::Int, [v"e0", v"e1", v"e2", v"e3", v"e4", v"e5"] <++> v"_", v"e5") |- cut
-      match (v"n", v"e0" <:> v"e1" <:> v"tail", v"elem") |- do
+      match (0::Int, v"e" <:> __, v"e") |- cut
+      match (1::Int, [__, v"e"] <++> __, v"e") |- cut
+      match (2::Int, [__, __, v"e"] <++> __, v"e") |- cut
+      match (3::Int, [__, __, __, v"e"] <++> __, v"e") |- cut
+      match (4::Int, [__, __, __, __, v"e"] <++> __, v"e") |- cut
+      match (5::Int, [__, __, __, __, __, v"e"] <++> __, v"e") |- cut
+      match (v"n", [__, __, __, __, __, __, v"head"] <++> v"tail", v"elem") |- do
         v"m" |==| v"n" |-| (6::Int)
         v"m" |>=| (0::Int)
-        nthDet? (v"m", v"tail", v"elem")
+        nthDet? (v"m", v"head" <:> v"tail", v"elem")
 
-    -- generate successively longer lists with elem at the ith position
+    -- generate lists with elem at the ith position
     nthGen :: Predicate ([a], a, a, Int, Int)
     nthGen = predicate "nthGen" $ do
-      match (v"_", v"elem", v"elem", v"base", v"base")
-      match (v"head" <:> v"tail", v"elem", v"_", int "n", v"base") |- do
+      match (__, v"elem", v"elem", v"base", v"base")
+      match (v"head" <:> v"tail", v"elem", __, int "n", v"base") |- do
         successor? (int "n", int "m")
         nthGen? (v"tail", v"elem", v"head", v"m", v"base")

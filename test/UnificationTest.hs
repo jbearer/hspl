@@ -111,6 +111,13 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       let t = adt Just (Var "y" :: Var Bool)
       queryVar (t // Var "x") (Var "x" :: Var (Maybe Bool)) `shouldBe` Partial t
   describe "term unification" $ do
+    context "of anonymous variables" $ do
+      it "should always succeed" $ do
+        mgu (toTerm Anon) (toTerm 'a') `shouldBe` Just M.empty
+        mgu (toTerm 'a') (toTerm Anon) `shouldBe` Just M.empty
+        mgu (toTerm (Anon :: Var Char)) (toTerm Anon) `shouldBe` Just M.empty
+      it "should bind multiple anonymous variables to different values" $
+        mgu (toTerm ('a', Anon)) (toTerm (Anon, 'b')) `shouldBe` Just M.empty
     when "both terms are variables" $
       it "should keep user-defined variables over fresh variables where possible" $ do
         mgu (toTerm (Var "x" :: Var Char)) (toTerm (Fresh 0 :: Var Char)) `shouldBe`
@@ -130,6 +137,12 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
             (List $ VarCons (toTerm True) (Var "x")) `shouldBe` Nothing
         mgu (toTerm (Var "x" :: Var RecursiveType))
             (adt Rec (Var "x" :: Var RecursiveType)) `shouldBe` Nothing
+      it "should match the tail of a list" $ do
+        mgu (toTerm "foo") (List $ VarCons (toTerm 'f') (Var "xs")) `shouldBe` Just (toTerm "oo" // Var "xs")
+        mgu (List $ VarCons (toTerm 'f') (Var "xs")) (toTerm "foo") `shouldBe` Just (toTerm "oo" // Var "xs")
+
+        mgu (toTerm "foo") (List $ VarCons (toTerm 'f') Anon) `shouldBe` Just M.empty
+        mgu (List $ VarCons (toTerm 'f') Anon) (toTerm "foo") `shouldBe` Just M.empty
     when "both elements are constants" $ do
       it "should unify equal constants" $ do
         mgu (toTerm True) (toTerm True) `shouldBe` Just M.empty
@@ -229,6 +242,8 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
                        ]
     let rename = renameWithContext r 4
     context "of a variable" $ do
+      it "should leave anonymous variables unchanged" $
+        rename (toTerm (Anon :: Var Char, Anon :: Var Char)) `shouldBe` toTerm (Anon, Anon)
       it "should replace the variable if it appears in the renamer" $ do
         rename (toTerm (Var "x" :: Var Bool)) `shouldBe` toTerm (Fresh 0 :: Var Bool)
         rename (toTerm (Var "x" :: Var Char)) `shouldBe` toTerm (Fresh 1 :: Var Char)

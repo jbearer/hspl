@@ -222,6 +222,7 @@ genPrologTerm (Constant c) = prologAtomCase $ show c
 
 genPrologTerm (Variable (Var x)) = prologVarCase x
 genPrologTerm (Variable (Fresh n)) = prologVarCase $ "Fresh" ++ show n
+genPrologTerm (Variable Anon) = "_"
 
 genPrologTerm (Constructor c []) = prologAtomCase $ show c
 genPrologTerm (Constructor c ts) =
