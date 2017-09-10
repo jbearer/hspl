@@ -364,6 +364,17 @@ test = describeModule "Control.Hspl" $ do
       length (getAllSolutions $ runHspl $ hdelete? (['a', 'b'], 'b', ['a', 'b'])) `shouldBe` 0
       length (getAllSolutions $ runHspl $ hdelete? (['a', 'b'], 'b', ['a', 'c'])) `shouldBe` 0
 
+  describe "the unified predicate" $
+    it "should create an IsUnified goal" $
+      execGoalWriter (unified? int "x") `shouldBe`
+        PredGoal (Ast.predicate "unified" (int "x"))
+                 [Ast.HornClause (Ast.predicate "unified" (int "x")) (IsUnified $ toTerm $ int "x")]
+  describe "the variable predicate" $
+    it "should create an IsVariable goal" $
+      execGoalWriter (variable? int "x") `shouldBe`
+        PredGoal (Ast.predicate "variable" (int "x"))
+                 [Ast.HornClause (Ast.predicate "variable" (int "x")) (IsVariable $ toTerm $ int "x")]
+
   describe "the |=| predicate" $ do
     let exec = execGoalWriter
     it "should create a CanUnify goal from TermData" $ do

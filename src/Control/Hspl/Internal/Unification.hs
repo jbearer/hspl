@@ -246,6 +246,8 @@ unifyGoal u (CanUnify t1 t2) = CanUnify (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Identical t1 t2) = Identical (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (Equal t1 t2) = Equal (unifyTerm u t1) (unifyTerm u t2)
 unifyGoal u (LessThan t1 t2) = LessThan (unifyTerm u t1) (unifyTerm u t2)
+unifyGoal u (IsUnified t) = IsUnified $ unifyTerm u t
+unifyGoal u (IsVariable t) = IsVariable $ unifyTerm u t
 unifyGoal u (Not g) = Not $ unifyGoal u g
 unifyGoal u (And g1 g2) = And (unifyGoal u g1) (unifyGoal u g2)
 unifyGoal u (Or g1 g2) = Or (unifyGoal u g1) (unifyGoal u g2)
@@ -375,36 +377,20 @@ renamePredicate (Predicate name arg) = liftM (Predicate name) $ renameTerm arg
 -- | Rename all of the variables in a goal.
 renameGoal :: MonadUnification m => Goal -> RenamedT m Goal
 renameGoal (PredGoal p cs) = renamePredicate p >>= \p' -> return (PredGoal p' cs)
-renameGoal (CanUnify t1 t2) = renameBinaryGoal CanUnify t1 t2
-renameGoal (Identical t1 t2) = renameBinaryGoal Identical t1 t2
-renameGoal (Equal t1 t2) = renameBinaryGoal Equal t1 t2
-renameGoal (LessThan t1 t2) = renameBinaryGoal LessThan t1 t2
+renameGoal (CanUnify t1 t2) = liftM2 CanUnify (renameTerm t1) (renameTerm t2)
+renameGoal (Identical t1 t2) = liftM2 Identical (renameTerm t1) (renameTerm t2)
+renameGoal (Equal t1 t2) = liftM2 Equal (renameTerm t1) (renameTerm t2)
+renameGoal (LessThan t1 t2) = liftM2 LessThan (renameTerm t1) (renameTerm t2)
+renameGoal (IsUnified t) = IsUnified `fmap` renameTerm t
+renameGoal (IsVariable t) = IsVariable `fmap` renameTerm t
 renameGoal (Not g) = liftM Not $ renameGoal g
-renameGoal (And g1 g2) = do
-  g1' <- renameGoal g1
-  g2' <- renameGoal g2
-  return $ And g1' g2'
-renameGoal (Or g1 g2) = do
-  g1' <- renameGoal g1
-  g2' <- renameGoal g2
-  return $ Or g1' g2'
+renameGoal (And g1 g2) = liftM2 And (renameGoal g1) (renameGoal g2)
+renameGoal (Or g1 g2) = liftM2 Or (renameGoal g1) (renameGoal g2)
 renameGoal Top = return Top
 renameGoal Bottom = return Bottom
-renameGoal (Alternatives x g xs) = do
-  x' <- renameTerm x
-  g' <- renameGoal g
-  xs' <- renameTerm xs
-  return $ Alternatives x' g' xs'
+renameGoal (Alternatives x g xs) = liftM3 Alternatives (renameTerm x) (renameGoal g) (renameTerm xs)
 renameGoal (Once g) = liftM Once $ renameGoal g
 renameGoal Cut = return Cut
-
--- | Helper function for renaming variables in a 'Goal' with two 'Term' arguments.
-renameBinaryGoal :: MonadUnification m =>
-                    (Term a -> Term b -> Goal) -> Term a -> Term b -> RenamedT m Goal
-renameBinaryGoal constr t1 t2 = do
-  t1' <- renameTerm t1
-  t2' <- renameTerm t2
-  return $ constr t1' t2'
 
 -- | Rename all of the variables in a clause.
 renameClause :: MonadUnification m => HornClause -> m HornClause

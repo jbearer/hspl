@@ -48,6 +48,8 @@ module Control.Hspl.Internal.Solver (
   , proveIdentical
   , proveEqual
   , proveLessThan
+  , proveIsUnified
+  , proveIsVariable
   , proveNot
   , proveAnd
   , proveOrLeft
@@ -87,6 +89,10 @@ data Proof =
            | forall a. TermEntry a => Equated (Term a) (Term a)
              -- | A proof of a 'LessThan' goal.
            | forall a. (TermEntry a, Ord a) => ProvedLessThan a a
+             -- | A proof of an 'IsUnified' goal.
+           | forall a. TermEntry a => ProvedUnified (Term a)
+             -- | A proof of an 'IsVariable' goal.
+           | forall a. TermEntry a => ProvedVariable (Term a)
              -- | A proof of a 'Not' goal.
            | Negated Goal
              -- | A proof of an 'And' goal. Contains a proof of each subgoal in the conjunction.
@@ -111,10 +117,12 @@ data Proof =
 instance Eq Proof where
   (==) proof1 proof2 = case (proof1, proof2) of
     (Resolved p proof, Resolved p' proof') -> p == p' && proof == proof'
-    (Unified t1 t2, Unified t1' t2') -> compareBinaryProof (t1, t2) (t1', t2')
-    (Identified t1 t2, Identified t1' t2') -> compareBinaryProof (t1, t2) (t1', t2')
-    (Equated t1 t2, Equated t1' t2') -> compareBinaryProof (t1, t2) (t1', t2')
-    (ProvedLessThan t1 t2, ProvedLessThan t1' t2') -> compareBinaryProof (t1, t2) (t1', t2')
+    (Unified t1 t2, Unified t1' t2') -> compareTerms (t1, t2) (t1', t2')
+    (Identified t1 t2, Identified t1' t2') -> compareTerms (t1, t2) (t1', t2')
+    (Equated t1 t2, Equated t1' t2') -> compareTerms (t1, t2) (t1', t2')
+    (ProvedLessThan t1 t2, ProvedLessThan t1' t2') -> compareTerms (t1, t2) (t1', t2')
+    (ProvedUnified t, ProvedUnified t') -> compareTerms t t'
+    (ProvedVariable t, ProvedVariable t') -> compareTerms t t'
     (Negated g, Negated g') -> g == g'
     (ProvedAnd p1 p2, ProvedAnd p1' p2') -> p1 == p1' && p2 == p2'
     (ProvedLeft p g, ProvedLeft p' g') -> p == p' && g == g'
@@ -127,7 +135,7 @@ instance Eq Proof where
     (ProvedOnce p, ProvedOnce p') -> p == p'
     (ProvedCut, ProvedCut) -> True
     _ -> False
-    where compareBinaryProof t t' = maybe False (t==) $ cast t'
+    where compareTerms t t' = maybe False (t==) $ cast t'
 
 instance Show Proof where
   show (Resolved p proof) = "Resolved (" ++ show p ++ ") (" ++ show proof ++ ")"
@@ -140,6 +148,8 @@ instance Show Proof where
   show (ProvedLessThan t1 t2) =
     "ProvedLessThan (" ++ show (toTerm t1) ++ ") (" ++ show (toTerm t2) ++ ")"
 #endif
+  show (ProvedUnified t) = "ProvedUnified (" ++ show t ++ ")"
+  show (ProvedVariable t) = "ProvedVariable (" ++ show t ++ ")"
   show (Negated g) = "Negated (" ++ show g ++ ")"
   show (ProvedAnd p1 p2) = "ProvedAnd (" ++ show p1 ++ ") (" ++ show p2
   show (ProvedLeft p g) = "ProvedLeft (" ++ show p ++ ") (" ++ show g ++ ")"
@@ -180,6 +190,8 @@ searchProof (proof, unifier) goal = searchProof' proof (runRenamed $ renameGoal 
         matchGoal (Equal t1 t2) (Equal t1' t2') = matchBinary Equal (t1, t2) (t1', t2')
         matchGoal (LessThan t1 t2) (LessThan t1' t2') =
           matchBinary LessThan (toTerm t1, toTerm t2) (toTerm t1', toTerm t2')
+        matchGoal g@(IsUnified t) (IsUnified t') = cast t' >>= mgu t >>= \u -> return $ unifyGoal u g
+        matchGoal g@(IsVariable t) (IsVariable t') = cast t' >>= mgu t >>= \u -> return $ unifyGoal u g
         matchGoal (Not g) (Not g') = fmap Not $ matchGoal g g'
         matchGoal (And g1 g2) (And g1' g2') = do g1'' <- matchGoal g1 g1'
                                                  g2'' <- matchGoal g2 g2'
@@ -233,6 +245,8 @@ getSolution (proof, _) = case proof of
   Identified t1 t2 -> Identical t1 t2
   Equated t1 t2 -> Equal t1 t2
   ProvedLessThan t1 t2 -> LessThan (toTerm t1) (toTerm t2)
+  ProvedUnified t -> IsUnified t
+  ProvedVariable t -> IsVariable t
   Negated g -> Not g
   ProvedAnd p1 p2 -> And (getSolution (p1, mempty)) (getSolution (p2, mempty))
   ProvedLeft p g -> Or (getSolution (p, mempty)) g
@@ -333,6 +347,12 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   -- evaluate to a constant, the program should terminate with a runtime error as if by invoking
   -- 'errorUninstantiatedVariables'. The zero-overhead version is 'proveLessThan'.
   tryLessThan :: (TermEntry a, Ord a) => Term a -> Term a -> m ProofResult
+  -- | Attempt to prove that a 'Term' is fully unified (i.e. it recursively contains no variables).
+  -- No new unifications are created. The zero-overhead version is 'proveIsUnified'.
+  tryIsUnified :: TermEntry a => Term a -> m ProofResult
+  -- | Attempt to prove that a 'Term' is an uninstantiated variable. No new unfications are created.
+  -- The zero-overhead version is 'proveIsVariable'.
+  tryIsVariable :: TermEntry a => Term a -> m ProofResult
   -- | Attempt to prove the negation of a goal. No new unifications are created. The resulting
   -- computation should either fail with 'mzero' (if the negated goal succeeds at least once) or
   -- produce a trivial proof of the negation of the goal. The zero-overhead version is
@@ -393,6 +413,8 @@ instance Monad m => MonadSolver (SolverT s m) where
   tryIdentical = proveIdentical
   tryEqual = proveEqual
   tryLessThan = proveLessThan
+  tryIsUnified = proveIsUnified
+  tryIsVariable = proveIsVariable
   tryNot = proveNot
   tryAnd = proveAnd
   tryOrLeft = proveOrLeft
@@ -453,6 +475,15 @@ proveLessThan lhs rhs = case (fromTerm lhs, fromTerm rhs) of
   (Just l, Just r) | l < r -> return (ProvedLessThan l r, mempty)
   (Just _, Just _) -> mzero
   _ -> errorUninstantiatedVariables
+
+-- | Zero-overhead version of 'tryIsUnified'.
+proveIsUnified :: (TermEntry a, MonadSolver m) => Term a -> m ProofResult
+proveIsUnified t = if isJust (fromTerm t) then return (ProvedUnified t, mempty) else mzero
+
+-- | Zero-overhead version of 'tryIsVariable'.
+proveIsVariable :: (TermEntry a, MonadSolver m) => Term a -> m ProofResult
+proveIsVariable t@(Variable _) = return (ProvedVariable t, mempty)
+proveIsVariable _ = mzero
 
 -- | Zero-overhead version of 'tryNot'.
 proveNot :: MonadSolver m => Goal -> m ProofResult
@@ -521,6 +552,8 @@ prove g = case g of
   Identical t1 t2 -> tryIdentical t1 t2
   Equal t1 t2 -> tryEqual t1 t2
   LessThan t1 t2 -> tryLessThan t1 t2
+  IsUnified t -> tryIsUnified t
+  IsVariable t -> tryIsVariable t
   Not g' -> tryNot g'
   And g1 g2 -> tryAnd g1 g2
   Or g1 g2 -> tryOrLeft g1 g2 `mplus` tryOrRight g1 g2

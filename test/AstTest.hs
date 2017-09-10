@@ -485,6 +485,18 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
 
       let g'' = PredGoal (predicate "bar" 'a') [HornClause (predicate "bar" (Var "x" :: Var Char)) g'']
       g'' `shouldNotEqual` g
+  withParams [(IsUnified, IsUnified), (IsVariable, IsVariable)] $ \(char, bool) ->
+    describe "unary term goals" $ do
+      context "of the same type" $
+        it "should compare according to the arguments" $ do
+          char (toTerm 'a') `shouldEqual` char (toTerm 'a')
+          char (toTerm $ Var "x") `shouldEqual` char (toTerm $ Var "x")
+          char (toTerm 'a') `shouldNotEqual` char (toTerm 'b')
+          char (toTerm $ Var "x") `shouldNotEqual` char (toTerm $ Var "y")
+      context "of different types" $
+        it "should compare unequal" $ do
+          char (toTerm 'a') `shouldNotEqual` bool (toTerm True)
+          char (toTerm $ Var "x") `shouldNotEqual` bool (toTerm $ Var "x")
   describe "binary term goals" $ do
     let constrs :: [(Term Char -> Term Char -> Goal, Term Bool -> Term Bool -> Goal)]
         constrs = [(CanUnify, CanUnify), (Identical, Identical), (Equal, Equal), (LessThan, LessThan)]

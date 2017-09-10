@@ -135,6 +135,8 @@ formatGoal (CanUnify t1 t2) = parensTerm t1 ++ " |=| " ++ parensTerm t2
 formatGoal (Identical t1 t2) = parensTerm t1 ++ " `is` " ++ parensTerm t2
 formatGoal (Equal t1 t2) = parensTerm t1 ++ " |==| " ++ parensTerm t2
 formatGoal (LessThan t1 t2) = parensTerm t1 ++ " |<| " ++ parensTerm t2
+formatGoal (IsUnified t) = "isUnified " ++ parensTerm t
+formatGoal (IsVariable t) = "isVariable " ++ parensTerm t
 formatGoal (Not g) = "lnot " ++ parensGoal g
 formatGoal (And g1 g2) = parensGoal g1 ++ " >> " ++ parensGoal g2
 formatGoal (Or g1 g2) = parensGoal g1 ++ " ||| " ++ parensGoal g2

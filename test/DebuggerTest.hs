@@ -15,6 +15,7 @@ import Control.Monad.Coroutine
 import Control.Monad.Coroutine.SuspensionFunctors
 import Control.Monad.Identity hiding (when)
 import Control.Monad.State hiding (when)
+import Control.Monad.Writer (MonadWriter (..), Writer, execWriter)
 import Data.Either
 import Data.List
 import Data.Monoid ((<>))
@@ -24,8 +25,9 @@ import Text.Parsec.Error
 -- For tests involving Parsec error messages
 deriving instance Show Message
 
-runTest :: Goal -> [String] -> [String] -> IO ()
-runTest g commands expectedOutput = tempFile2 $ \inFile outFile -> do
+runTest :: Goal -> [String] -> Trace a -> IO ()
+runTest g commands expectedTrace = tempFile2 $ \inFile outFile -> do
+  let expectedOutput = runTrace expectedTrace
   let config = debugConfig { inputFile = inFile
                            , outputFile = outFile
                            , interactive = False
@@ -44,134 +46,73 @@ runTest g commands expectedOutput = tempFile2 $ \inFile outFile -> do
                 "\n--- end captured stdout ---\n"
   output `shouldEqual` unlines expectedOutput
 
-expectTrace :: TermData a => String -> Int -> String -> a -> String
-expectTrace s d pred arg = "(" ++ show d ++ ") " ++ s ++ ": " ++ formatPredicate (predicate pred arg)
+data TraceState = TraceState { depth :: Int
+                             , depthType :: DepthType
+                             , lastMsg :: String
+                             }
 
-expectCall :: TermData a => Int -> String -> a -> String
-expectCall = expectTrace "Call"
+type Trace = StateT TraceState (Writer [String])
 
-expectRedo :: TermData a => Int -> String -> a -> String
-expectRedo = expectTrace "Redo"
+data DepthType = Ascending | Descending | Fixed
 
-expectExit :: TermData a => Int -> String -> a -> String
-expectExit = expectTrace "Exit"
+runTrace :: Trace a -> [String]
+runTrace m = execWriter $ evalStateT m TraceState { depth=1, depthType=Fixed, lastMsg="" }
 
-expectFail :: TermData a => Int -> String -> a -> String
-expectFail = expectTrace "Fail"
+setDepth :: Int -> Trace ()
+setDepth d = modify $ \ts -> ts { depth = d, depthType = Fixed }
 
-expectUnknownPred :: TermData a => Int -> String -> a -> String
-expectUnknownPred d pred arg = "(" ++ show d ++ ") Error: Unknown predicate \"" ++
-                                pred ++ " :: " ++ formatType (predType $ predicate pred arg) ++ "\""
+descend :: Trace Int
+descend = do
+  modify $ \s@TraceState { depth = d, depthType = t } -> case t of
+    Descending -> s { depth = d + 1, depthType = Descending }
+    _ -> s { depth = d, depthType = Descending }
+  gets depth
 
-expectCanUnifyCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
-                        Int -> a -> b -> String
-expectCanUnifyCall d t1 t2 = "(" ++ show d ++ ") Call: " ++ formatGoal (CanUnify (toTerm t1) (toTerm t2))
+ascend :: Trace Int
+ascend = do
+  modify $ \s@TraceState { depth = d, depthType = t } -> case t of
+    Ascending -> s { depth = d - 1, depthType = Ascending }
+    _ -> s { depth = d, depthType = Ascending }
+  gets depth
 
-expectCanUnifyExit :: (TermData a) => Int -> a -> String
-expectCanUnifyExit d t = "(" ++ show d ++ ") Exit: " ++ formatGoal (CanUnify (toTerm t) (toTerm t))
+traceLines :: [String] -> Trace ()
+traceLines msg = lift (tell msg) >> modify (\s -> s { lastMsg = last msg })
 
-expectCanUnifyFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
-expectCanUnifyFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ formatGoal (CanUnify (toTerm t1) (toTerm t2))
+trace :: String -> Trace ()
+trace = traceLines . (:[])
 
-expectIdenticalCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
-expectIdenticalCall d t1 t2 = "(" ++ show d ++ ") Call: " ++ formatGoal (Identical (toTerm t1) (toTerm t2))
+traceInfoLines :: [String] -> Trace ()
+traceInfoLines msg = do
+  prev <- gets lastMsg
+  tell $ msg ++ [prev]
 
-expectIdenticalExit :: (TermData a) => Int -> a -> String
-expectIdenticalExit d t = "(" ++ show d ++ ") Exit: " ++ formatGoal (Identical (toTerm t) (toTerm t))
+traceInfo :: String -> Trace ()
+traceInfo = traceInfoLines . (:[])
 
-expectIdenticalFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) =>
-                        Int -> a -> b -> String
-expectIdenticalFail d t1 t2 = "(" ++ show d ++ ") Fail: " ++ formatGoal (Identical (toTerm t1) (toTerm t2))
+traceCall :: Goal -> Trace ()
+traceCall g = do
+  d <- descend
+  trace $ "(" ++ show d ++ ") Call: " ++ formatGoal g
 
-expectEqualCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
-expectEqualCall d a b = "(" ++ show d ++ ") Call: " ++ formatGoal (Equal (toTerm a) (toTerm b))
+traceRedo :: Goal -> Trace ()
+traceRedo g = do
+  d <- descend
+  trace $ "(" ++ show d ++ ") Redo: " ++ formatGoal g
 
-expectEqualExit :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
-expectEqualExit d a b = "(" ++ show d ++ ") Exit: " ++ formatGoal (Equal (toTerm a) (toTerm b))
+traceExit :: Goal -> Trace ()
+traceExit g = do
+  d <- ascend
+  trace $ "(" ++ show d ++ ") Exit: " ++ formatGoal g
 
-expectEqualFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => Int -> a -> b -> String
-expectEqualFail d a b = "(" ++ show d ++ ") Fail: " ++ formatGoal (Equal (toTerm a) (toTerm b))
+traceFail :: Goal -> Trace ()
+traceFail g = do
+  d <- ascend
+  trace $ "(" ++ show d ++ ") Fail: " ++ formatGoal g
 
-expectLessThanCall :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
-                      Int -> a -> b -> String
-expectLessThanCall d a b = "(" ++ show d ++ ") Call: " ++ formatGoal (LessThan (toTerm a) (toTerm b))
-
-expectLessThanExit :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
-                      Int -> a -> b -> String
-expectLessThanExit d a b = "(" ++ show d ++ ") Exit: " ++ formatGoal (LessThan (toTerm a) (toTerm b))
-
-expectLessThanFail :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) =>
-                      Int -> a -> b -> String
-expectLessThanFail d a b = "(" ++ show d ++ ") Fail: " ++ formatGoal (LessThan (toTerm a) (toTerm b))
-
-expectNotCall :: Int -> Goal -> String
-expectNotCall d g = "(" ++ show d ++ ") Call: " ++ formatGoal (Not g)
-
-expectNotExit :: Int -> Goal -> String
-expectNotExit d g = "(" ++ show d ++ ") Exit: " ++ formatGoal (Not g)
-
-expectNotFail :: Int -> Goal -> String
-expectNotFail d g = "(" ++ show d ++ ") Fail: " ++ formatGoal (Not g)
-
-expectAndCall :: Int -> Goal -> Goal -> String
-expectAndCall d g1 g2 = "(" ++ show d ++ ") Call: " ++ formatGoal (And g1 g2)
-
-expectAndExit :: Int -> Goal -> Goal -> String
-expectAndExit d g1 g2 = "(" ++ show d ++ ") Exit: " ++ formatGoal (And g1 g2)
-
-expectAndFail :: Int -> Goal -> Goal -> String
-expectAndFail d g1 g2 = "(" ++ show d ++ ") Fail: " ++ formatGoal (And g1 g2)
-
-expectOrCall :: Int -> Goal -> Goal -> String
-expectOrCall d g1 g2 = "(" ++ show d ++ ") Call: " ++ formatGoal (Or g1 g2)
-
-expectOrRedo :: Int -> Goal -> Goal -> String
-expectOrRedo d g1 g2 = "(" ++ show d ++ ") Redo: " ++ formatGoal (Or g1 g2)
-
-expectOrExit :: Int -> Goal -> Goal -> String
-expectOrExit d g1 g2 = "(" ++ show d ++ ") Exit: " ++ formatGoal (Or g1 g2)
-
-expectOrFail :: Int -> Goal -> Goal -> String
-expectOrFail d g1 g2 = "(" ++ show d ++ ") Fail: " ++ formatGoal (Or g1 g2)
-
-expectTop :: Int -> [String]
-expectTop d = [ "(" ++ show d ++ ") Call: " ++ formatGoal Top
-              , "(" ++ show d ++ ") Exit: " ++ formatGoal Top
-              ]
-
-expectBottom :: Int -> [String]
-expectBottom d = [ "(" ++ show d ++ ") Call: " ++ formatGoal Bottom
-                 , "(" ++ show d ++ ") Fail: " ++ formatGoal Bottom
-                 ]
-
-expectAlternativesCall :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) =>
-                          Int -> a -> Goal -> as -> String
-expectAlternativesCall d x g xs = "(" ++ show d ++ ") Call: " ++
-                                  formatGoal (Alternatives (toTerm x) g (toTerm xs))
-
-expectAlternativesExit :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) =>
-                          Int -> a -> Goal -> as -> String
-expectAlternativesExit d x g xs = "(" ++ show d ++ ") Exit: " ++
-                                  formatGoal (Alternatives (toTerm x) g (toTerm xs))
-
-expectAlternativesFail :: (TermData a, TermData as, HSPLType as ~ [HSPLType a]) =>
-                          Int -> a -> Goal -> as -> String
-expectAlternativesFail d x g xs = "(" ++ show d ++ ") Fail: " ++
-                                  formatGoal (Alternatives (toTerm x) g (toTerm xs))
-
-expectOnceCall :: Int -> Goal -> String
-expectOnceCall d g = "(" ++ show d ++ ") Call: " ++ formatGoal (Once g)
-
-expectOnceExit :: Int -> Goal -> String
-expectOnceExit d g = "(" ++ show d ++ ") Exit: " ++ formatGoal (Once g)
-
-expectOnceFail :: Int -> Goal -> String
-expectOnceFail d g = "(" ++ show d ++ ") Fail: " ++ formatGoal (Once g)
-
-expectCut :: Int -> [String]
-expectCut d = [ "(" ++ show d ++ ") Call: " ++ formatGoal Cut
-              , "(" ++ show d ++ ") Exit: " ++ formatGoal Cut
-              ]
+traceUnknownPred :: Predicate -> Trace ()
+traceUnknownPred p@(Predicate name arg) = do
+  d <- ascend
+  trace $ "(" ++ show d ++ ") Error: Unknown predicate \"" ++ name ++ " :: " ++ formatType (predType p) ++ "\""
 
 -- deep(X) :- foo(X).
 -- foo(X) :- bar(X).
@@ -280,482 +221,403 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
 
   describe "the step command" $ do
     let deepGoal = PredGoal (predicate "deep" (Var "x" :: Var Char)) deep
-    let deepTrace = [ expectCall 1 "deep" (Var "x" :: Var Char)
-                    , expectCall 2 "foo" (Var "x" :: Var Char)
-                    , expectCall 3 "bar" (Var "x" :: Var Char)
-                    , expectExit 3 "bar" 'a'
-                    , expectExit 2 "foo" 'a'
-                    , expectExit 1 "deep" 'a'
-                    ]
+    let deepTrace = do
+          traceCall deepGoal
+          traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+          traceCall $ PredGoal (predicate "bar" (Var "x" :: Var Char)) []
+          traceExit $ PredGoal (predicate "bar" 'a') []
+          traceExit $ PredGoal (predicate "foo" 'a') []
+          traceExit $ PredGoal (predicate "deep" 'a') []
     let wideGoal = PredGoal (predicate "wide"
                       (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide
-    let wideTrace = [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-                    , expectCall 2 "foo" (Var "x" :: Var Char)
-                    , expectExit 2 "foo" 'a'
-                    , expectCall 2 "bar" (Var "y" :: Var Char)
-                    , expectExit 2 "bar" 'b'
-                    , expectCall 2 "baz" (Var "z" :: Var Char)
-                    , expectExit 2 "baz" 'c'
-                    , expectExit 1 "wide" ('a', 'b', 'c')
-                    ]
+    let wideTrace = do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+          traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+          traceExit $ PredGoal (predicate "foo" 'a') []
+          traceCall $ PredGoal (predicate "bar" (Var "y" :: Var Char)) []
+          traceExit $ PredGoal (predicate "bar" 'b') []
+          traceCall $ PredGoal (predicate "baz" (Var "z" :: Var Char)) []
+          traceExit $ PredGoal (predicate "baz" 'c') []
+          traceExit $ PredGoal (predicate "wide" ('a', 'b', 'c')) []
     let backtrackingGoal = PredGoal (predicate "foo" (Var "x" :: Var Char)) backtracking
-    let backtrackingTrace = [ expectCall 1 "foo" (Var "x" :: Var Char)
-                            , expectCall 2 "bar" (Var "x" :: Var Char)
-                            , expectUnknownPred 2 "bar" (Var "x" :: Var Char)
-                            , expectFail 1 "foo" (Var "x" :: Var Char)
-                            , expectRedo 1 "foo" (Var "x" :: Var Char)
-                            , expectCall 2 "baz" 'a'
-                            , expectFail 2 "baz" 'a'
-                            , expectFail 1 "foo" (Var "x" :: Var Char)
-                            ]
-    let canUnifyGoal = CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
-    let canUnifyTrace = [ expectCanUnifyCall 1 (Var "x" :: Var String) "foo"
-                        , expectCanUnifyExit 1 "foo"
-                        ]
+    let backtrackingTrace = do
+          traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+          traceCall $ PredGoal (predicate "bar" (Var "x" :: Var Char)) []
+          traceUnknownPred $ predicate "bar" (Var "x" :: Var Char)
+          traceFail $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+          traceRedo $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+          traceCall $ PredGoal (predicate "baz" 'a') []
+          traceFail $ PredGoal (predicate "baz" 'a') []
+          traceFail $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+    let canUnifyGoal = CanUnify (toTerm $ Var "x") (toTerm "foo")
+    let canUnifyTrace = do
+          traceCall canUnifyGoal
+          traceExit $ CanUnify (toTerm "foo") (toTerm "foo")
     let canUnifyFailGoal = CanUnify (toTerm "bar") (toTerm "foo")
-    let canUnifyFailTrace = [ expectCanUnifyCall 1 "bar" "foo"
-                            , expectCanUnifyFail 1 "bar" "foo"
-                            ]
+    let canUnifyFailTrace = do
+          traceCall canUnifyFailGoal
+          traceFail canUnifyFailGoal
     let identicalGoal = Identical (toTerm "foo") (toTerm "foo")
-    let identicalTrace = [ expectIdenticalCall 1 "foo" "foo"
-                         , expectIdenticalExit 1 "foo"
-                         ]
+    let identicalTrace = do
+          traceCall identicalGoal
+          traceExit identicalGoal
     let identicalFailGoal = Identical (toTerm (Var "x" :: Var String)) (toTerm "foo")
-    let identicalFailTrace = [ expectIdenticalCall 1 (Var "x" :: Var String) "foo"
-                             , expectIdenticalFail 1 (Var "x" :: Var String) "foo"
-                             ]
+    let identicalFailTrace = do
+          traceCall identicalFailGoal
+          traceFail identicalFailGoal
     let equalGoal = Equal (toTerm (Var "x" :: Var Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-    let equalTrace = [ expectEqualCall 1 (Var "x" :: Var Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                     , expectEqualExit 1 (3 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                     ]
+    let equalTrace = do
+          traceCall equalGoal
+          traceExit $ Equal (toTerm (3 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
     let equalFailGoal = Equal (toTerm (2 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-    let equalFailTrace = [ expectEqualCall 1 (2 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                         , expectEqualFail 1 (2 :: Int) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
-                         ]
+    let equalFailTrace = do
+          traceCall equalFailGoal
+          traceFail equalFailGoal
     let lessThanGoal = LessThan (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
                                 (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
-    let lessThanTrace = [ expectLessThanCall 1 (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
-                                               (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
-                        , expectLessThanExit 1 (5 :: Int) (6 :: Int)
-                        ]
+    let lessThanTrace = do
+          traceCall $ LessThan (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+                               (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
+          traceExit $ LessThan (toTerm (5 :: Int)) (toTerm (6 :: Int))
     let lessThanFailGoal = LessThan (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
                                      (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
-    let lessThanFailTrace = [ expectLessThanCall 1 (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
-                                                   (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
-                            , expectLessThanFail 1 (Product (toTerm (2 :: Int)) (toTerm (3 :: Int)))
-                                                   (Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
-                            ]
-    let notGoal = Not $ CanUnify (toTerm "bar") (toTerm "foo")
-    let notTrace = [ expectNotCall 1 $ CanUnify (toTerm "bar") (toTerm "foo")
-                   , expectCanUnifyCall 2 "bar" "foo"
-                   , expectCanUnifyFail 2 "bar" "foo"
-                   , expectNotExit 1 $ CanUnify (toTerm "bar") (toTerm "foo")
-                   ]
-    let notFailGoal = Not $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
-    let notFailTrace = [ expectNotCall 1 $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
-                       , expectCanUnifyCall 2 (Var "x" :: Var String) "foo"
-                       , expectCanUnifyExit 2 "foo"
-                       , expectNotFail 1 $ CanUnify (toTerm (Var "x" :: Var String)) (toTerm "foo")
-                       ]
-    let andGoal = And (CanUnify (toTerm "foo") (toTerm (Var "x" :: Var String)))
-                      (Identical (toTerm "foo") (toTerm (Var "x" :: Var String)))
-    let andTrace = [ expectCanUnifyCall 1 "foo" (Var "x" :: Var String)
-                   , expectCanUnifyExit 1 "foo"
-                   , expectIdenticalCall 1 "foo" "foo"
-                   , expectIdenticalExit 1 "foo"
-                   ]
-    let andFailLeftGoal = And (CanUnify (toTerm "foo") (toTerm "bar"))
-                              (Identical (toTerm "foo") (toTerm "foo"))
-    let andFailLeftTrace = [ expectCanUnifyCall 1 "foo" "bar"
-                           , expectCanUnifyFail 1 "foo" "bar"
-                           ]
-    let andFailRightGoal = And (Identical (toTerm "foo") (toTerm "foo"))
-                               (CanUnify (toTerm "foo") (toTerm "bar"))
-    let andFailRightTrace = [ expectIdenticalCall 1 "foo" "foo"
-                            , expectIdenticalExit 1 "foo"
-                            , expectCanUnifyCall 1 "foo" "bar"
-                            , expectCanUnifyFail 1 "foo" "bar"
-                            ]
-    let orLeftGoal = Or (CanUnify (toTerm "foo") (toTerm "foo"))
-                        (CanUnify (toTerm "foo") (toTerm "bar"))
-    let orLeftTrace = [ expectOrCall 1 (CanUnify (toTerm "foo") (toTerm "foo"))
-                                       (CanUnify (toTerm "foo") (toTerm "bar"))
-                      , expectCanUnifyCall 2 "foo" "foo"
-                      , expectCanUnifyExit 2 "foo"
-                      , expectOrExit 1 (CanUnify (toTerm "foo") (toTerm "foo"))
-                                       (CanUnify (toTerm "foo") (toTerm "bar"))
-                      , expectOrRedo 1 (CanUnify (toTerm "foo") (toTerm "foo"))
-                                       (CanUnify (toTerm "foo") (toTerm "bar"))
-                      , expectCanUnifyCall 2 (toTerm "foo") (toTerm "bar")
-                      , expectCanUnifyFail 2 (toTerm "foo") (toTerm "bar")
-                      , expectOrFail 1 (CanUnify (toTerm "foo") (toTerm "foo"))
-                                       (CanUnify (toTerm "foo") (toTerm "bar"))
-                      ]
-    let orRightGoal = Or (CanUnify (toTerm "bar") (toTerm "foo"))
-                         (CanUnify (toTerm "foo") (toTerm "foo"))
-    let orRightTrace = [ expectOrCall 1 (CanUnify (toTerm "bar") (toTerm "foo"))
-                                        (CanUnify (toTerm "foo") (toTerm "foo"))
-                       , expectCanUnifyCall 2 "bar" "foo"
-                       , expectCanUnifyFail 2 "bar" "foo"
-                       , expectOrFail 1 (CanUnify (toTerm "bar") (toTerm "foo"))
-                                        (CanUnify (toTerm "foo") (toTerm "foo"))
-                       , expectOrRedo 1 (CanUnify (toTerm "bar") (toTerm "foo"))
-                                        (CanUnify (toTerm "foo") (toTerm "foo"))
-                       , expectCanUnifyCall 2 "foo" "foo"
-                       , expectCanUnifyExit 2 "foo"
-                       , expectOrExit 1 (CanUnify (toTerm "bar") (toTerm "foo"))
-                                        (CanUnify (toTerm "foo") (toTerm "foo"))
-                       ]
-    let orFailGoal = Or (CanUnify (toTerm "bar") (toTerm "foo"))
-                        (CanUnify (toTerm "foo") (toTerm "baz"))
-    let orFailTrace = [ expectOrCall 1 (CanUnify (toTerm "bar") (toTerm "foo"))
-                                       (CanUnify (toTerm "foo") (toTerm "baz"))
-                      , expectCanUnifyCall 2 "bar" "foo"
-                      , expectCanUnifyFail 2 "bar" "foo"
-                      , expectOrFail 1 (CanUnify (toTerm "bar") (toTerm "foo"))
-                                       (CanUnify (toTerm "foo") (toTerm "baz"))
-                      , expectOrRedo 1 (CanUnify (toTerm "bar") (toTerm "foo"))
-                                       (CanUnify (toTerm "foo") (toTerm "baz"))
-                      , expectCanUnifyCall 2 "foo" "baz"
-                      , expectCanUnifyFail 2 "foo" "baz"
-                      , expectOrFail 1 (CanUnify (toTerm "bar") (toTerm "foo"))
-                                       (CanUnify (toTerm "foo") (toTerm "baz"))
-                      ]
-    let alternativesGoal = Alternatives (toTerm (Var "x" :: Var Char))
-                                        (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                                            (CanUnify (toTerm $ Var "x") (toTerm 'b')))
-                                        (toTerm $ Var "xs")
-    let alternativesTrace = [ expectAlternativesCall 1 (Var "x" :: Var Char)
-                                                       (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                                                           (CanUnify (toTerm $ Var "x") (toTerm 'b')))
-                                                       (Var "xs")
-                            , expectOrCall 2 (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                                             (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-                            , expectCanUnifyCall 3 (Var "x") 'a'
-                            , expectCanUnifyExit 3 'a'
-                            , expectOrExit 2 (CanUnify (toTerm 'a') (toTerm 'a'))
-                                             (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-                            , expectOrRedo 2 (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                                             (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-                            , expectCanUnifyCall 3 (Var "x") 'b'
-                            , expectCanUnifyExit 3 'b'
-                            , expectOrExit 2 (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                                             (CanUnify (toTerm 'b') (toTerm 'b'))
-                            , expectAlternativesExit 1 (Var "x" :: Var Char)
-                                                       (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                                                           (CanUnify (toTerm $ Var "x") (toTerm 'b')))
-                                                       ['a', 'b']
-                            ]
+    let lessThanFailTrace = do
+          traceCall lessThanFailGoal
+          traceFail lessThanFailGoal
+    let isUnifiedGoal = IsUnified $ toTerm 'a'
+    let isUnifiedTrace = traceCall isUnifiedGoal >> traceExit isUnifiedGoal
+    let isUnifiedFailGoal = IsUnified $ toTerm (Var "x" :: Var Char)
+    let isUnifiedFailTrace = traceCall isUnifiedFailGoal >> traceFail isUnifiedFailGoal
+    let isVariableGoal = IsVariable $ toTerm (Var "x" :: Var Char)
+    let isVariableTrace = traceCall isVariableGoal >> traceExit isVariableGoal
+    let isVariableFailGoal = IsVariable $ Sum (toTerm (Var "x" :: Var Int)) (toTerm (0 :: Int))
+    let isVariableFailTrace = traceCall isVariableFailGoal >> traceFail isVariableFailGoal
+    let notGoal = Not Bottom
+    let notTrace = do
+          traceCall notGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceExit notGoal
+    let notFailGoal = Not Top
+    let notFailTrace = do
+          traceCall notFailGoal
+          traceCall Top
+          traceExit Top
+          traceFail notFailGoal
+    let andGoal = And (CanUnify (toTerm "foo") (toTerm $ Var "x"))
+                      (Identical (toTerm "foo") (toTerm $ Var "x"))
+    let andTrace = do
+          traceCall $ CanUnify (toTerm "foo") (toTerm $ Var "x")
+          traceExit $ CanUnify (toTerm "foo") (toTerm "foo")
+          traceCall $ Identical (toTerm "foo") (toTerm "foo")
+          traceExit $ Identical (toTerm "foo") (toTerm "foo")
+    let andFailLeftGoal = And Bottom Top
+    let andFailLeftTrace = traceCall Bottom >> traceFail Bottom
+    let andFailRightGoal = And Top Bottom
+    let andFailRightTrace = do
+          traceCall Top
+          traceExit Top
+          traceCall Bottom
+          traceFail Bottom
+    let orLeftGoal = Or Top Bottom
+    let orLeftTrace = do
+          traceCall orLeftGoal
+          traceCall Top
+          traceExit Top
+          traceExit orLeftGoal
+          traceRedo orLeftGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceFail orLeftGoal
+    let orRightGoal = Or Bottom Top
+    let orRightTrace = do
+          traceCall orRightGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceFail orRightGoal
+          traceRedo orRightGoal
+          traceCall Top
+          traceExit Top
+          traceExit orRightGoal
+    let orFailGoal = Or Bottom Bottom
+    let orFailTrace = do
+          traceCall orFailGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceFail orFailGoal
+          traceRedo orFailGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceFail orFailGoal
+    let alternativesOrGoal = Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+    let alternativesGoal = Alternatives (toTerm (Var "x" :: Var Char)) alternativesOrGoal (toTerm $ Var "xs")
+    let alternativesTrace = do
+          traceCall alternativesGoal
+          traceCall alternativesOrGoal
+          traceCall $ CanUnify (toTerm $ Var "x") (toTerm 'a')
+          traceExit $ CanUnify (toTerm 'a') (toTerm 'a')
+          traceExit $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
+                         (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+          traceRedo alternativesOrGoal
+          traceCall $ CanUnify (toTerm $ Var "x") (toTerm 'b')
+          traceExit $ CanUnify (toTerm 'b') (toTerm 'b')
+          traceExit $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                         (CanUnify (toTerm 'b') (toTerm 'b'))
+          traceExit $ Alternatives (toTerm $ Var "x")
+                                   (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                       (CanUnify (toTerm $ Var "x") (toTerm 'b')))
+                                   (toTerm ['a', 'b'])
     let alternativesFailInnerGoal = Alternatives (toTerm (Var "x" :: Var Char))
                                                  Bottom
                                                  (toTerm $ Var "xs")
-    let alternativesFailInnerTrace = [ expectAlternativesCall 1 (Var "x" :: Var Char)
-                                                                Bottom
-                                                                (Var "xs")
-                                     ] ++
-                                       expectBottom 2 ++
-                                     [ expectAlternativesExit 1 (Var "x" :: Var Char) Bottom (List Nil)
-                                     ]
+    let alternativesFailInnerTrace = do
+          traceCall alternativesFailInnerGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceExit $ Alternatives (toTerm (Var "x" :: Var Char)) Bottom (List Nil)
     let alternativesFailGoal = Alternatives (toTerm (Var "x" :: Var Char)) Top (List Nil)
-    let alternativesFailTrace = [ expectAlternativesCall 1 (Var "x" :: Var Char) Top (List Nil)
-                                ] ++
-                                  expectTop 2 ++
-                                [ expectAlternativesFail 1 (Var "x" :: Var Char) Top (List Nil)
-                                ]
+    let alternativesFailTrace = do
+          traceCall alternativesFailGoal
+          traceCall Top
+          traceExit Top
+          traceFail alternativesFailGoal
     let onceGoal = Once $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
                              (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-    let onceTrace = [ expectOnceCall 1 $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                                            (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-                    , expectOrCall 2 (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                                     (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-                    , expectCanUnifyCall 3 (Var "x") 'a'
-                    , expectCanUnifyExit 3 'a'
-                    , expectOrExit 2 (CanUnify (toTerm 'a') (toTerm 'a'))
-                                     (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-                    , expectOnceExit 1 $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
-                                            (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-                    ]
+    let onceTrace = do
+          traceCall onceGoal
+          traceCall $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                         (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+          traceCall $ CanUnify (toTerm $ Var "x") (toTerm 'a')
+          traceExit $ CanUnify (toTerm 'a') (toTerm 'a')
+          traceExit $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
+                         (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+          traceExit $ Once $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
+                                (CanUnify (toTerm $ Var "x") (toTerm 'b'))
     let onceFailGoal = Once Bottom
-    let onceFailTrace = [expectOnceCall 1 Bottom] ++
-                         expectBottom 2 ++
-                        [expectOnceFail 1 Bottom]
+    let onceFailTrace = do
+          traceCall onceFailGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceFail onceFailGoal
 
     let cutGoal = Or Cut Top
-    let cutTrace = [ expectOrCall 1 Cut Top] ++
-                     expectCut 2 ++
-                   [ expectOrExit 1 Cut Top]
-    let run g t c = runTest g (map (const c) [1..length t]) t
+    let cutTrace = do
+          traceCall cutGoal
+          traceCall Cut
+          traceExit Cut
+          traceExit cutGoal
+    let run g = runTest g (replicate 999 "step")
 
     it "should prompt after every step of computation" $ do
-      let go g t = run g t "step"
-      go deepGoal deepTrace
-      go wideGoal wideTrace
-      go backtrackingGoal backtrackingTrace
-      go canUnifyGoal canUnifyTrace
-      go canUnifyFailGoal canUnifyFailTrace
-      go identicalGoal identicalTrace
-      go identicalFailGoal identicalFailTrace
-      go equalGoal equalTrace
-      go equalFailGoal equalFailTrace
-      go lessThanGoal lessThanTrace
-      go lessThanFailGoal lessThanFailTrace
-      go notGoal notTrace
-      go notFailGoal notFailTrace
-      go andGoal andTrace
-      go andFailLeftGoal andFailLeftTrace
-      go andFailRightGoal andFailRightTrace
-      go orLeftGoal orLeftTrace
-      go orRightGoal orRightTrace
-      go orFailGoal orFailTrace
-      go Top (expectTop 1)
-      go Bottom (expectBottom 1)
-      go alternativesGoal alternativesTrace
-      go alternativesFailInnerGoal alternativesFailInnerTrace
-      go alternativesFailGoal alternativesFailTrace
-      go onceGoal onceTrace
-      go onceFailGoal onceFailTrace
-      go cutGoal cutTrace
+      run deepGoal deepTrace
+      run wideGoal wideTrace
+      run backtrackingGoal backtrackingTrace
+      run canUnifyGoal canUnifyTrace
+      run canUnifyFailGoal canUnifyFailTrace
+      run identicalGoal identicalTrace
+      run identicalFailGoal identicalFailTrace
+      run equalGoal equalTrace
+      run equalFailGoal equalFailTrace
+      run lessThanGoal lessThanTrace
+      run lessThanFailGoal lessThanFailTrace
+      run isUnifiedGoal isUnifiedTrace
+      run isUnifiedFailGoal isUnifiedFailTrace
+      run isVariableGoal isVariableTrace
+      run isVariableFailGoal isVariableFailTrace
+      run notGoal notTrace
+      run notFailGoal notFailTrace
+      run andGoal andTrace
+      run andFailLeftGoal andFailLeftTrace
+      run andFailRightGoal andFailRightTrace
+      run orLeftGoal orLeftTrace
+      run orRightGoal orRightTrace
+      run orFailGoal orFailTrace
+      run Top $ traceCall Top >> traceExit Top
+      run Bottom $ traceCall Bottom >> traceFail Bottom
+      run alternativesGoal alternativesTrace
+      run alternativesFailInnerGoal alternativesFailInnerTrace
+      run alternativesFailGoal alternativesFailTrace
+      run onceGoal onceTrace
+      run onceFailGoal onceFailTrace
+      run cutGoal cutTrace
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do
-      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
-        ["next", "next"]
-        [ expectCall 1 "deep" (Var "x" :: Var Char)
-        , expectExit 1 "deep" 'a'
-        ]
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["next", "next"] $ do
+        traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) deep
+        traceExit $ PredGoal (predicate "deep" 'a') deep
+      runTest (PredGoal (predicate "wide"
+                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide) ["next", "next"] $ do
+        traceCall (PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
+        traceExit (PredGoal (predicate "wide" ('a', 'b', 'c')) wide)
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["next", "next"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , expectExit 1 "wide" ('a', 'b', 'c')
-        ]
-      runTest (PredGoal (predicate "wide"
-                (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["step", "next", "next", "next", "next", "next", "next", "next"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , expectCall 2 "foo" (Var "x" :: Var Char)
-        , expectExit 2 "foo" 'a'
-        , expectCall 2 "bar" (Var "y" :: Var Char)
-        , expectExit 2 "bar" 'b'
-        , expectCall 2 "baz" (Var "z" :: Var Char)
-        , expectExit 2 "baz" 'c'
-        , expectExit 1 "wide" ('a', 'b', 'c')
-        ]
+        ["step", "next", "next", "next", "next", "next", "next", "next"] $ do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide
+          traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+          traceExit $ PredGoal (predicate "foo" 'a') []
+          traceCall $ PredGoal (predicate "bar" (Var "y" :: Var Char)) []
+          traceExit $ PredGoal (predicate "bar" 'b') []
+          traceCall $ PredGoal (predicate "baz" (Var "z" :: Var Char)) []
+          traceExit $ PredGoal (predicate "baz" 'c') []
+          traceExit $ PredGoal (predicate "wide" ('a', 'b', 'c')) wide
     it "if no more events at the current depth, it should stop at the next decrease in depth" $
-      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
-        ["step", "next", "next", "next"]
-        [ expectCall 1 "deep" (Var "x" :: Var Char)
-        , expectCall 2 "foo" (Var "x" :: Var Char)
-        , expectExit 2 "foo" 'a'
-        , expectExit 1 "deep" 'a'
-        ]
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["step", "next", "next", "next"] $ do
+        traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
+        traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+        traceExit $ PredGoal (predicate "foo" 'a') []
+        traceExit $ PredGoal (predicate "deep" 'a') []
 
-  describe "the finish command" $ do
+  describe "the finish command" $
     it "should skip to the next decrease in depth" $ do
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["step", "finish", "step"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , expectCall 2 "foo" (Var "x" :: Var Char)
-        , expectExit 1 "wide" ('a', 'b', 'c')
-        ]
-      runTest (PredGoal (predicate "foo" (Var "x" :: Var Char)) backtracking)
-        ["step", "finish", "finish"]
-        [ expectCall 1 "foo" (Var "x" :: Var Char)
-        , expectCall 2 "bar" (Var "x" :: Var Char)
-        , expectFail 1 "foo" (Var "x" :: Var Char)
-        ]
+        ["step", "finish", "step"] $ do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+          traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+          setDepth 1 >> traceExit (PredGoal (predicate "wide" ('a', 'b', 'c')) [])
+      runTest (PredGoal (predicate "foo" (Var "x" :: Var Char)) backtracking) ["step", "finish", "finish"] $ do
+        traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+        traceCall $ PredGoal (predicate "bar" (Var "x" :: Var Char)) []
+        setDepth 1 >> traceFail (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
 
   describe "the break/continue commands" $ do
     it "should continue to the next breakpoint" $
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["b bar", "b baz", "c", "c", "c"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on bar."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on baz."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , expectCall 2 "bar" (Var "y" :: Var Char)
-        , expectCall 2 "baz" (Var "z" :: Var Char)
-        ]
+        ["b bar", "b baz", "c", "c", "c"] $ do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+          traceInfo "Set breakpoint on bar."
+          traceInfo "Set breakpoint on baz."
+          setDepth 2 >> traceCall (PredGoal (predicate "bar" (Var "y" :: Var Char)) [])
+          setDepth 2 >> traceCall (PredGoal (predicate "baz" (Var "z" :: Var Char)) [])
     it "should warn when the breakpoint already exists" $
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["b bar", "b bar", "f"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on bar."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Breakpoint bar already exists."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        ]
+        ["b bar", "b bar", "f"] $ do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+          traceInfo "Set breakpoint on bar."
+          traceInfo "Breakpoint bar already exists."
   describe "the delete-breakpoint command" $ do
     it "should accept the name of a breakpoint" $
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["b bar", "db bar", "c"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on bar."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Deleted breakpoint bar."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        ]
+        ["b bar", "db bar", "c"] $ do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+          traceInfo "Set breakpoint on bar."
+          traceInfo "Deleted breakpoint bar."
     it "should warn when given a name that does not exist" $
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["db bar", "c"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "No breakpoint \"bar\"."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        ]
+        ["db bar", "c"] $ do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+          traceInfo "No breakpoint \"bar\"."
     it "should accept the index of a breakpoint" $ do
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["b bar", "b baz", "db 1", "c", "c"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on bar."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on baz."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Deleted breakpoint bar."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , expectCall 2 "baz" (Var "z" :: Var Char)
-        ]
+        ["b bar", "b baz", "db 1", "c", "c"] $ do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+          traceInfo "Set breakpoint on bar."
+          traceInfo "Set breakpoint on baz."
+          traceInfo "Deleted breakpoint bar."
+          traceCall $ PredGoal (predicate "baz" (Var "z" :: Var Char)) []
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["b bar", "b baz", "db 2", "c", "c"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on bar."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on baz."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Deleted breakpoint baz."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , expectCall 2 "bar" (Var "y" :: Var Char)
-        ]
+        ["b bar", "b baz", "db 2", "c", "c"] $ do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+          traceInfo "Set breakpoint on bar."
+          traceInfo "Set breakpoint on baz."
+          traceInfo "Deleted breakpoint baz."
+          traceCall $ PredGoal (predicate "bar" (Var "y" :: Var Char)) []
     withParams ["-1", "0", "2"] $ \index ->
       it "should warn when given an out of range" $
         runTest (PredGoal (predicate "wide"
                   (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-          ["b bar", "db " ++ index, "c", "c"]
-          [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-          , "Set breakpoint on bar."
-          , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-          , "Index out of range."
-          , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-          , expectCall 2 "bar" (Var "y" :: Var Char)
-          ]
+          ["b bar", "db " ++ index, "c", "c"] $ do
+            traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+            traceInfo "Set breakpoint on bar."
+            traceInfo "Index out of range."
+            traceCall $ PredGoal (predicate "bar" (Var "y" :: Var Char)) []
   describe "the breakpoints command" $ do
     it "should list active breakpoints" $
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["b bar", "b baz", "bs", "c", "c", "c"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on bar."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on baz."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "(1) bar"
-        , "(2) baz"
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , expectCall 2 "bar" (Var "y" :: Var Char)
-        , expectCall 2 "baz" (Var "z" :: Var Char)
-        ]
+        ["b bar", "b baz", "bs", "c", "c", "c"] $ do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+          traceInfo "Set breakpoint on bar."
+          traceInfo "Set breakpoint on baz."
+          traceInfoLines ["(1) bar", "(2) baz"]
+          setDepth 2 >> traceCall (PredGoal (predicate "bar" (Var "y" :: Var Char)) [])
+          setDepth 2 >> traceCall (PredGoal (predicate "baz" (Var "z" :: Var Char)) [])
     it "should update to reflect deletions" $
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
-        ["b foo", "b bar", "b baz", "db bar", "bs", "f"]
-        [ expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on foo."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on bar."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Set breakpoint on baz."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "Deleted breakpoint bar."
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        , "(1) foo"
-        , "(2) baz"
-        , expectCall 1 "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)
-        ]
+        ["b foo", "b bar", "b baz", "db bar", "bs", "f"] $ do
+          traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
+          traceInfo "Set breakpoint on foo."
+          traceInfo "Set breakpoint on bar."
+          traceInfo "Set breakpoint on baz."
+          traceInfo "Deleted breakpoint bar."
+          traceInfoLines ["(1) foo", "(2) baz"]
 
   describe "the goals command" $ do
     it "should print the current goal stack" $
-      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
-              ["s", "s", "goals", "f", "f", "f"]
-              [ expectCall 1 "deep" (Var "x" :: Var Char)
-              , expectCall 2 "foo" (Var "x" :: Var Char)
-              , expectCall 3 "bar" (Var "x" :: Var Char)
-              , intercalate "\n"
-                [ "(1) " ++ formatGoal (PredGoal (predicate "deep" (Var "x" :: Var Char)) [])
-                , "(2) " ++ formatGoal (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
-                , "(3) " ++ formatGoal (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
-                ]
-              , expectCall 3 "bar" (Var "x" :: Var Char)
-              , expectExit 2 "foo" 'a'
-              , expectExit 1 "deep" 'a'
-              ]
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["s", "s", "goals", "f", "f", "f"] $ do
+        traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
+        traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+        traceCall $ PredGoal (predicate "bar" (Var "x" :: Var Char)) []
+        traceInfoLines
+          ["(1) " ++ formatGoal (PredGoal (predicate "deep" (Var "x" :: Var Char)) [])
+          ,"(2) " ++ formatGoal (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
+          ,"(3) " ++ formatGoal (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
+          ]
+        setDepth 2 >> traceExit (PredGoal (predicate "foo" 'a') [])
+        traceExit $ PredGoal (predicate "deep" 'a') []
     it "should print the top N goals from the current goal stack" $
-      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
-              ["s", "s", "goals 2", "f", "f", "f"]
-              [ expectCall 1 "deep" (Var "x" :: Var Char)
-              , expectCall 2 "foo" (Var "x" :: Var Char)
-              , expectCall 3 "bar" (Var "x" :: Var Char)
-              , intercalate "\n"
-                [ "(2) " ++ formatGoal (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
-                , "(3) " ++ formatGoal (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
-                ]
-              , expectCall 3 "bar" (Var "x" :: Var Char)
-              , expectExit 2 "foo" 'a'
-              , expectExit 1 "deep" 'a'
-              ]
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["s", "s", "goals 2", "f", "f", "f"] $ do
+        traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
+        traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+        traceCall $ PredGoal (predicate "bar" (Var "x" :: Var Char)) []
+        traceInfoLines
+          ["(2) " ++ formatGoal (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
+          ,"(3) " ++ formatGoal (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
+          ]
+        setDepth 2 >> traceExit (PredGoal (predicate "foo" 'a') [])
+        traceExit $ PredGoal (predicate "deep" 'a') []
     it "should print the current goal" $
-      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
-              ["s", "s", "goal", "f", "f", "f"]
-              [ expectCall 1 "deep" (Var "x" :: Var Char)
-              , expectCall 2 "foo" (Var "x" :: Var Char)
-              , expectCall 3 "bar" (Var "x" :: Var Char)
-              , intercalate "\n"
-                [ "(3) " ++ formatGoal (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
-                ]
-              , expectCall 3 "bar" (Var "x" :: Var Char)
-              , expectExit 2 "foo" 'a'
-              , expectExit 1 "deep" 'a'
-              ]
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["s", "s", "goal", "f", "f", "f"] $ do
+        traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
+        traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
+        traceCall $ PredGoal (predicate "bar" (Var "x" :: Var Char)) []
+        traceInfo $ "(3) " ++ formatGoal (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
+        setDepth 2 >> traceExit (PredGoal (predicate "foo" 'a') [])
+        traceExit $ PredGoal (predicate "deep" 'a') []
     withParams [0, -1] $ \arg ->
       it "should fail when the argument is not a positive integer" $
-        runTest Top ["goals " ++ show arg, "f"]
-                    ["(1) Call: " ++ formatGoal Top
-                    , "Argument must be positive."
-                    , "(1) Call: " ++ formatGoal Top
-                    ]
+        runTest Top ["goals " ++ show arg, "f"] $ do
+          traceCall Top
+          traceInfo "Argument must be positive."
 
   describe "the help command" $
     it "should print a usage message" $
-      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
-              ["help", "finish"]
-              [ expectCall 1 "deep" (Var "x" :: Var Char)
-              , debugHelp
-              , expectCall 1 "deep" (Var "x" :: Var Char)
-              ]
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["help", "finish"] $ do
+        traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
+        traceInfo debugHelp
 
   describe "a blank command" $
     it "should repeat the previous command" $
-      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
-        ["n", ""]
-        [ expectCall 1 "deep" (Var "x" :: Var Char)
-        , expectExit 1 "deep" 'a'
-        ]
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["n", ""] $ do
+        traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
+        traceExit $ PredGoal (predicate "deep" 'a') []
 
   describe "an unknown command" $
     it "should trigger a retry prompt" $ do
       let unexpected = newErrorMessage (UnExpect "\"o\"") (newPos "" 1 2)
       let err = addErrorMessage (Expect "command") unexpected
-      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep)
-        ["bogus", "finish"]
-        [ expectCall 1 "deep" (Var "x" :: Var Char)
-        , show err ++ "\nTry \"?\" for help."
-        ]
+      runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["bogus", "finish"] $ do
+        traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
+        traceLines [show err, "Try \"?\" for help."]
 
   describe "an uninstantiated variables error" $
     it "should print the goal stack" $ do
@@ -766,4 +628,4 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                 "Goal stack:\n" ++
                 "(1) " ++ formatGoal (PredGoal (predicate "foo" (Var "x" :: Var Char)) []) ++ "\n" ++
                 "(2) " ++ formatGoal (Equal (toTerm 'a') (toTerm (Var "x")))
-      assertError msg $ runTest goal ["n", "n"] []
+      assertError msg $ runTest goal ["n", "n"] (trace "")

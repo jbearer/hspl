@@ -762,6 +762,13 @@ data Goal =
             -- | A goal which succeeds if the evaluated left-hand side is less than the evaluated
             -- right-hand side.
           | forall t. (TermEntry t, Ord t) => LessThan (Term t) (Term t)
+            -- | A goal which succeeds if the given term is completely unified (that is,
+            -- @isJust (fromTerm t) == True@).
+          | forall t. TermEntry t => IsUnified (Term t)
+            -- | A goal which succeeds if the given term is a variable. Note that this does not mean
+            -- the term /contains/ a variable, that would be redundant with @Not (IsUnified t)@.
+            -- Rather, for 'IsVariable' to succeed, the term must /be/ a variable.
+          | forall t. TermEntry t => IsVariable (Term t)
             -- | A goal which succeeds only if the inner 'Goal' fails.
           | Not Goal
             -- | A goal which succeeds if and only if both subgoals succeed.
@@ -804,6 +811,8 @@ instance Eq Goal where
   (==) (LessThan t1 t2) (LessThan t1' t2') = case cast (t1', t2') of
     Just t' -> (t1, t2) == t'
     Nothing -> False
+  (==) (IsUnified t) (IsUnified t') = maybe False (==t) $ cast t'
+  (==) (IsVariable t) (IsVariable t') = maybe False (==t) $ cast t'
   (==) (Not g) (Not g') = g == g'
   (==) (And g1 g2) (And g1' g2') = g1 == g1' && g2 == g2'
   (==) (Or g1 g2) (Or g1' g2') = g1 == g1' && g2 == g2'

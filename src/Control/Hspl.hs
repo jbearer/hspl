@@ -50,6 +50,8 @@ module Control.Hspl (
   -- *** Unification, identity, equality, and inequality
   , (|=|)
   , (|\=|)
+  , unified
+  , variable
   , is
   , isnt
   , (|==|)
@@ -291,6 +293,20 @@ once gw = tell $ Once $ execGoalWriter gw
 -- | Discard all choicepoints created since entering the current predicate.
 cut :: GoalWriter ()
 cut = tell Cut
+
+-- | Determine whether a term is fully unified. The predicate @unified? x@ succeeds if and only if
+-- @x@ is bound to a constant (a term containing no variables) at the time of evaluation. Note that
+-- this is not the opposite of 'variable', because both 'unified' and 'variable' will fail on a
+-- partially unified term (such as @'a' <:> v"xs"@).
+unified :: forall a. TermEntry a => Predicate a
+unified = predicate "unified" $ match(v"x" :: Var a) |- tell $ IsUnified (toTerm (v"x" :: Var a))
+
+-- | Determine whether a term is a variable. The predicate @variable? x@ succeeds if and only if
+-- @x@ is bound to a variable at the time of evaluation. Note that this is not the opposite of
+-- 'unified', because both 'unified' and 'variable' will fail on a partially unified term (such as
+-- @'a' <:> v"xs"@).
+variable :: forall a. TermEntry a => Predicate a
+variable = predicate "variable" $ match(v"x" :: Var a) |- tell $ IsVariable (toTerm (v"x" :: Var a))
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
 infix 2 |=|

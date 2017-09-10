@@ -149,6 +149,46 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should error when the right-hand side contains uninstantiated variables" $
       assertError uninstantiatedVariablesError $
         runTest 'a' (Var "x" :: Var Char)
+  describe "proveIsUnified" $ do
+    it "should succeed for fully instantiated terms" $ do
+      let runTest t = observeAllSolver (proveIsUnified $ toTerm t) () `shouldBe`
+                        [(ProvedUnified $ toTerm t, mempty)]
+      runTest 'a'
+      runTest $ Just 'a'
+      runTest (Nothing :: Maybe Char)
+      runTest "foo"
+      runTest ('a', 'b')
+      runTest $ Sum (toTerm (0 :: Int)) (toTerm (1 :: Int))
+    it "should fail for variables" $ do
+      let runTest t = observeAllSolver (proveIsUnified $ toTerm t) () `shouldBe` []
+      runTest (Var "x" :: Var Char)
+      runTest (Fresh 0 :: Var Char)
+    it "should fail for partially instantiated terms" $ do
+      let runTest t = observeAllSolver (proveIsUnified $ toTerm t) () `shouldBe` []
+      runTest $ adt Just (Var "x" :: Var Char)
+      runTest $ List $ VarCons (toTerm 'a') (Var "xs")
+      runTest ('a', Var "x" :: Var Char)
+      runTest $ Sum (toTerm (0 :: Int)) (toTerm $ Var "x")
+  describe "proveIsVariable" $ do
+    it "should succeed for variables" $ do
+      let runTest t = observeAllSolver (proveIsVariable $ toTerm t) () `shouldBe`
+            [(ProvedVariable $ toTerm t, mempty)]
+      runTest (Var "x" :: Var Char)
+      runTest (Fresh 0 :: Var Char)
+    it "should fail for fully instantiated terms" $ do
+      let runTest t = observeAllSolver (proveIsVariable $ toTerm t) () `shouldBe` []
+      runTest 'a'
+      runTest $ Just 'a'
+      runTest (Nothing :: Maybe Char)
+      runTest "foo"
+      runTest ('a', 'b')
+      runTest $ Sum (toTerm (0 :: Int)) (toTerm (1 :: Int))
+    it "should fail for partially instantiated terms" $ do
+      let runTest t = observeAllSolver (proveIsVariable $ toTerm t) () `shouldBe` []
+      runTest $ adt Just (Var "x" :: Var Char)
+      runTest $ List $ VarCons (toTerm 'a') (Var "xs")
+      runTest ('a', Var "x" :: Var Char)
+      runTest $ Sum (toTerm (0 :: Int)) (toTerm $ Var "x")
   describe "proveNot" $ do
     let runTest g = observeAllSolver (proveNot g) ()
     it "should fail if the inner goal succeeds" $
@@ -438,6 +478,11 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
                                   ])
                (Equal (toTerm (Var "x" :: Var Char)) (toTerm $ Var "y")) `shouldBe`
           [Equal (toTerm 'a') (toTerm 'a'), Equal (toTerm 'a') (toTerm 'b')]
+    withParams [(ProvedVariable, IsVariable), (ProvedUnified, IsUnified)] $ \(proof, goal) ->
+      context "of unary term proofs" $
+        it "should unify a query goal" $
+          search (proof $ toTerm 'a') (goal $ toTerm (Var "x" :: Var Char)) `shouldBe`
+            [goal $ toTerm 'a']
     context "of binary term proofs" $ do
       let constrs :: [(Term Char -> Term Char -> Proof, Term Char -> Term Char -> Goal)]
           constrs = [ (Identified, Identical)
@@ -477,6 +522,9 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       get (Equated (toTerm (1 :: Int)) (toTerm (1 :: Int))) `shouldBe`
         Equal (toTerm (1 :: Int)) (toTerm (1 :: Int))
       get (ProvedLessThan 'a' 'b') `shouldBe` LessThan (toTerm 'a') (toTerm 'b')
+      get (ProvedUnified $ toTerm 'a') `shouldBe` IsUnified (toTerm 'a')
+      get (ProvedVariable $ toTerm (Var "x" :: Var Char)) `shouldBe`
+        IsVariable (toTerm (Var "x" :: Var Char))
       get (ProvedAnd (Equated (toTerm 'a') (toTerm 'a'))
                      (Identified (toTerm 'b') (toTerm 'b'))) `shouldBe`
         And (Equal (toTerm 'a') (toTerm 'a')) (Identical (toTerm 'b') (toTerm 'b'))

@@ -172,6 +172,10 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
                ] $ \g@(PredGoal p _) ->
       it "should format the predicate of a PredGoal, ignoring the clauses" $
         formatGoal g `shouldBe` formatPredicate p
+    withParams [(IsVariable, "isVariable"), (IsUnified, "isUnified")] $ \(constr, s) ->
+      withParams [toTerm (1 :: Int), (1 :: Int) |+| (2 :: Int)] $ \t ->
+        it "should format a unary term goal" $
+          formatGoal (constr t) `shouldBe` s ++ " " ++ parensTerm t
     withParams [((|=|), "|=|"), (is, "`is`"), ((|==|), "|==|"), ((|<|), "|<|")] $ \(op, sop) ->
       withParams [toTerm (1 :: Int), (1 :: Int) |+| (2 :: Int)] $ \t ->
         it "should format a binary term goal" $

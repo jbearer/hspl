@@ -324,6 +324,10 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         let g = PredGoal (predicate "foo" ())
                          [HornClause (predicate "bar" (Var "x" :: Var Char)) Top]
         rename g `shouldBe` g
+    withParams [IsUnified, IsVariable] $ \constr ->
+      context "of unary term goals" $
+        it "should rename variables in the term" $
+          rename (constr (toTerm (Var "x" :: Var Char))) `shouldBe` constr (toTerm $ Fresh 0)
     context "of binary term goals" $ do
       let constrs :: [Term Char -> Term Char -> Goal]
           constrs = [CanUnify, Identical, Equal, LessThan]
@@ -459,6 +463,14 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       it "should ignore the clauses" $ do
         let g = PredGoal (predicate "foo" ()) [HornClause (predicate "bar" (Var "x" :: Var Char)) Top]
         unifyGoal (toTerm 'a' // Var "x") g `shouldBe` g
+    withParams [IsUnified, IsVariable] $ \constr ->
+      context "to a unary term goal" $ do
+        it "should unify the term" $
+          unifyGoal (toTerm 'a' // Var "x") (constr $ toTerm (Var "x" :: Var Char)) `shouldBe`
+            constr (toTerm 'a')
+        it "should leave the term unchanged when the unifier does not apply" $
+          unifyGoal (toTerm 'a' // Var "x") (constr $ toTerm (Var "y" :: Var Char)) `shouldBe`
+            constr (toTerm $ Var "y")
     context "to a binary term goal" $ do
       let constrs :: [Term Char -> Term Char -> Goal]
           constrs = [CanUnify, Identical, Equal, LessThan]

@@ -256,6 +256,9 @@ genPrologGoal (Identical t1 t2) = "(" ++ genPrologTerm t1 ++ ") == (" ++ genProl
 genPrologGoal (Equal t1 t2) = "(" ++ genPrologTerm t1 ++ ") is (" ++ genPrologTerm t2 ++ ")"
 genPrologGoal (LessThan t1 t2) = "(" ++ genPrologTerm t1 ++ ") < (" ++ genPrologTerm t2 ++ ")"
 
+genPrologGoal (IsUnified t) = error "No Prolog analog for IsUnified"
+genPrologGoal (IsVariable t) = "var(" ++ genPrologTerm t ++ ")"
+
 genPrologGoal (Not g) = "\\+(" ++ genPrologGoal g ++ ")"
 genPrologGoal (And g1 g2) = "(" ++ genPrologGoal g1 ++ "," ++ genPrologGoal g2 ++ ")"
 genPrologGoal (Or g1 g2) = "(" ++ genPrologGoal g1 ++ ";" ++ genPrologGoal g2 ++ ")"
