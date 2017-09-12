@@ -5,6 +5,8 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -21,19 +23,18 @@ exact information and level of detail that the client is interested in.
 -}
 module Control.Hspl.Internal.Solver (
   -- * Proofs
-    Proof (..)
-  , ProofResult
-  , searchProof
-  , getUnifier
-  , getAllUnifiers
-  , getSolution
-  , getAllSolutions
+    ProofResult (..)
+  , queryTheorem
+  , queryVar
+  , getTheorem
+  , getAllTheorems
   , runHspl
   , runHsplN
   -- * Solver
   -- ** The Solver monad
   -- *** Class
   , MonadSolver (..)
+  , getResult
   -- *** Monad transformer
   , SolverT
   , observeAllSolverT
@@ -73,217 +74,146 @@ import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Logic
 import Control.Hspl.Internal.Unification hiding (Unified)
 
--- | Abstract representation of a proof. A proof can be thought of as a tree, where each node is a
--- goal or subgoal which was proven, and the children of that node, if any, are subgoals which
--- together imply the truth of the node. There are various types of nodes (represented by the
--- different 'Proof' constructors) corresponding to the various types of 'Goal's.
-data Proof =
-             -- | A proof of a 'PredGoal' by the resolution inference rule. The 'Predicate' is the
-             -- statement proven, while the 'Proof' is a proof of the predicate's negative literal.
-             Resolved Predicate Proof
-             -- | A proof of a 'CanUnify' goal.
-           | forall a. TermEntry a => Unified (Term a) (Term a)
-             -- | A proof of an 'Identical' goal.
-           | forall a. TermEntry a => Identified (Term a) (Term a)
-             -- | A proof of an 'Equal' goal.
-           | forall a. TermEntry a => Equated (Term a) (Term a)
-             -- | A proof of a 'LessThan' goal.
-           | forall a. (TermEntry a, Ord a) => ProvedLessThan a a
-             -- | A proof of an 'IsUnified' goal.
-           | forall a. TermEntry a => ProvedUnified (Term a)
-             -- | A proof of an 'IsVariable' goal.
-           | forall a. TermEntry a => ProvedVariable (Term a)
-             -- | A proof of a 'Not' goal.
-           | Negated Goal
-             -- | A proof of an 'And' goal. Contains a proof of each subgoal in the conjunction.
-           | ProvedAnd Proof Proof
-             -- | A proof of an 'Or' goal. The 'Proof' is a proof of the left subgoal, and the
-             -- 'Goal' is the unproven right subgoal.
-           | ProvedLeft Proof Goal
-             -- | A proof of an 'Or' goal. The 'Proof' is a proof of the right subgoal, and the
-             -- 'Goal' is the unproven left subgoal.
-           | ProvedRight Goal Proof
-             -- | A (trivial) proof of 'Top'.
-           | ProvedTop
-             -- | A proof of an 'Alternatives' goal. The first argument is the template term, the
-             -- second is the subgoal, and the third is the "bag" of alternatives. The final
-             -- argument is the list of proofs of the subgoal.
-           | forall a. TermEntry a => FoundAlternatives (Term a) Goal (Term [a]) [Proof]
-             -- | A proof of a 'Once' goal.
-           | ProvedOnce Proof
-             -- | A (trivial) proof of 'Cut'.
-           | ProvedCut
+-- | The output of the solver. Contains information about theorems which were proven and variables
+-- which were unified during the proof.
+data ProofResult = ProofResult { mainTheorem :: Goal
+                               , subTheorems :: [Goal]
+                               , unifiedVars :: Unifier
+                               }
+  deriving (Show, Eq)
 
-instance Eq Proof where
-  (==) proof1 proof2 = case (proof1, proof2) of
-    (Resolved p proof, Resolved p' proof') -> p == p' && proof == proof'
-    (Unified t1 t2, Unified t1' t2') -> compareTerms (t1, t2) (t1', t2')
-    (Identified t1 t2, Identified t1' t2') -> compareTerms (t1, t2) (t1', t2')
-    (Equated t1 t2, Equated t1' t2') -> compareTerms (t1, t2) (t1', t2')
-    (ProvedLessThan t1 t2, ProvedLessThan t1' t2') -> compareTerms (t1, t2) (t1', t2')
-    (ProvedUnified t, ProvedUnified t') -> compareTerms t t'
-    (ProvedVariable t, ProvedVariable t') -> compareTerms t t'
-    (Negated g, Negated g') -> g == g'
-    (ProvedAnd p1 p2, ProvedAnd p1' p2') -> p1 == p1' && p2 == p2'
-    (ProvedLeft p g, ProvedLeft p' g') -> p == p' && g == g'
-    (ProvedRight g p, ProvedRight g' p') -> g == g' && p == p'
-    (ProvedTop, ProvedTop) -> True
-    (FoundAlternatives x g xs ps, FoundAlternatives x' g' xs' ps') -> fromMaybe False $
-      do x'' <- cast x'
-         xs'' <- cast xs'
-         return $ x == x'' && g == g' && xs == xs'' && ps == ps'
-    (ProvedOnce p, ProvedOnce p') -> p == p'
-    (ProvedCut, ProvedCut) -> True
-    _ -> False
-    where compareTerms t t' = maybe False (t==) $ cast t'
-
-instance Show Proof where
-  show (Resolved p proof) = "Resolved (" ++ show p ++ ") (" ++ show proof ++ ")"
-  show (Unified t1 t2) = "Unified (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
-  show (Identified t1 t2) = "Identified (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
-  show (Equated t1 t2) = "Equated (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
-#ifdef SHOW_TERMS
-  show (ProvedLessThan t1 t2) = "ProvedLessThan (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
-#else
-  show (ProvedLessThan t1 t2) =
-    "ProvedLessThan (" ++ show (toTerm t1) ++ ") (" ++ show (toTerm t2) ++ ")"
-#endif
-  show (ProvedUnified t) = "ProvedUnified (" ++ show t ++ ")"
-  show (ProvedVariable t) = "ProvedVariable (" ++ show t ++ ")"
-  show (Negated g) = "Negated (" ++ show g ++ ")"
-  show (ProvedAnd p1 p2) = "ProvedAnd (" ++ show p1 ++ ") (" ++ show p2
-  show (ProvedLeft p g) = "ProvedLeft (" ++ show p ++ ") (" ++ show g ++ ")"
-  show (ProvedRight g p) = "ProvedRight (" ++ show g ++ ") (" ++ show p ++ ")"
-  show (FoundAlternatives x g xs ps) =
-    "FoundAlternatives (" ++ show x ++ ") (" ++ show g ++ ") (" ++ show xs ++ ") (" ++ show ps ++ ")"
-  show ProvedTop = "ProvedTop"
-  show (ProvedOnce p) = "ProvedOnce (" ++ show p ++ ")"
-  show ProvedCut = "ProvedCut"
-
--- | The output of the solver. This is meant to be treated as an opaque data type which can be
--- inspected via the functions defined in this module.
-type ProofResult = (Proof, Unifier)
-
--- | Return the list of all goals or subgoals in the given result which unify with a particular goal.
-searchProof :: ProofResult -> Goal -> [Goal]
-searchProof (proof, unifier) goal = searchProof' proof (runRenamed $ renameGoal goal)
-  where searchProof' p g =
-          maybeToList (matchGoal (getSolution (p, unifier)) g) ++
-          concatMap (`searchProof'` g) (subProofs p)
-
-        subProofs (Resolved _ p) = [p]
-        subProofs (ProvedAnd p1 p2) = [p1, p2]
-        subProofs (ProvedLeft p _) = [p]
-        subProofs (ProvedRight _ p) = [p]
-        subProofs (FoundAlternatives _ _ _ ps) = ps
-        subProofs (ProvedOnce p) = [p]
-        subProofs _ = []
-
-        -- Unify a goal with the query goal and return the unified goal, or Nothing
-        matchGoal (PredGoal prd@(Predicate name arg) _) (PredGoal (Predicate name' arg') _)
-          | name == name' = case cast arg' >>= mgu arg of
-              Just u -> Just $ PredGoal (unifyPredicate u prd) []
-              Nothing -> Nothing
-          | otherwise = Nothing
-        matchGoal (CanUnify t1 t2) (CanUnify t1' t2') = matchBinary CanUnify (t1, t2) (t1', t2')
-        matchGoal (Identical t1 t2) (Identical t1' t2') = matchBinary Identical (t1, t2) (t1', t2')
-        matchGoal (Equal t1 t2) (Equal t1' t2') = matchBinary Equal (t1, t2) (t1', t2')
-        matchGoal (LessThan t1 t2) (LessThan t1' t2') =
-          matchBinary LessThan (toTerm t1, toTerm t2) (toTerm t1', toTerm t2')
-        matchGoal g@(IsUnified t) (IsUnified t') = cast t' >>= mgu t >>= \u -> return $ unifyGoal u g
-        matchGoal g@(IsVariable t) (IsVariable t') = cast t' >>= mgu t >>= \u -> return $ unifyGoal u g
-        matchGoal (Not g) (Not g') = fmap Not $ matchGoal g g'
-        matchGoal (And g1 g2) (And g1' g2') = do g1'' <- matchGoal g1 g1'
-                                                 g2'' <- matchGoal g2 g2'
-                                                 return $ And g1'' g2''
-        matchGoal (Or g1 g2) (Or g1' g2') = do g1'' <- matchGoal g1 g1'
-                                               g2'' <- matchGoal g2 g2'
-                                               return $ Or g1'' g2''
-        matchGoal Top Top = Just Top
-        matchGoal Bottom Bottom = Just Bottom
-        matchGoal (Alternatives x g xs) (Alternatives x' g' xs') =
-          let t = toTerm (x, xs)
-              t' = toTerm (x', xs')
-          in case cast t' >>= mgu t of
-            Just u -> do
-              g'' <- matchGoal g g'
-              return $ Alternatives (unifyTerm u x) g'' (unifyTerm u xs)
-            Nothing -> Nothing
-
-        matchGoal (Once g) (Once g') = Once `fmap` matchGoal g g'
-        matchGoal Cut Cut = Just Cut
-
-        matchGoal _ _ = Nothing
-
-        matchBinary :: (TermEntry a, TermEntry b, TermEntry c, TermEntry d) =>
-                       (Term a -> Term b -> Goal) -> (Term a, Term b) -> (Term c, Term d) -> Maybe Goal
-        matchBinary constr (t1, t2) (t1', t2') =
-          let t = toTerm (t1, t2)
-              t' = toTerm (t1', t2')
-          in case cast t' >>= mgu t of
-            Just u -> Just $ unifyGoal u $ constr t1 t2
-            Nothing -> Nothing
-
--- | Get the 'Unifier' which maps variables in the goal to their final values (the values for which
--- they were substituted in the proven theorem). This unifier can then be queried with 'queryVar' to
--- get the 'UnificationStatus' of each variable.
+-- | Lookup the status of a variable in a 'ProofResult'.
 --
--- Note: querying the unifier for variables not present in the initial goal is undefined behavior.
+-- Note: querying for variables not present in the initial goal is undefined behavior.
 -- TODO: more robust semantics for unknown vars.
-getUnifier :: ProofResult -> Unifier
-getUnifier (_, u) = u
+queryVar :: TermEntry a => ProofResult -> Var a -> UnificationStatus a
+queryVar ProofResult {..} = findVar unifiedVars
 
--- | Get the 'Unifier' for each 'Proof' of the goal.
-getAllUnifiers :: [ProofResult] -> [Unifier]
-getAllUnifiers = map getUnifier
+-- | Return the list of all theorems proven in the given 'ProofResult' which unify with the given
+-- 'Goal'.
+queryTheorem :: ProofResult -> Goal -> [Goal]
+queryTheorem ProofResult {..} target = do
+  g <- mainTheorem : subTheorems
+  let g' = unify unifiedVars g
+  let mg = matchGoal g' target
+  guard $ isJust mg
+  return $ fromJust mg
+  where
+    -- Unify a goal with the query goal and return the unified goal, or Nothing
+    matchGoal (PredGoal prd@(Predicate name arg) _) (PredGoal (Predicate name' arg') _)
+      | name == name' = case cast arg' >>= mgu arg of
+          Just u -> Just $ PredGoal (unify u prd) []
+          Nothing -> Nothing
+      | otherwise = Nothing
+    matchGoal (CanUnify t1 t2) (CanUnify t1' t2') = matchBinary CanUnify (t1, t2) (t1', t2')
+    matchGoal (Identical t1 t2) (Identical t1' t2') = matchBinary Identical (t1, t2) (t1', t2')
+    matchGoal (Equal t1 t2) (Equal t1' t2') = matchBinary Equal (t1, t2) (t1', t2')
+    matchGoal (LessThan t1 t2) (LessThan t1' t2') =
+      matchBinary LessThan (toTerm t1, toTerm t2) (toTerm t1', toTerm t2')
+    matchGoal g@(IsUnified t) (IsUnified t') = cast t' >>= mgu t >>= \u -> return $ unify u g
+    matchGoal g@(IsVariable t) (IsVariable t') = cast t' >>= mgu t >>= \u -> return $ unify u g
+    matchGoal (Not g) (Not g') = fmap Not $ matchGoal g g'
+    matchGoal (And g1 g2) (And g1' g2') = do g1'' <- matchGoal g1 g1'
+                                             g2'' <- matchGoal g2 g2'
+                                             return $ And g1'' g2''
+    matchGoal (Or g1 g2) (Or g1' g2') = do g1'' <- matchGoal g1 g1'
+                                           g2'' <- matchGoal g2 g2'
+                                           return $ Or g1'' g2''
+    matchGoal Top Top = Just Top
+    matchGoal Bottom Bottom = Just Bottom
+    matchGoal (Alternatives x g xs) (Alternatives x' g' xs') =
+      let t = toTerm (x, xs)
+          t' = toTerm (x', xs')
+      in case cast t' >>= mgu t of
+        Just u -> do
+          g'' <- matchGoal g g'
+          return $ Alternatives (unify u x) g'' (unify u xs)
+        Nothing -> Nothing
+
+    matchGoal (Once g) (Once g') = Once `fmap` matchGoal g g'
+    matchGoal Cut Cut = Just Cut
+
+    matchGoal _ _ = Nothing
+
+    matchBinary :: (TermEntry a, TermEntry b, TermEntry c, TermEntry d) =>
+                   (Term a -> Term b -> Goal) -> (Term a, Term b) -> (Term c, Term d) -> Maybe Goal
+    matchBinary constr (t1, t2) (t1', t2') =
+      let t = toTerm (t1, t2)
+          t' = toTerm (t1', t2')
+      in case cast t' >>= mgu t of
+        Just u -> Just $ unify u $ constr t1 t2
+        Nothing -> Nothing
 
 -- | Get the theorem which follows from a 'Proof'; i.e., the root of a proof tree.
-getSolution :: ProofResult -> Goal
-getSolution (proof, _) = case proof of
-  Resolved p _ -> PredGoal p []
-  Unified t1 t2 -> CanUnify t1 t2
-  Identified t1 t2 -> Identical t1 t2
-  Equated t1 t2 -> Equal t1 t2
-  ProvedLessThan t1 t2 -> LessThan (toTerm t1) (toTerm t2)
-  ProvedUnified t -> IsUnified t
-  ProvedVariable t -> IsVariable t
-  Negated g -> Not g
-  ProvedAnd p1 p2 -> And (getSolution (p1, mempty)) (getSolution (p2, mempty))
-  ProvedLeft p g -> Or (getSolution (p, mempty)) g
-  ProvedRight g p -> Or g (getSolution (p, mempty))
-  ProvedTop -> Top
-  FoundAlternatives x g xs _ -> Alternatives x g xs
-  ProvedOnce p -> Once $ getSolution (p, mempty)
-  ProvedCut -> Cut
+getTheorem :: ProofResult -> Goal
+getTheorem ProofResult {..} = unify unifiedVars mainTheorem
 
 -- | Get the set of theorems which were proven by each 'Proof' tree in a forest.
-getAllSolutions :: [ProofResult] -> [Goal]
-getAllSolutions = map getSolution
+getAllTheorems :: [ProofResult] -> [Goal]
+getAllTheorems = map getTheorem
 
 -- | Attempt to prove the given 'Goal'. This function returns a forest of 'Proof' trees. If the
 -- goal cannot be proven, the result is @[]@. Otherwise, the contents of the resulting list
 -- represent various alternative ways of proving the theorem. If there are variables in the goal,
 -- they may unify with different values in each alternative proof.
 runHspl :: Goal -> [ProofResult]
-runHspl g = observeAllSolver (prove g) ()
+runHspl g = observeAllSolver (prove g >>= getResult) ()
+
+-- | Extract a 'ProofResult' for a list of proven theorems. The top-level theorem should be at the
+-- head of the list.
+getResult :: MonadSolver m => [Goal] -> m ProofResult
+getResult [] = mzero
+getResult (thm:thms) = do
+  u <- getUnifier
+  return ProofResult { mainTheorem = thm
+                     , subTheorems = thms
+                     , unifiedVars = u
+                     }
 
 -- | Like 'runHspl', but return at most the given number of proofs.
 runHsplN :: Int -> Goal -> [ProofResult]
-runHsplN n g = observeManySolver n (prove g) ()
+runHsplN n g = observeManySolver n (prove g >>= getResult) ()
+
+data SolverState s = SolverState { clientState :: s
+                                 , freshCount :: Int
+                                 , currentUnifier :: Unifier
+                                 }
+
+instance SplittableState s => SplittableState (SolverState s) where
+  type GlobalState (SolverState s) = (GlobalState s, Int)
+  type BacktrackingState (SolverState s) = (BacktrackingState s, Unifier)
+  splitState SolverState {..} =
+    let (cBs, cGs) = splitState clientState
+    in ((cBs, currentUnifier), (cGs, freshCount))
+  combineState (cBs, u) (cGs, f) = SolverState { clientState = combineState cBs cGs
+                                               , freshCount = f
+                                               , currentUnifier = u
+                                               }
 
 -- | The monad which defines the backtracking control flow of the solver. This type is parameterized
 -- by the type of backtracking and global state, implementing the 'MonadLogicState' interface.
-newtype SolverT s m a = SolverT { unSolverT :: LogicT s (UnificationT m) a }
+newtype SolverT s m a = SolverT { unSolverT :: LogicT (SolverState s) m a }
   deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadIO, MonadLogic, MonadLogicCut)
 
 instance MonadTrans (SolverT s) where
-  lift = SolverT . lift . lift
+  lift = SolverT . lift
 
-instance Monad m => MonadUnification (SolverT s m) where
-  fresh = SolverT $ lift fresh
+instance (SplittableState s, Monad m) => MonadVarGenerator (SolverT s m) where
+  fresh = do
+    f <- SolverT $ gets freshCount
+    SolverT $ modify $ \s -> s { freshCount = f + 1 }
+    return $ Fresh f
+
+instance (SplittableState s, Monad m) => MonadUnification (SolverT s m) where
+  stateUnifier f = do
+    u <- SolverT $ gets currentUnifier
+    let (r, u') = f u
+    SolverT $ modify $ \s -> s { currentUnifier = u' }
+    return r
 
 instance (Monad m, SplittableState s) => MonadState s (SolverT s m) where
-  state = SolverT . state
+  get = SolverT $ gets clientState
+  put s = SolverT $ modify $ \st -> st { clientState = s }
 
 -- | A non-transformer version of 'SolverT'.
 type Solver s = SolverT s Identity
@@ -299,11 +229,17 @@ observeManySolver n m s = runIdentity $ observeManySolverT n m s
 -- | Run a 'SolverT' transformed computation, and return a computation in the underlying monad for
 -- each solution to the logic computation.
 observeAllSolverT :: (Monad m, SplittableState s) => SolverT s m a -> s -> m [a]
-observeAllSolverT m s = runUnificationT $ observeAllLogicT (unSolverT m) s
+observeAllSolverT m s = observeAllLogicT (unSolverT m) SolverState { clientState = s
+                                                                   , freshCount = 0
+                                                                   , currentUnifier = mempty
+                                                                   }
 
 -- | Like 'observeAllSolverT', but limits the number of results returned.
 observeManySolverT :: (Monad m, SplittableState s) => Int -> SolverT s m a -> s -> m [a]
-observeManySolverT n m s = runUnificationT $ observeManyLogicT n (unSolverT m) s
+observeManySolverT n m s = observeManyLogicT n (unSolverT m) SolverState { clientState = s
+                                                                         , freshCount = 0
+                                                                         , currentUnifier = mempty
+                                                                         }
 
 -- | This class encapsulates the algorithms required for proving each type of 'Goal'. The proof-
 -- generating algorithm defined by 'prove' uses these functions to prove the goal specified by the
@@ -322,62 +258,62 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   --   4. Combine the sub-proofs into a 'Resolved' proof.
   --
   -- The zero-overhead version is 'provePredicate'.
-  tryPredicate :: Predicate -> HornClause -> m ProofResult
+  tryPredicate :: Predicate -> HornClause -> m [Goal]
   -- | Attempt to prove a predicate using subsequent alternatives. 'retryPredicate' should have the
   -- same semantics as 'tryPredicate', modulo side-effects. The zero-overhead version is
   -- 'provePredicate'.
-  retryPredicate :: Predicate -> HornClause -> m ProofResult
+  retryPredicate :: Predicate -> HornClause -> m [Goal]
   -- | Attempt to prove that two terms can be unified. The resulting computation should either fail
   -- with 'mzero' or produce a unifier and a trivial proof of the unified terms. The zero-overhead
   -- version is 'proveUnifiable'.
-  tryUnifiable :: TermEntry a => Term a -> Term a -> m ProofResult
+  tryUnifiable :: TermEntry a => Term a -> Term a -> m [Goal]
   -- | Attempt to prove that two terms are identical. No new unifications are created. The resulting
   -- computation should either fail with 'mzero' or produce a trivial proof of the equality of the
   -- terms. The zero-overhead version is 'proveIdentical'.
-  tryIdentical ::TermEntry a => Term a -> Term a -> m ProofResult
+  tryIdentical ::TermEntry a => Term a -> Term a -> m [Goal]
   -- | Attempt to prove equality of terms. The resulting computation should evaluate the right-hand
   -- side and, if successful, attempt to unify the resulting constant with the 'Term' on the left-
   -- hand side. If the right- hand side does not evaluate to a constant (for example, because it
   -- contains one or more free variables) the program should terminate with a runtime error as if by
   -- invoking 'errorUninstantiatedVariables'. The zero-overhead version is 'proveEqual'.
-  tryEqual :: TermEntry a => Term a -> Term a -> m ProofResult
+  tryEqual :: TermEntry a => Term a -> Term a -> m [Goal]
   -- | Attempt to prove one 'Term' is less than another. No new unifications are created. The
   -- resulting computation should evaluate both terms and, if successful, succeed if the evaluated
   -- left-hand side compares less than the evaluated right-hand side. If /either/ side does not
   -- evaluate to a constant, the program should terminate with a runtime error as if by invoking
   -- 'errorUninstantiatedVariables'. The zero-overhead version is 'proveLessThan'.
-  tryLessThan :: (TermEntry a, Ord a) => Term a -> Term a -> m ProofResult
+  tryLessThan :: (TermEntry a, Ord a) => Term a -> Term a -> m [Goal]
   -- | Attempt to prove that a 'Term' is fully unified (i.e. it recursively contains no variables).
   -- No new unifications are created. The zero-overhead version is 'proveIsUnified'.
-  tryIsUnified :: TermEntry a => Term a -> m ProofResult
+  tryIsUnified :: TermEntry a => Term a -> m [Goal]
   -- | Attempt to prove that a 'Term' is an uninstantiated variable. No new unfications are created.
   -- The zero-overhead version is 'proveIsVariable'.
-  tryIsVariable :: TermEntry a => Term a -> m ProofResult
+  tryIsVariable :: TermEntry a => Term a -> m [Goal]
   -- | Attempt to prove the negation of a goal. No new unifications are created. The resulting
   -- computation should either fail with 'mzero' (if the negated goal succeeds at least once) or
   -- produce a trivial proof of the negation of the goal. The zero-overhead version is
   -- 'proveNot'.
-  tryNot :: Goal -> m ProofResult
+  tryNot :: Goal -> m [Goal]
   -- | Attempt to prove the conjunction of two goals. The resulting computation should succeed,
   -- emitting a 'ProvedAnd' result with subproofs for each subgoal, if and only if both subgoals
   -- succeed. Further, it is important that unifications made while proving the left-hand side are
   -- applied to the right-hand side before proving it. The zero-overhead version is 'proveAnd'.
-  tryAnd :: Goal -> Goal -> m ProofResult
+  tryAnd :: Goal -> Goal -> m [Goal]
   -- | Attempt to prove the first subgoal in a disjunction. The resulting computation should either
   -- fail with 'mzero', or emit a 'ProvedLeft' proof for each time the left subgoal succeeds. The
   -- zero-overhead version is 'proveOrLeft'.
-  tryOrLeft :: Goal -> Goal -> m ProofResult
+  tryOrLeft :: Goal -> Goal -> m [Goal]
   -- | Attempt to prove the second subgoal in a disjunction. The resulting computaiton should have
   -- the same semantics as 'tryOr', modulo effects in the underlying monad and the fact that it
   -- emits 'provedRight' proofs rather than 'provedLeft' proofs. The zero-overhead version is
   -- 'proveOrRight'.
-  tryOrRight :: Goal -> Goal -> m ProofResult
+  tryOrRight :: Goal -> Goal -> m [Goal]
   -- | Emit a proof of 'Top'. This computation should always succeed with 'ProvedTop', perhaps after
   -- performing side-effects in the monad. The zero- overhead version is 'proveTop'.
-  tryTop :: m ProofResult
+  tryTop :: m [Goal]
   -- | Attempt to prove 'Bottom'. This computation should always fail with 'mzero', perhaps after
   -- performing effects in the monad. The zero-overhead version is 'proveBottom'.
-  tryBottom :: m ProofResult
+  tryBottom :: m [Goal]
   -- | Attempt to prove an 'Alternatives' goal. In addition to any effects performed in the monad,
   -- this computation should have the following semantics:
   --
@@ -390,23 +326,23 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   -- empty list with the output term.
   --
   -- The zero-overhead version is 'proveAlternatives'.
-  tryAlternatives :: TermEntry a => Term a -> Goal -> Term [a] -> m ProofResult
-  -- | Attempt to prove a 'Once' goal. This computation should extract the first 'ProofResult' from
-  -- the inner goal and return it. It should ignore any further solutions to the inner goal. The
-  -- zero-overhead version is 'proveOnce'.
-  tryOnce :: Goal -> m ProofResult
+  tryAlternatives :: TermEntry a => Term a -> Goal -> Term [a] -> m [Goal]
+  -- | Attempt to prove a 'Once' goal. This computation should extract the first result from the
+  -- inner goal and return it. It should ignore any further solutions to the inner goal. The zero-
+  -- overhead version is 'proveOnce'.
+  tryOnce :: Goal -> m [Goal]
   -- | Emit a proof of 'Cut'. This computation always succeeds, and the proof is always trivial.
   -- However, it should perform the side-effect of discarding all unexplored choicepoints created
   -- since entering the last clause of a predicate. The zero-overhead version is 'proveCut'.
-  tryCut :: m ProofResult
+  tryCut :: m [Goal]
   -- | Computation to be invoked when a goal fails because there are no matching clauses. This
   -- computation should result in 'mzero', but may perform effects in the underlying monad first.
-  failUnknownPred :: Predicate -> m ProofResult
+  failUnknownPred :: Predicate -> m [Goal]
   -- | Computation to be invoked when attempting to evaluate a 'Term' which contains ununified
   -- variables. As the type suggests, this should result in a call to 'error'.
   errorUninstantiatedVariables :: m a
 
-instance Monad m => MonadSolver (SolverT s m) where
+instance (SplittableState s, Monad m) => MonadSolver (SolverT s m) where
   tryPredicate = provePredicate
   retryPredicate = provePredicate
   tryUnifiable = proveUnifiable
@@ -428,123 +364,120 @@ instance Monad m => MonadSolver (SolverT s m) where
   errorUninstantiatedVariables = error "Variables are not sufficiently instantiated."
 
 -- | Zero-overhead version of 'tryPredicate' and 'retryPredicate'.
-provePredicate :: MonadSolver m => Predicate -> HornClause -> m ProofResult
+provePredicate :: MonadSolver m => Predicate -> HornClause -> m [Goal]
 provePredicate p c = do
-  (g, u) <- getSubGoal p c
+  let predGoal = PredGoal p [c]
+  g <- resolve p c
   case g of
     -- Exit early (without invoking any continuations) if the subgoal is Top. This isn't strictly
     -- necessary; if we were to invoke the continuation on Top it would just succeed immediately.
     -- But we want to give any observers the appearance of this goal succeeding immediately, with no
     -- further calls. It just makes the control flow a bit more intuitive (i.e. more similar to
     -- Prolog's)
-    Top -> return (Resolved (unifyPredicate u p) ProvedTop, u)
-    _ -> do (subProof, u') <- prove g
-            let netU = u `compose` u'
-            return (Resolved (unifyPredicate netU p) subProof, netU)
-  where getSubGoal p' c' = do mg <- unify p' c'
-                              case mg of
-                                Just g -> return g
-                                Nothing -> mzero
+    Top -> return [predGoal]
+    _ -> (predGoal:) `liftM` prove g
 
 -- | Zero-overhead version of 'tryUnifiable'.
-proveUnifiable :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m ProofResult
+proveUnifiable :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m [Goal]
 proveUnifiable t1 t2 = case mgu t1 t2 of
-  Just u -> return (Unified (unifyTerm u t1) (unifyTerm u t2), u)
+  Just u -> addUnifier u >> return [CanUnify t1 t2]
   Nothing -> mzero
 
 -- | Zero-overhead version of 'tryIdentical'.
-proveIdentical :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m ProofResult
+proveIdentical :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m [Goal]
 proveIdentical t1 t2 = if t1 == t2
-  then return (Identified t1 t2, mempty)
+  then return [Identical t1 t2]
   else mzero
 
 -- | Zero-overhead version of 'tryEqual'.
-proveEqual :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m ProofResult
+proveEqual :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m [Goal]
 proveEqual lhs rhs = do
   rhs' <- eval rhs
   case mgu lhs rhs' of
-    Just u -> return (Equated (unifyTerm u lhs) (unifyTerm u rhs), u)
+    Just u -> addUnifier u >> return [Equal lhs rhs']
     Nothing -> mzero
   where eval t = case fromTerm t of
           Just t' -> return $ toTerm t'
           Nothing -> errorUninstantiatedVariables
 
 -- | Zero-overhead version of 'tryLessThan'.
-proveLessThan :: (TermEntry a, Ord a, MonadSolver m) => Term a -> Term a -> m ProofResult
+proveLessThan :: (TermEntry a, Ord a, MonadSolver m) => Term a -> Term a -> m [Goal]
 proveLessThan lhs rhs = case (fromTerm lhs, fromTerm rhs) of
-  (Just l, Just r) | l < r -> return (ProvedLessThan l r, mempty)
+  (Just l, Just r) | l < r -> return [LessThan (toTerm l) (toTerm r)]
   (Just _, Just _) -> mzero
   _ -> errorUninstantiatedVariables
 
 -- | Zero-overhead version of 'tryIsUnified'.
-proveIsUnified :: (TermEntry a, MonadSolver m) => Term a -> m ProofResult
-proveIsUnified t = if isJust (fromTerm t) then return (ProvedUnified t, mempty) else mzero
+proveIsUnified :: (TermEntry a, MonadSolver m) => Term a -> m [Goal]
+proveIsUnified t = if isJust (fromTerm t) then return [IsUnified t] else mzero
 
 -- | Zero-overhead version of 'tryIsVariable'.
-proveIsVariable :: (TermEntry a, MonadSolver m) => Term a -> m ProofResult
-proveIsVariable t@(Variable _) = return (ProvedVariable t, mempty)
+proveIsVariable :: (TermEntry a, MonadSolver m) => Term a -> m [Goal]
+proveIsVariable t@(Variable _) = return [IsVariable t]
 proveIsVariable _ = mzero
 
 -- | Zero-overhead version of 'tryNot'.
-proveNot :: MonadSolver m => Goal -> m ProofResult
-proveNot g = lnot (prove g) >> return (Negated g, mempty)
+proveNot :: MonadSolver m => Goal -> m [Goal]
+proveNot g = lnot (prove g) >> return [Not g]
 
 -- | Zero-overhead version of 'tryAnd'.
-proveAnd :: MonadSolver m => Goal -> Goal -> m ProofResult
+proveAnd :: MonadSolver m => Goal -> Goal -> m [Goal]
 proveAnd g1 g2 =
-  do (proofLeft, uLeft) <- prove g1
-     (proofRight, uRight) <- prove $ unifyGoal uLeft g2
-     return (ProvedAnd proofLeft proofRight, uLeft `compose` uRight)
+  do proofLeft <- prove g1
+     proofRight <- prove =<< munify g2
+     return $ (And g1 g2 : proofLeft) ++ proofRight
 
 -- | Zero-overhead version of 'tryOrLeft'.
-proveOrLeft :: MonadSolver m => Goal -> Goal -> m ProofResult
+proveOrLeft :: MonadSolver m => Goal -> Goal -> m [Goal]
 proveOrLeft g1 g2 =
-  do (proof, u) <- prove g1
-     return (ProvedLeft proof g2, u)
+  do proof <- prove g1
+     return $ Or g1 g2 : proof
 
 -- | Zero-overhead version of 'tryOrRight'.
-proveOrRight :: MonadSolver m => Goal -> Goal -> m ProofResult
+proveOrRight :: MonadSolver m => Goal -> Goal -> m [Goal]
 proveOrRight g1 g2 =
-  do (proof, u) <- prove g2
-     return (ProvedRight g1 proof, u)
+  do proof <- prove g2
+     return $ Or g1 g2 : proof
 
 -- | Zero-overhead version of 'tryTop'.
-proveTop :: Monad m => m ProofResult
-proveTop = return (ProvedTop, mempty)
+proveTop :: Monad m => m [Goal]
+proveTop = return [Top]
 
 -- | Zero-overhead version of 'tryBottom'.
-proveBottom :: MonadSolver m => m ProofResult
+proveBottom :: MonadSolver m => m [Goal]
 proveBottom = mzero
 
 -- | Zero-overhead version of 'tryAlternatives'.
-proveAlternatives :: (MonadSolver m, TermEntry a) => Term a -> Goal -> Term [a] -> m ProofResult
+proveAlternatives :: (MonadSolver m, TermEntry a) => Term a -> Goal -> Term [a] -> m [Goal]
 proveAlternatives x g xs = do
+  u <- getUnifier
   results <- getAlternatives $ prove g
-  let (ps, us) = unzip results
-  let alternatives = toTerm $ map (`unifyTerm` x) us
+  putUnifier u -- Unifications made during each alternative proof are local to that proof
+  -- Since we threw out local unifications, we must unify the local theorems now
+  let (ps, us) = unzip [(map (unify localU) p, localU) | (p, localU) <- results]
+  let alternatives = toTerm $ map (`unify` x) us
   let mu = mgu xs alternatives
   guard $ isJust mu
-  let u = fromJust mu
-  return (FoundAlternatives x g (unifyTerm u xs) ps, u)
-  where getAlternatives m = do split <- msplit m
-                               case split of
-                                  Just (a, fk) -> (a:) `liftM` getAlternatives fk
-                                  Nothing -> return []
+  addUnifier $ fromJust mu
+  return $ Alternatives x g xs : concat ps
+  where getAlternatives m = getAlternatives' $ liftM2 (,) m getUnifier
+        getAlternatives' m = do split <- msplit m
+                                case split of
+                                   Just (a, fk) -> (a:) `liftM` getAlternatives' fk
+                                   Nothing -> return []
 
 -- | Zero-overhead version of 'tryOnce'.
-proveOnce :: MonadSolver m => Goal -> m ProofResult
-proveOnce g = do
-  (p, u) <- once $ prove g
-  return (ProvedOnce p, u)
+proveOnce :: MonadSolver m => Goal -> m [Goal]
+proveOnce g = (Once g :) `liftM` once (prove g)
 
 -- | Zero-overhead version of 'tryCut'.
-proveCut :: MonadSolver m => m ProofResult
-proveCut = commit (ProvedCut, mempty)
+proveCut :: MonadSolver m => m [Goal]
+proveCut = commit [Cut]
 
 -- | Produce a proof of the goal. This function will either fail, or backtrack over all possible
 -- proofs. It will invoke the appropriate continuations in the given 'SolverCont' whenever a
 -- relevant event occurs during the course of the proof.
-prove :: MonadSolver m => Goal -> m ProofResult
+prove :: MonadSolver m => Goal -> m [Goal]
 prove g = case g of
   PredGoal p [] -> failUnknownPred p
   PredGoal p (c:cs) -> cutFrame $ tryPredicate p c `mplus` msum (map (retryPredicate p) cs)

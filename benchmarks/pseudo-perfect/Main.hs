@@ -11,6 +11,6 @@ goal = findAll (int "c") (perfect? v"c") (v"xs") >> v"xs" |=| expected
 main = compareTo (takeDirectory __FILE__ </> "lib" </> "pseudo-perfect.pl") $ do
   proofs <- bench "pseudoPerfect" goal
   when (isJust proofs) $ do
-    let us = getAllUnifiers $ fromJust proofs
+    let us = fromJust proofs
     assertEquals 1 (length us)
     assertEquals (Unified expected) (queryVar (head us) (v"xs"))

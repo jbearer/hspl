@@ -2,7 +2,9 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 #if __GLASGOW_HASKELL__ >= 800
 {-# OPTIONS_GHC -fdefer-type-errors #-}
 #endif
@@ -20,6 +22,7 @@ import Test.ShouldNotTypecheck
 
 import Control.Exception.Base (evaluate)
 import Control.Monad.State hiding (when)
+import Control.Monad.Trans.Maybe
 import Control.Monad.Writer (MonadWriter (..), runWriter)
 import Data.Data
 import Data.Monoid ((<>))
@@ -34,26 +37,42 @@ data TwoChars = TwoChars Char Char
   deriving (Show, Eq, Typeable, Data, Generic)
 instance Termable TwoChars
 
+type MockUnification = MaybeT (StateT Unifier VarGenerator)
+
+instance MonadVarGenerator MockUnification where
+  fresh = lift $ lift fresh
+
+instance MonadUnification MockUnification where
+  stateUnifier = lift . state
+
+runMockUnification :: MockUnification a -> Maybe (a, Unifier)
+runMockUnification m =
+  let st = runMaybeT m
+      (ma, u) = runVarGenerator $ runStateT st M.empty
+  in case ma of
+    Just a -> Just (a, u)
+    Nothing -> Nothing
+
 renameWithContext :: Renamer -> Int -> Term a -> Term a
 renameWithContext renamer fresh t =
   let r = put renamer >> renameTerm t
-      u = put fresh >> runRenamedT r
-  in runUnification u
+      vg = put fresh >> runRenamedT r
+  in evalState vg fresh
 
 renamePredWithContext :: Renamer -> Int -> Predicate -> Predicate
 renamePredWithContext renamer fresh p =
   let r = put renamer >> renamePredicate p
-      u = put fresh >> runRenamedT r
-  in runUnification u
+      vg = put fresh >> runRenamedT r
+  in evalState vg fresh
 
 renameGoalWithContext :: Renamer -> Int -> Goal -> Goal
 renameGoalWithContext renamer fresh g =
   let r = put renamer >> renameGoal g
-      u = put fresh >> runRenamedT r
-  in runUnification u
+      vg = put fresh >> runRenamedT r
+  in evalState vg fresh
 
 doRenameClause :: HornClause -> HornClause
-doRenameClause c = runUnification $ renameClause c
+doRenameClause c = runVarGenerator $ renameClause c
 
 test = describeModule "Control.Hspl.Internal.Unification" $ do
   describe "a unifier" $ do
@@ -83,7 +102,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         M.empty `compose` u `shouldBe` u
       it "should act as an identity of unification" $ do
         let t = toTerm (Var "x" :: Var Bool)
-        unifyTerm M.empty t `shouldBe` t
+        unify M.empty t `shouldBe` t
     it "should not allow terms to replace variables of a different type" $ do
 #if __GLASGOW_HASKELL__ >= 800
       -- This should work
@@ -104,12 +123,12 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
     it "is not a subunifier of another which does not contain a submap of the first" $
       'a' // Var "x" <> True // Var "y" `shouldSatisfy` not . (`isSubunifierOf` ('a' // Var "y"))
     it "should return the unification status of a variable" $ do
-      queryVar M.empty (Var "x" :: Var Bool) `shouldBe` Ununified
-      queryVar (toTerm 'a' // Var "x") (Var "x" :: Var Bool) `shouldBe` Ununified
-      queryVar (toTerm True // Var "y") (Var "x" :: Var Bool) `shouldBe` Ununified
-      queryVar (toTerm True // Var "x") (Var "x" :: Var Bool) `shouldBe` Unified True
+      findVar M.empty (Var "x" :: Var Bool) `shouldBe` Ununified
+      findVar (toTerm 'a' // Var "x") (Var "x" :: Var Bool) `shouldBe` Ununified
+      findVar (toTerm True // Var "y") (Var "x" :: Var Bool) `shouldBe` Ununified
+      findVar (toTerm True // Var "x") (Var "x" :: Var Bool) `shouldBe` Unified True
       let t = adt Just (Var "y" :: Var Bool)
-      queryVar (t // Var "x") (Var "x" :: Var (Maybe Bool)) `shouldBe` Partial t
+      findVar (t // Var "x") (Var "x" :: Var (Maybe Bool)) `shouldBe` Partial t
   describe "term unification" $ do
     context "of anonymous variables" $ do
       it "should always succeed" $ do
@@ -404,146 +423,146 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
   describe "term unifier application" $ do
     context "to a variable" $ do
       it "should replace the variable if there is a corresponding substitution" $
-        unifyTerm (toTerm 'a' // Var "x") (toTerm (Var "x" :: Var Char)) `shouldBe` toTerm 'a'
+        unify (toTerm 'a' // Var "x") (toTerm (Var "x" :: Var Char)) `shouldBe` toTerm 'a'
       it "should return the original variable if there is no substitution" $ do
         let x = toTerm (Var "x" :: Var Char)
-        unifyTerm M.empty x `shouldBe` x
-        unifyTerm (toTerm 'a' // Var "y") x `shouldBe` x -- No substitution for the right name
-        unifyTerm (toTerm True // Var "x") x `shouldBe` x -- No substitution for the right type
+        unify M.empty x `shouldBe` x
+        unify (toTerm 'a' // Var "y") x `shouldBe` x -- No substitution for the right name
+        unify (toTerm True // Var "x") x `shouldBe` x -- No substitution for the right type
     context "to a constant" $
       it "should return the original constant" $ do
         let u = toTerm 'a' // Var "x" <> toTerm True // Var "y"
-        unifyTerm u (toTerm 'z') `shouldBe` toTerm 'z'
-        unifyTerm u (toTerm False) `shouldBe` toTerm False
+        unify u (toTerm 'z') `shouldBe` toTerm 'z'
+        unify u (toTerm False) `shouldBe` toTerm False
     context "to a tuple" $
       it "should recursively apply the unifier to each element" $ do
-        unifyTerm (toTerm 'a' // Var "x" <> toTerm True // Var "y")
+        unify (toTerm 'a' // Var "x" <> toTerm True // Var "y")
                   (toTerm ("foo", Var "y" :: Var Bool, Var "x" :: Var Bool, Var "x" :: Var Char)) `shouldBe`
           toTerm ("foo", True, Var "x" :: Var Bool, 'a')
-        unifyTerm (toTerm 'a' // Var "x" <> toTerm True // Var "y")
+        unify (toTerm 'a' // Var "x" <> toTerm True // Var "y")
                   (toTerm (Var "x" :: Var Char, ('z', Var "y" :: Var Bool))) `shouldBe`
           toTerm ('a', ('z', True))
     context "to a list" $ do
       it "should recursively apply the unifier to each element" $
-        unifyTerm (toTerm 'a' // Var "x")
+        unify (toTerm 'a' // Var "x")
                   (toTerm [toTerm $ Var "x", toTerm 'b', toTerm $ Var "y"]) `shouldBe`
           toTerm [toTerm 'a', toTerm 'b', toTerm $ Var "y"]
       it "should apply the unifier to the tail of a list" $
-        unifyTerm (toTerm "xyz" // Var "xs")
+        unify (toTerm "xyz" // Var "xs")
                   (List $ VarCons (toTerm (Var "x" :: Var Char)) (Var "xs")) `shouldBe`
           toTerm [toTerm $ Var "x", toTerm 'x', toTerm 'y', toTerm 'z']
     context "to an ADT constructor" $
       it "should recursively apply the unifier to the argument" $ do
-        unifyTerm (toTerm 'a' // Var "x")
+        unify (toTerm 'a' // Var "x")
                   (adt Just (Var "x" :: Var Char)) `shouldBe`
           adt Just 'a'
-        unifyTerm (toTerm 'a' // Var "x" <> toTerm 'b' // Var "y")
+        unify (toTerm 'a' // Var "x" <> toTerm 'b' // Var "y")
                   (adt TwoChars (Var "x" :: Var Char, Var "y" :: Var Char)) `shouldBe`
           adt TwoChars ('a', 'b')
     context "to an arithmetic expression" $
       it "should recursively apply the unifier to each element" $ do
-        unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
+        unify (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
                   (Sum (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
           Sum (toTerm (1 :: Int)) (toTerm (2 :: Int))
-        unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
+        unify (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
                   (Difference (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
           Difference (toTerm (1 :: Int)) (toTerm (2 :: Int))
-        unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
+        unify (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
                   (Product (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
           Product (toTerm (1 :: Int)) (toTerm (2 :: Int))
-        unifyTerm (toTerm (1.0 :: Double) // Var "x" <> (2.0 :: Double) // Var "y")
+        unify (toTerm (1.0 :: Double) // Var "x" <> (2.0 :: Double) // Var "y")
                   (Quotient (toTerm (Var "x" :: Var Double)) (toTerm $ Var "y")) `shouldBe`
           Quotient (toTerm (1.0 :: Double)) (toTerm (2.0 :: Double))
-        unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
+        unify (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
                   (IntQuotient (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
           IntQuotient (toTerm (1 :: Int)) (toTerm (2 :: Int))
-        unifyTerm (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
+        unify (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
                   (Modulus (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
           Modulus (toTerm (1 :: Int)) (toTerm (2 :: Int))
   describe "predicate unifier application" $ do
     it "should unify the argument when the unifier applies" $
-      unifyPredicate (toTerm 'a' // Var "x") (predicate "foo" (Var "x" :: Var Char)) `shouldBe`
+      unify (toTerm 'a' // Var "x") (predicate "foo" (Var "x" :: Var Char)) `shouldBe`
         predicate "foo" 'a'
     it "should return the original predicate when the unifier is irrelevant" $ do
       let p = predicate "foo" (Var "x" :: Var Char)
-      unifyPredicate M.empty p `shouldBe` p
-      unifyPredicate (toTerm 'a' // Var "y") p `shouldBe` p
-      unifyPredicate (toTerm True // Var "x") p `shouldBe` p
+      unify M.empty p `shouldBe` p
+      unify (toTerm 'a' // Var "y") p `shouldBe` p
+      unify (toTerm True // Var "x") p `shouldBe` p
   describe "goal unifier application" $ do
     context "to a predicate goal" $ do
       it "should unify the predicate" $
-        unifyGoal (toTerm 'a' // Var "x")
+        unify (toTerm 'a' // Var "x")
                   (PredGoal (predicate "foo" (Var "x" :: Var Char)) []) `shouldBe`
           PredGoal (predicate "foo" 'a') []
       it "should ignore the clauses" $ do
         let g = PredGoal (predicate "foo" ()) [HornClause (predicate "bar" (Var "x" :: Var Char)) Top]
-        unifyGoal (toTerm 'a' // Var "x") g `shouldBe` g
+        unify (toTerm 'a' // Var "x") g `shouldBe` g
     withParams [IsUnified, IsVariable] $ \constr ->
       context "to a unary term goal" $ do
         it "should unify the term" $
-          unifyGoal (toTerm 'a' // Var "x") (constr $ toTerm (Var "x" :: Var Char)) `shouldBe`
+          unify (toTerm 'a' // Var "x") (constr $ toTerm (Var "x" :: Var Char)) `shouldBe`
             constr (toTerm 'a')
         it "should leave the term unchanged when the unifier does not apply" $
-          unifyGoal (toTerm 'a' // Var "x") (constr $ toTerm (Var "y" :: Var Char)) `shouldBe`
+          unify (toTerm 'a' // Var "x") (constr $ toTerm (Var "y" :: Var Char)) `shouldBe`
             constr (toTerm $ Var "y")
     context "to a binary term goal" $ do
       let constrs :: [Term Char -> Term Char -> Goal]
           constrs = [CanUnify, Identical, Equal, LessThan]
       withParams constrs $ \constr -> do
         it "should unify both terms" $
-          unifyGoal (toTerm 'a' // Var "x" <> toTerm 'b' // Var "y")
+          unify (toTerm 'a' // Var "x" <> toTerm 'b' // Var "y")
             (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
             constr (toTerm 'a') (toTerm 'b')
         it "should leave either term unchanged when the unifier does not apply" $ do
           let u = toTerm 'a' // Var "x"
-          unifyGoal u (constr (toTerm (Var "y" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
+          unify u (constr (toTerm (Var "y" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
             constr (toTerm (Var "y" :: Var Char)) (toTerm 'a')
-          unifyGoal u (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
+          unify u (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
             constr (toTerm 'a') (toTerm (Var "y" :: Var Char))
     context "to a unary outer goal" $
       withParams [Not, Once] $ \constr ->
         it "should unify the inner goal" $
-          unifyGoal (toTerm 'a' // Var "x")
+          unify (toTerm 'a' // Var "x")
                     (constr $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []) `shouldBe`
             constr (PredGoal (predicate "foo" 'a') [])
     context "to a binary logic goal" $
       withParams [And, Or] $ \constr ->
         it "should unify both inner goals" $
-          unifyGoal (toTerm 'a' // Var "x")
+          unify (toTerm 'a' // Var "x")
                     (constr (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
                             (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
             constr (PredGoal (predicate "foo" 'a') []) (PredGoal (predicate "bar" 'a') [])
     context "to a unitary goal" $
       withParams [Top, Bottom, Cut] $ \constr ->
         it "should be a noop" $
-          unifyGoal (toTerm 'a' // Var "x") constr `shouldBe` constr
+          unify (toTerm 'a' // Var "x") constr `shouldBe` constr
     context "to an Alternatives goal" $
       it "should unify each subcomponent" $
-        unifyGoal (toTerm 'a' // Var "x" <> toTerm "foo" // Var "xs")
+        unify (toTerm 'a' // Var "x" <> toTerm "foo" // Var "xs")
                   (Alternatives (toTerm (Var "x" :: Var Char))
                                 (Equal (toTerm 'a') (toTerm $ Var "x"))
                                 (toTerm $ Var "xs")) `shouldBe`
           Alternatives (toTerm 'a') (Equal (toTerm 'a') (toTerm 'a')) (toTerm "foo")
   describe "clause unifier application" $ do
     it "should unify the positive literal when the unifier applies" $
-      unifyClause (toTerm 'a' // Var "x")
+      unify (toTerm 'a' // Var "x")
                   (HornClause (predicate "foo" (Var "x" :: Var Char)) Top) `shouldBe`
         HornClause (predicate "foo" 'a') Top
     it "should unify the negative literal when the unifier applies" $
-      unifyClause (toTerm 'a' // Var "x" <> toTerm True // Var "y")
+      unify (toTerm 'a' // Var "x" <> toTerm True // Var "y")
                   (HornClause (predicate "foo" ())
                               (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
         HornClause (predicate "foo" ()) (PredGoal (predicate "bar" 'a') [])
     it "should leave the positive literal unchanged when the unifier does not apply" $ do
       let c = HornClause (predicate "foo" (Var "x" :: Var Char)) Top
-      unifyClause M.empty c `shouldBe` c
-      unifyClause (toTerm 'a' // Var "y") c `shouldBe` c
-      unifyClause (toTerm True // Var "x") c `shouldBe` c
+      unify M.empty c `shouldBe` c
+      unify (toTerm 'a' // Var "y") c `shouldBe` c
+      unify (toTerm True // Var "x") c `shouldBe` c
     it "should leave the negative literal unchanged when the unifier does not apply" $ do
       let c = HornClause (predicate "foo" ()) (PredGoal (predicate "bar" (Var "x" :: Var Bool)) [])
-      unifyClause (toTerm True // Var "y") c `shouldBe` c
+      unify (toTerm True // Var "y") c `shouldBe` c
   describe "resolution" $ do
-    let runTest p c = runUnification (unify p c)
+    let runTest p c = runMockUnification (resolve p c)
     it "should rename variables in the clause" $
       runTest (predicate "foo" ())
             (HornClause (predicate "foo" ())

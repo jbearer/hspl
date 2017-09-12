@@ -84,7 +84,7 @@ import Control.Hspl.Internal.Logic
 import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Tuple
 import Control.Hspl.Internal.UI
-import Control.Hspl.Internal.Unification (MonadUnification)
+import Control.Hspl.Internal.Unification (MonadVarGenerator, MonadUnification (..), munify)
 
 -- | Structure used to specify configuration options for the debugger.
 data DebugConfig = DebugConfig {
@@ -277,20 +277,21 @@ instance SplittableState SolverState where
 -- | Monad transformer which, when executed using 'observeAllSolverT' or 'observeManySolverT',
 -- yields a 'SolverCoroutine'.
 newtype DebugSolverT m a = DebugSolverT { unDebugSolverT :: SolverT SolverState (SolverCoroutine m) a }
-  deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadLogic, MonadLogicCut, MonadUnification)
+  deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadLogic, MonadLogicCut, MonadVarGenerator, MonadUnification)
 
 -- | Same as callWith, but for unitary provers.
-callWith :: Monad m => MsgType -> DebugSolverT m ProofResult -> DebugSolverT m ProofResult
+callWith :: Monad m => MsgType -> DebugSolverT m [Goal] -> DebugSolverT m [Goal]
 callWith m cont = do
   s <- gets goalStack
   let dc = DC { stack = s, status = m, msg = formatGoal (head s) }
   yield dc
   ifte cont
-    (\result -> yield dc { status = Exit, msg = formatGoal (getSolution result) } >> return result)
+    (\p -> do thm <- munify $ head p
+              yield dc { status = Exit, msg = formatGoal thm } >> return p)
     (yield dc { status = Fail } >> mzero)
 
 -- | Attempt to prove a subgoal and log 'Call', 'Exit', and 'Fail' messages as appropriate.
-call :: Monad m => DebugSolverT m ProofResult -> DebugSolverT m ProofResult
+call :: Monad m => DebugSolverT m [Goal] -> DebugSolverT m [Goal]
 call = callWith Call
 
 -- | Run a 'DebugSolverT' action with the given goal at the top of the goal stack.
@@ -559,7 +560,9 @@ prompt context@DC { stack = s, status = mtype, msg = m } = do
 
 -- | A coroutine which controls the HSPL solver, yielding control at every important event.
 solverCoroutine :: Monad m => Goal -> SolverCoroutine m [ProofResult]
-solverCoroutine g = observeAllSolverT (unDebugSolverT $ prove g) Solver { goalStack = [] }
+solverCoroutine g =
+  observeAllSolverT (unDebugSolverT $ prove g >>= getResult)
+                    Solver { goalStack = [] }
 
 -- | A coroutine which controls the interactive debugger terminal, periodically yielding control to
 -- the solver.

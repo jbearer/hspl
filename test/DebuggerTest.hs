@@ -268,7 +268,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     let equalGoal = Equal (toTerm (Var "x" :: Var Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
     let equalTrace = do
           traceCall equalGoal
-          traceExit $ Equal (toTerm (3 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
+          traceExit $ Equal (toTerm (3 :: Int)) (toTerm (3 :: Int))
     let equalFailGoal = Equal (toTerm (2 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
     let equalFailTrace = do
           traceCall equalFailGoal
@@ -358,11 +358,11 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall $ CanUnify (toTerm $ Var "x") (toTerm 'a')
           traceExit $ CanUnify (toTerm 'a') (toTerm 'a')
           traceExit $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
-                         (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                         (CanUnify (toTerm 'a') (toTerm 'b'))
           traceRedo alternativesOrGoal
           traceCall $ CanUnify (toTerm $ Var "x") (toTerm 'b')
           traceExit $ CanUnify (toTerm 'b') (toTerm 'b')
-          traceExit $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+          traceExit $ Or (CanUnify (toTerm 'b') (toTerm 'a'))
                          (CanUnify (toTerm 'b') (toTerm 'b'))
           traceExit $ Alternatives (toTerm $ Var "x")
                                    (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
@@ -391,9 +391,9 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall $ CanUnify (toTerm $ Var "x") (toTerm 'a')
           traceExit $ CanUnify (toTerm 'a') (toTerm 'a')
           traceExit $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
-                         (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                         (CanUnify (toTerm 'a') (toTerm 'b'))
           traceExit $ Once $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
-                                (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                                (CanUnify (toTerm 'a') (toTerm 'b'))
     let onceFailGoal = Once Bottom
     let onceFailTrace = do
           traceCall onceFailGoal

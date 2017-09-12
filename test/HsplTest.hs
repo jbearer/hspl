@@ -9,11 +9,6 @@ import Control.Hspl
 import qualified Control.Hspl.Internal.Ast as Ast
 import           Control.Hspl.Internal.Ast (Goal (..), Var (..))
 import qualified Control.Hspl.Internal.Solver as Solver
-import           Control.Hspl.Internal.Unification ( (//)
-                                                   , UnificationStatus (..)
-                                                   , queryVar
-                                                   , isSubunifierOf
-                                                   )
 
 import Control.Monad.Writer
 import Data.Data
@@ -169,9 +164,9 @@ test = describeModule "Control.Hspl" $ do
 
   describe "The enum predicate" $
     it "should backtrack over all elements of a bounded enumerable type" $ do
-      let us = getAllUnifiers $ runHspl $ enum? (v"x" :: Var BoundedEnum)
+      let us = runHspl $ enum? (v"x" :: Var BoundedEnum)
       length us `shouldBe` 4
-      head us `shouldSatisfy` (E1 // v"x" `isSubunifierOf`)
+      queryVar (head us) (v"x") `shouldBe` Unified E1
 
   describe "list term construction" $ do
     context "via cons" $ do
@@ -219,26 +214,25 @@ test = describeModule "Control.Hspl" $ do
   describe "bagOf" $ do
     it "should bind a list to all alternatives of a variable" $ do
       let l = enumFromTo minBound maxBound :: [BoundedEnum]
-      let us = getAllUnifiers $ runHspl $ bagOf (v"x" :: Var BoundedEnum) (enum? (v"x" :: Var BoundedEnum)) (v"xs")
+      let us = runHspl $ bagOf (v"x" :: Var BoundedEnum) (enum? (v"x" :: Var BoundedEnum)) (v"xs")
       length us `shouldBe` 1
       queryVar (head  us) (v"xs") `shouldBe` Unified l
     it "should handle ununified solutions" $ do
-        let us = getAllUnifiers $ runHspl $
-                  bagOf (Var "x" :: Var (Maybe Char))
-                        ((Var "x" :: Var (Maybe Char)) |=| Just $$ char "y")
-                        (v"xs")
+        let us = runHspl $ bagOf (Var "x" :: Var (Maybe Char))
+                                 ((Var "x" :: Var (Maybe Char)) |=| Just $$ char "y")
+                                 (v"xs")
         length us `shouldBe` 1
         case queryVar (head us) (Var "xs" :: Var [Maybe Char]) of
           Partial t -> t `shouldBeAlphaEquivalentTo` [Just $$ char "y"]
           st -> failure $ "Expected Partial (Just $$ y), but got " ++ show st
 
-        let us = getAllUnifiers $ runHspl $ bagOf (char "x") (char "x" |=| char "y") (v"xs")
+        let us = runHspl $ bagOf (char "x") (char "x" |=| char "y") (v"xs")
         length us `shouldBe` 1
         case queryVar (head us) (char \* "xs") of
           Partial t -> t `shouldBeAlphaEquivalentTo` [char "x"]
           st -> failure $ "Expected Partial [x], but got " ++ show st
     it "should fail if the inner goal fails" $
-      getAllSolutions (runHspl $ bagOf (char "x") false (v"xs")) `shouldBe` []
+      runHspl (bagOf (char "x") false (v"xs")) `shouldBe` []
 
   describe "the unified predicate" $
     it "should create an IsUnified goal" $
@@ -323,15 +317,17 @@ test = describeModule "Control.Hspl" $ do
     it "should succeed if the terms are equal" $ do
       let sols = runHspl $ 'a' |<=| 'a'
       length sols `shouldBe` 1
-      searchProof (head sols) (Equal (toTerm 'a') (toTerm 'a')) `shouldBe`
+      queryTheorem (head sols) (Equal (toTerm 'a') (toTerm 'a')) `shouldBe`
         [Equal (toTerm 'a') (toTerm 'a')]
     it "should succeed if the left-hand side is less than the right-hand side" $ do
       let sols = runHspl $ 'a' |<=| 'b'
       length sols `shouldBe` 1
-      searchProof (head sols) (LessThan (toTerm 'a') (toTerm 'b')) `shouldBe`
+      queryTheorem (head sols) (LessThan (toTerm 'a') (toTerm 'b')) `shouldBe`
         [LessThan (toTerm 'a') (toTerm 'b')]
-    it "should unify variables on the left-hand side if possible" $
-      getAllUnifiers (runHspl $ char "x" |<=| 'a') `shouldBe` ['a' // Var "x"]
+    it "should unify variables on the left-hand side if possible" $ do
+      let sols = runHspl $ char "x" |<=| 'a'
+      length sols `shouldBe` 1
+      queryVar (head sols) (char "x") `shouldBe` Unified 'a'
     it "should have lower precedence than arithmetic operators" $
       exec ((1 :: Int) |<=| (2 :: Int) |+| (3 :: Int)) `shouldBe`
         exec ((1 :: Int) |<=| ((2 :: Int) |+| (3 :: Int)))
@@ -340,15 +336,17 @@ test = describeModule "Control.Hspl" $ do
     it "should succeed if the terms are equal" $ do
       let sols = runHspl $ 'a' |>=| 'a'
       length sols `shouldBe` 1
-      searchProof (head sols) (Equal (toTerm 'a') (toTerm 'a')) `shouldBe`
+      queryTheorem (head sols) (Equal (toTerm 'a') (toTerm 'a')) `shouldBe`
         [Equal (toTerm 'a') (toTerm 'a')]
     it "should succeed if the left-hand side is greater than the right-hand side" $ do
       let sols = runHspl $ 'b' |>=| 'a'
       length sols `shouldBe` 1
-      searchProof (head sols) (LessThan (toTerm 'a') (toTerm 'b')) `shouldBe`
+      queryTheorem (head sols) (LessThan (toTerm 'a') (toTerm 'b')) `shouldBe`
         [LessThan (toTerm 'a') (toTerm 'b')]
-    it "should unify variables on the left-hand side if possible" $
-      getAllUnifiers (runHspl $ char "x" |>=| 'a') `shouldBe` ['a' // Var "x"]
+    it "should unify variables on the left-hand side if possible" $ do
+      let sols = runHspl $ char "x" |>=| 'a'
+      length sols `shouldBe` 1
+      queryVar (head sols) (char "x") `shouldBe` Unified 'a'
     it "should have lower precedence than arithmetic operators" $
       exec ((1 :: Int) |>=| (2 :: Int) |+| (3 :: Int)) `shouldBe`
         exec ((1 :: Int) |>=| ((2 :: Int) |+| (3 :: Int)))

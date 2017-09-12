@@ -71,13 +71,11 @@ module Control.Hspl (
   , runHsplN
   -- ** Inspecting results
   , ProofResult
-  , searchProof
-  , getUnifier
-  , getAllUnifiers
-  , getSolution
-  , getAllSolutions
-  , queryVar
   , UnificationStatus (..)
+  , queryVar
+  , queryTheorem
+  , getTheorem
+  , getAllTheorems
   -- * The HSPL type system
   -- $types
   -- ** Variables
@@ -139,13 +137,12 @@ import           Control.Hspl.Internal.Ast ( Var (Var)
                                            )
 import qualified Control.Hspl.Internal.Solver as Solver
 import           Control.Hspl.Internal.Solver ( ProofResult
-                                              , searchProof
-                                              , getUnifier
-                                              , getAllUnifiers
-                                              , getSolution
-                                              , getAllSolutions
+                                              , queryVar
+                                              , queryTheorem
+                                              , getTheorem
+                                              , getAllTheorems
                                               )
-import           Control.Hspl.Internal.Unification (queryVar, UnificationStatus (..))
+import           Control.Hspl.Internal.Unification (UnificationStatus (..))
 
 -- | A clause is a logical disjunction of one or more predicates. Each definition of a predicate
 -- (see 'def') generates one 'Clause' in the resulting 'Hspl' program.

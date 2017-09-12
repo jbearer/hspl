@@ -1,7 +1,6 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -23,23 +22,24 @@ module Control.Hspl.Internal.Unification (
   , (//)
   -- ** Querying a unifier
   , UnificationStatus (..)
-  , queryVar
+  , findVar
   , isSubunifierOf
   -- * Unification
   -- ** The unification monad
+  , MonadVarGenerator (..)
+  , VarGeneratorT
+  , runVarGeneratorT
+  , VarGenerator
+  , runVarGenerator
   , MonadUnification (..)
-  , UnificationT
-  , runUnificationT
-  , Unification
-  , runUnification
+  , modifyUnifier
+  , addUnifier
+  , munify
   -- ** Unification algorithm
+  , Unifiable (..)
   , freeIn
   , mgu
-  , unifyTerm
-  , unifyPredicate
-  , unifyGoal
-  , unify
-  , unifyClause
+  , resolve
   -- * Renaming
   , Renamer
   , RenamedT
@@ -53,7 +53,6 @@ module Control.Hspl.Internal.Unification (
   , renameClause
   ) where
 
-import Control.Applicative (Applicative)
 import Control.Exception
 import Control.Monad.Identity
 import Control.Monad.State
@@ -63,36 +62,73 @@ import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.VarMap (VarMap)
 import qualified Control.Hspl.Internal.VarMap as M
 
--- | Monad in which all unification operations take place. All unifications in a single run of an
--- HSPL program should take place in the same 'UnificationT' monad.
-class Monad m => MonadUnification m where
+-- | Class of monads capable of generating global unique variables.
+class Monad m => MonadVarGenerator m where
   -- | Get a 'Fresh' variable.
   fresh :: TermEntry a => m (Var a)
 
--- | Concrete instance of the 'MonadUnification' class. This type encapsulates the state necessary
--- to generate unique 'Fresh' variables.
-newtype UnificationT m a = UnificationT { unUnificationT :: StateT Int m a }
-  deriving (Functor, Applicative, Monad, MonadIO, MonadTrans)
-deriving instance Monad m => MonadState Int (UnificationT m)
+-- | Monad transformer for generating unique variables.
+type VarGeneratorT = StateT Int
 
-instance Monad m => MonadUnification (UnificationT m) where
+instance Monad m => MonadVarGenerator (VarGeneratorT m) where
   fresh = do
-    n <- get
-    put $ n + 1
-    return $ Fresh n
+    f <- get
+    put $ f + 1
+    return $ Fresh f
 
--- | Non-transformer version of the 'UnificationT' monad.
-type Unification = UnificationT Identity
+-- | Run a 'VarGeneratorT' computation.
+runVarGeneratorT :: Monad m => VarGeneratorT m a -> m a
+runVarGeneratorT m = evalStateT m 0
 
--- | Evaluate a computation in the 'Unification' monad, starting from a state in which no 'Fresh'
--- variables have been generated.
-runUnification :: Unification a -> a
-runUnification = runIdentity . runUnificationT
+-- | Non-transformer version of 'VarGeneratorT'.
+type VarGenerator = VarGeneratorT Identity
 
--- | Evaluate a computation in 'UnificationT' transformed monad, starting from a state in which no
--- 'Fresh' variables have been generated. The result is a compuation in the underlying monad.
-runUnificationT :: Monad m => UnificationT m a -> m a
-runUnificationT m = evalStateT (unUnificationT m) 0
+-- | Run a 'VarGenerator' computation.
+runVarGenerator :: VarGenerator a -> a
+runVarGenerator = runIdentity . runVarGeneratorT
+
+-- | Monad in which all unification operations take place. All unifications in a single run of an
+-- HSPL program should take place in the same 'MonadUnification' computation.
+class (MonadVarGenerator m, MonadPlus m) => MonadUnification m where
+  -- | Embed a computation which is stateful in the current 'Unifier' into the monad.
+  stateUnifier :: (Unifier -> (a, Unifier)) -> m a
+  stateUnifier f = do
+    u <- getUnifier
+    let (r, u') = f u
+    putUnifier u'
+    return r
+
+  -- | Retrieve the current 'Unifier'.
+  getUnifier :: m Unifier
+  getUnifier = stateUnifier (\u -> (u, u))
+
+  -- | Set the current 'Unifier'.
+  putUnifier :: Unifier -> m ()
+  putUnifier u = stateUnifier $ const ((), u)
+
+  {-# MINIMAL (stateUnifier | getUnifier, putUnifier) #-}
+
+-- | Update the current 'Unifier' based on a supplied transformation function.
+modifyUnifier :: MonadUnification m => (Unifier -> Unifier) -> m ()
+modifyUnifier f = (f `liftM` getUnifier) >>= putUnifier
+
+-- | Add the unifications contained in the given 'Unifier' to the current 'Unifier'. This function
+-- will update existing unifications if the substituting term contains a variable which is
+-- substitued for in the new 'Unifier'. (See 'compose' for details on the semantics of udpating
+-- 'Unifier's.)
+addUnifier :: MonadUnification m => Unifier -> m ()
+addUnifier u = modifyUnifier (`compose` u)
+
+-- | Types to which a 'Unifier' can be applied.
+class Unifiable a where
+  -- | Apply the given 'Unifier', replacing all free variables with the value associated with that
+  -- variable in the 'Unifier'.
+  unify :: Unifier -> a -> a
+
+-- | Unify a given 'Unifiable' using the current value of the 'Unifier' from the 'MonadUnification'
+-- computation.
+munify :: (MonadUnification m, Unifiable a) => a -> m a
+munify a = (`unify` a) `liftM` getUnifier
 
 -- | A unifier maps variables to terms which are to replace those variables.
 type Unifier = VarMap Term
@@ -101,7 +137,7 @@ type Unifier = VarMap Term
 -- applying the first unifier and then the second in sequence.
 infixr 6 `compose` -- Same as <> for Monoid
 compose :: Unifier -> Unifier -> Unifier
-compose u1 u2 = M.map (unifyTerm u2) u1 `M.union` u2
+compose u1 u2 = M.map (unify u2) u1 `M.union` u2
 
 -- | A unifier representing the replacement of a variable by a term.
 (//) :: TermData a => a -> Var (HSPLType a) -> Unifier
@@ -168,8 +204,8 @@ mgu (Constructor c arg) (Constructor c' arg')
         mguETermList [] _ = Nothing
         mguETermList _ [] = Nothing
         mguETermList (ETerm t : ts) (ETerm t' : ts') = do u <- cast t' >>= mgu t
-                                                          let uts = map (termMap $ ETerm . unifyTerm u) ts
-                                                          let uts' = map (termMap $ ETerm . unifyTerm u) ts'
+                                                          let uts = map (termMap $ ETerm . unify u) ts
+                                                          let uts' = map (termMap $ ETerm . unify u) ts'
                                                           u' <- mguETermList uts uts'
                                                           return $ u `compose` u'
 
@@ -177,8 +213,8 @@ mgu (Tup tup) (Tup tup') = mguTup tup tup'
   where mguTup :: TermEntry a => TupleTerm a -> TupleTerm a -> Maybe Unifier
         mguTup (Tuple2 t1 t2) (Tuple2 t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
         mguTup (TupleN t ts) (TupleN t' ts') = do u <- mgu t t'
-                                                  let uts = unifyTuple u ts
-                                                  let uts' = unifyTuple u ts'
+                                                  let uts = unify u ts
+                                                  let uts' = unify u ts'
                                                   u' <- mguTup uts uts'
                                                   return $ u `compose` u'
         mguTup _ _ = Nothing
@@ -202,78 +238,73 @@ mgu (Modulus t1 t2) (Modulus t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 mgu _ _ = Nothing
 
 -- | Helper function for computing the 'mgu' of a 'Term' with two subterms.
-mguBinaryTerm :: (Term a, Term b) -> (Term a, Term b) -> Maybe Unifier
+mguBinaryTerm :: (TermEntry a, TermEntry b) => (Term a, Term b) -> (Term a, Term b) -> Maybe Unifier
 mguBinaryTerm (t1, t2) (t1', t2') = do
   -- Unify the subterms in sequence, applying each intermediate unifier to the remaining terms
   mgu1 <- mgu t1 t1'
-  let ut2 = unifyTerm mgu1 t2
-  let ut2' = unifyTerm mgu1 t2'
+  let ut2 = unify mgu1 t2
+  let ut2' = unify mgu1 t2'
   mgu2 <- mgu ut2 ut2'
   return $ mgu1 `compose` mgu2
 
-unifyTuple :: Unifier -> TupleTerm a -> TupleTerm a
-unifyTuple u (Tuple2 t1 t2) = Tuple2 (unifyTerm u t1) (unifyTerm u t2)
-unifyTuple u (TupleN t ts) = TupleN (unifyTerm u t) (unifyTuple u ts)
+instance TermEntry a => Unifiable (TupleTerm a) where
+  unify u (Tuple2 t1 t2) = Tuple2 (unify u t1) (unify u t2)
+  unify u (TupleN t ts) = TupleN (unify u t) (unify u ts)
 
--- | Apply a 'Unifier' to a 'Term' and return the new 'Term', in which all free variables appearing
--- in the unifier are replaced by the corresponding sub-terms.
-unifyTerm :: Unifier -> Term a -> Term a
-unifyTerm u v@(Variable x) = M.findWithDefault v x u
-unifyTerm _ c@(Constant _) = c
-unifyTerm u (Constructor c ts) = Constructor c $ map (termMap $ ETerm . unifyTerm u) ts
-unifyTerm u (Tup t) = Tup $ unifyTuple u t
-unifyTerm unifier (List l) = List $ unifyList unifier l
-  where unifyList :: Unifier -> ListTerm a -> ListTerm a
-        unifyList u (Cons t ts) = Cons (unifyTerm u t) (unifyList u ts)
-        unifyList u (VarCons t x) =
-          case getListTerm $ unifyTerm u $ Variable x of
-            Left ux -> VarCons (unifyTerm u t) ux
-            Right xs -> Cons (unifyTerm u t) xs
-        unifyList _ Nil = Nil
-unifyTerm u (Sum t1 t2) = Sum (unifyTerm u t1) (unifyTerm u t2)
-unifyTerm u (Difference t1 t2) = Difference (unifyTerm u t1) (unifyTerm u t2)
-unifyTerm u (Product t1 t2) = Product (unifyTerm u t1) (unifyTerm u t2)
-unifyTerm u (Quotient t1 t2) = Quotient (unifyTerm u t1) (unifyTerm u t2)
-unifyTerm u (IntQuotient t1 t2) = IntQuotient (unifyTerm u t1) (unifyTerm u t2)
-unifyTerm u (Modulus t1 t2) = Modulus (unifyTerm u t1) (unifyTerm u t2)
+instance TermEntry a => Unifiable (Term a) where
+  unify u v@(Variable x) = M.findWithDefault v x u
+  unify _ c@(Constant _) = c
+  unify u (Constructor c ts) = Constructor c $ map (termMap $ ETerm . unify u) ts
+  unify u (Tup t) = Tup $ unify u t
+  unify unifier (List l) = List $ unifyList unifier l
+    where unifyList :: Unifier -> ListTerm a -> ListTerm a
+          unifyList u (Cons t ts) = Cons (unify u t) (unifyList u ts)
+          unifyList u (VarCons t x) =
+            case getListTerm $ unify u $ Variable x of
+              Left ux -> VarCons (unify u t) ux
+              Right xs -> Cons (unify u t) xs
+          unifyList _ Nil = Nil
+  unify u (Sum t1 t2) = Sum (unify u t1) (unify u t2)
+  unify u (Difference t1 t2) = Difference (unify u t1) (unify u t2)
+  unify u (Product t1 t2) = Product (unify u t1) (unify u t2)
+  unify u (Quotient t1 t2) = Quotient (unify u t1) (unify u t2)
+  unify u (IntQuotient t1 t2) = IntQuotient (unify u t1) (unify u t2)
+  unify u (Modulus t1 t2) = Modulus (unify u t1) (unify u t2)
 
--- | Apply a 'Unifier' to the argument of a 'Predicate'.
-unifyPredicate :: Unifier -> Predicate -> Predicate
-unifyPredicate u (Predicate name term) = Predicate name (unifyTerm u term)
+instance Unifiable Predicate where
+  unify u (Predicate name term) = Predicate name (unify u term)
 
--- | Apply a 'Unifier' to a 'Goal'.
-unifyGoal :: Unifier -> Goal -> Goal
-unifyGoal u (PredGoal p cs) = PredGoal (unifyPredicate u p) cs
-unifyGoal u (CanUnify t1 t2) = CanUnify (unifyTerm u t1) (unifyTerm u t2)
-unifyGoal u (Identical t1 t2) = Identical (unifyTerm u t1) (unifyTerm u t2)
-unifyGoal u (Equal t1 t2) = Equal (unifyTerm u t1) (unifyTerm u t2)
-unifyGoal u (LessThan t1 t2) = LessThan (unifyTerm u t1) (unifyTerm u t2)
-unifyGoal u (IsUnified t) = IsUnified $ unifyTerm u t
-unifyGoal u (IsVariable t) = IsVariable $ unifyTerm u t
-unifyGoal u (Not g) = Not $ unifyGoal u g
-unifyGoal u (And g1 g2) = And (unifyGoal u g1) (unifyGoal u g2)
-unifyGoal u (Or g1 g2) = Or (unifyGoal u g1) (unifyGoal u g2)
-unifyGoal _ Top = Top
-unifyGoal _ Bottom = Bottom
-unifyGoal u (Alternatives x g xs) = Alternatives (unifyTerm u x) (unifyGoal u g) (unifyTerm u xs)
-unifyGoal u (Once g) = Once $ unifyGoal u g
-unifyGoal _ Cut = Cut
+instance Unifiable Goal where
+  unify u (PredGoal p cs) = PredGoal (unify u p) cs
+  unify u (CanUnify t1 t2) = CanUnify (unify u t1) (unify u t2)
+  unify u (Identical t1 t2) = Identical (unify u t1) (unify u t2)
+  unify u (Equal t1 t2) = Equal (unify u t1) (unify u t2)
+  unify u (LessThan t1 t2) = LessThan (unify u t1) (unify u t2)
+  unify u (IsUnified t) = IsUnified $ unify u t
+  unify u (IsVariable t) = IsVariable $ unify u t
+  unify u (Not g) = Not $ unify u g
+  unify u (And g1 g2) = And (unify u g1) (unify u g2)
+  unify u (Or g1 g2) = Or (unify u g1) (unify u g2)
+  unify _ Top = Top
+  unify _ Bottom = Bottom
+  unify u (Alternatives x g xs) = Alternatives (unify u x) (unify u g) (unify u xs)
+  unify u (Once g) = Once $ unify u g
+  unify _ Cut = Cut
 
--- | Apply a 'Unifier' to all 'Predicate's in a 'HornClause'.
-unifyClause :: Unifier -> HornClause -> HornClause
-unifyClause u (HornClause p n) = HornClause (unifyPredicate u p) (unifyGoal u n)
+instance Unifiable HornClause where
+  unify u (HornClause p n) = HornClause (unify u p) (unify u n)
 
 -- | Unify a 'Predicate' with a 'HornClause' with a matching positive literal. Assuming the
 -- predicate unifies with the positive literal of the clause, the 'mgu' is applied to the negative
 -- literal and the resulting goal is returned. Before unification, the 'HornClause' is renamed apart
 -- so that it does not share any free variables with the goal.
-unify :: MonadUnification m => Predicate -> HornClause -> m (Maybe (Goal, Unifier))
-unify (Predicate name arg) c@(HornClause (Predicate name' _) _) =
+resolve :: MonadUnification m => Predicate -> HornClause -> m Goal
+resolve (Predicate name arg) c@(HornClause (Predicate name' _) _) =
   assert (name == name') $ do
     HornClause (Predicate _ arg') neg <- renameClause c
     case cast arg' >>= mgu arg of
-      Nothing -> return Nothing
-      Just u -> return $ Just (unifyGoal u neg, u)
+      Nothing -> mzero
+      Just u -> addUnifier u >> munify neg
 
 -- | The status of a variable in a given 'Unifier'. At any given time, a variable occupies a state
 -- represented by one of the constructors.
@@ -290,8 +321,8 @@ data UnificationStatus a =
   deriving (Show, Eq)
 
 -- | Query the unification status of a variable.
-queryVar :: TermEntry a => Unifier -> Var a -> UnificationStatus a
-queryVar u x = case M.lookup x u of
+findVar :: TermEntry a => Unifier -> Var a -> UnificationStatus a
+findVar u x = case M.lookup x u of
   Nothing -> Ununified
   Just t -> case fromTerm t of
     Nothing -> Partial t
@@ -303,21 +334,21 @@ type Renamer = VarMap Var
 -- | Monad encapsulating the state of a renaming operation.
 type RenamedT m = StateT Renamer m
 
--- | Non-transformed version of the 'RenamedT' monad.
-type Renamed = RenamedT Unification
-
 -- | Evaluate a computation in a 'RenamedT' monad.
-runRenamedT :: MonadUnification m => RenamedT m a -> m a
+runRenamedT :: MonadVarGenerator m => RenamedT m a -> m a
 runRenamedT m = evalStateT m M.empty
+
+-- | Non-transformed version of the 'RenamedT' monad.
+type Renamed = RenamedT VarGenerator
 
 -- | Special case of 'runRenamedT' for the plain 'Renamed' monad.
 runRenamed :: Renamed a -> a
-runRenamed = runUnification . runRenamedT
+runRenamed = runVarGenerator . runRenamedT
 
 -- | Replace a variable with a new, unique name. If this variable appears in the current 'Renamer',
 -- it is replaced with the corresonding new name. Otherwise, a 'Fresh' variable with a unique ID is
 -- generated and added to the 'Renamer'.
-renameVar :: (TermEntry a, MonadUnification m) => Var a -> RenamedT m (Var a)
+renameVar :: (TermEntry a, MonadVarGenerator m) => Var a -> RenamedT m (Var a)
 renameVar Anon = return Anon
 renameVar x = get >>= \m -> case M.lookup x m of
   Just x' -> return x'
@@ -327,11 +358,11 @@ renameVar x = get >>= \m -> case M.lookup x m of
     return freshX
 
 -- | Rename all of the variables in a term.
-renameTerm :: MonadUnification m => Term a -> RenamedT m (Term a)
+renameTerm :: MonadVarGenerator m => Term a -> RenamedT m (Term a)
 renameTerm (Variable x) = liftM Variable $ renameVar x
 renameTerm (Constant c) = return $ Constant c
 renameTerm (Tup tup) = liftM Tup $ renameTuple tup
-  where renameTuple :: MonadUnification m => TupleTerm a -> RenamedT m (TupleTerm a)
+  where renameTuple :: MonadVarGenerator m => TupleTerm a -> RenamedT m (TupleTerm a)
         renameTuple (Tuple2 t1 t2) = do
           t1' <- renameTerm t1
           t2' <- renameTerm t2
@@ -341,7 +372,7 @@ renameTerm (Tup tup) = liftM Tup $ renameTuple tup
           ts' <- renameTuple ts
           return $ TupleN t' ts'
 renameTerm (List l) = liftM List $ renameList l
-  where renameList :: MonadUnification m => ListTerm a -> RenamedT m (ListTerm a)
+  where renameList :: MonadVarGenerator m => ListTerm a -> RenamedT m (ListTerm a)
         renameList (Cons t ts) = do
           t' <- renameTerm t
           ts' <- renameList ts
@@ -352,7 +383,7 @@ renameTerm (List l) = liftM List $ renameList l
           return $ VarCons t' x'
         renameList Nil = return Nil
 renameTerm (Constructor c arg) = liftM (Constructor c) $ renameETermList arg
-  where renameETermList :: MonadUnification m => [ErasedTerm] -> RenamedT m [ErasedTerm]
+  where renameETermList :: MonadVarGenerator m => [ErasedTerm] -> RenamedT m [ErasedTerm]
         renameETermList [] = return []
         renameETermList (ETerm t : ts) = do
           t' <- renameTerm t
@@ -366,7 +397,7 @@ renameTerm (IntQuotient t1 t2) = renameBinaryTerm IntQuotient t1 t2
 renameTerm (Modulus t1 t2) = renameBinaryTerm Modulus t1 t2
 
 -- | Helper function for renaming variables in a 'Term' with two subterms.
-renameBinaryTerm :: MonadUnification m =>
+renameBinaryTerm :: MonadVarGenerator m =>
                     (Term a -> Term b -> Term c) -> Term a -> Term b -> RenamedT m (Term c)
 renameBinaryTerm constr t1 t2 = do
   rt1 <- renameTerm t1
@@ -374,11 +405,11 @@ renameBinaryTerm constr t1 t2 = do
   return $ constr rt1 rt2
 
 -- | Rename all of the variables in a predicate.
-renamePredicate :: MonadUnification m => Predicate -> RenamedT m Predicate
+renamePredicate :: MonadVarGenerator m => Predicate -> RenamedT m Predicate
 renamePredicate (Predicate name arg) = liftM (Predicate name) $ renameTerm arg
 
 -- | Rename all of the variables in a goal.
-renameGoal :: MonadUnification m => Goal -> RenamedT m Goal
+renameGoal :: MonadVarGenerator m => Goal -> RenamedT m Goal
 renameGoal (PredGoal p cs) = renamePredicate p >>= \p' -> return (PredGoal p' cs)
 renameGoal (CanUnify t1 t2) = liftM2 CanUnify (renameTerm t1) (renameTerm t2)
 renameGoal (Identical t1 t2) = liftM2 Identical (renameTerm t1) (renameTerm t2)
@@ -396,7 +427,7 @@ renameGoal (Once g) = liftM Once $ renameGoal g
 renameGoal Cut = return Cut
 
 -- | Rename all of the variables in a clause.
-renameClause :: MonadUnification m => HornClause -> m HornClause
+renameClause :: MonadVarGenerator m => HornClause -> m HornClause
 renameClause (HornClause p n) = runRenamedT rename
   where rename = do rp <- renamePredicate p
                     rn <- renameGoal n

@@ -69,7 +69,8 @@ _In `Control.Hspl.Internal.Unification`_:
 
 1. If necessary (depending on the desired semantics) update `freeIn` and its test case.
 2. If necessary, update `mgu` and its test case.
-3. If necessary, update `renameVar` and its test case.
+3. If necessary, update the `Unifiable` instance for `Term` and its test case.
+4. If necessary, update `renameVar` and its test case.
 
 _In `Control.Hspl`_:
 
@@ -93,22 +94,17 @@ _In `Control.Hspl.Internal.Ast`_:
 
 _In `Control.Hspl.Internal.Unification`_:
 
-1. Add a case to `unifyGoal` and update the associated test.
+1. Add a case to the `Unifiable` instance for `Goal` and update the associated test.
 2. Add a case to `renameGoal` and update the associated test.
 
 _In `Control.Hspl.Internal.Solver`_:
 
-1. Add a `Proof` constructor describing proofs of the new `Goal`.
-2. Add a case to the `Eq` instance for `Proof` and update the test.
-3. Add a case to the `Show` instance for `Proof`.
-4. If the proof has any subproofs, add a case to `subProofs` in the `where` clause of `searchProof`.
-5. Add a case to `matchGoal` in the `where` clause of `searchProof`.
-6. Update tests for `searchProof`.
-7. Add a method to `class MonadSolver` called `try<Constructor>`.
-8. Add a function called `prove<Constructor>` which attempts to produce a proof of the new `Goal`,
+1. Add a case to `matchGoal` in the `where` clause of `queryTheorem` and add tests.
+2. Add a method to `class MonadSolver` called `try<Constructor>`.
+3. Add a function called `prove<Constructor>` which attempts to produce a proof of the new `Goal`,
    and define `try<Constructor> = prove<Constructor>` in the `MonadSolver` instance for `SolverT`.
    Add unit tests for `prove<Constructor>`.
-9. Add a case to `Prove` which calls `prove<Constructor>`.
+4. Add a case to `Prove` which calls `prove<Constructor>`.
 
 _In `Control.Hspl.Internal.Debugger`_:
 
