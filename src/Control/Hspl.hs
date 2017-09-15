@@ -36,7 +36,8 @@ module Control.Hspl (
   , execClauseWriter
   -- ** Defining predicates
   , predicate
-  , semiDetPredicate
+  , predicate'
+  , PredicateAttribute (..)
   , match
   , (|-)
   , (?)
@@ -47,6 +48,7 @@ module Control.Hspl (
   , bagOf
   , once
   , cut
+  , track
   -- *** Unification, identity, equality, and inequality
   , (|=|)
   , (|\=|)
@@ -122,6 +124,7 @@ import Control.Applicative
 import Control.Exception (assert)
 import Control.Monad.Writer
 import Data.Data
+import Data.List (sort)
 
 import qualified Control.Hspl.Internal.Ast as Ast
 import           Control.Hspl.Internal.Ast ( Var (Var)
@@ -170,12 +173,11 @@ execClauseWriter = execWriter . unCW
 -- to @term@ is true.
 infix 9 ?
 (?) :: TermData a => Predicate (HSPLType a) -> a -> GoalWriter ()
-p? arg = let g = Ast.PredGoal (Ast.predicate (predName p) arg) (definitions p)
-         in if semiDet p then tell (Once g) else tell g
+p? arg = p $ toTerm arg
 
 -- | A declaration of a predicate with a given name and set of alternatives. Parameterized by the
 -- type of the argument to which the predicate can be applied.
-data Predicate a = Predicate { predName :: String, definitions :: [Clause], semiDet :: Bool }
+type Predicate a = Term a -> GoalWriter ()
 
 -- | Declare and define a new predicate with a given name. This function takes a block containing
 -- one or more definitions ('match' statements). For example, we define a predicate called "odd"
@@ -218,23 +220,40 @@ data Predicate a = Predicate { predName :: String, definitions :: [Clause], semi
 -- @
 --  elem :: forall a. TermEntry a => Predicate (a, [a])
 --  elem = predicate "elem" $ do
---    let va x = Var "x" :: Var a
+--    let va x = v"x" :: Var a
 --    match (va "x", va "x" <:> v "xs")
 --    match (va "y", va "x" <:> v"xs") |- elem? (v"y", v"xs")
 -- @
 --
 -- Note that the generic type must be an instance of 'TermEntry'.
-predicate :: String -> ClauseWriter t b -> Predicate t
-predicate name gs = Predicate { predName = name
-                              , definitions = map ($name) $ execClauseWriter gs
-                              , semiDet = False
-                              }
+predicate :: TermEntry t => String -> ClauseWriter t b -> Predicate t
+predicate = predicate' []
 
--- | Declare and define a new semi-deterministic predicate. The usage is exactly the same as that of
--- 'predicate'. However, predicates created with 'semiDetPredicate' are semi-deterministic, meaning
--- they succeed at most once.
-semiDetPredicate :: String -> ClauseWriter t b -> Predicate t
-semiDetPredicate name cw = (predicate name cw) { semiDet = True }
+-- | Optional attributes which can be applied to the declaration of a predicate (via 'predicate'')
+-- to change the behavior of that predicate.
+data PredicateAttribute =
+    -- N.B. The order in which the constructors are defined is the order in which they will be
+    -- applied to the predicate. For instance, if both Theorem and SemiDet attribtues are specified,
+    -- the resulting goal will be of the form `Once (Track g)`.
+
+    -- | Informs HSPL that a predicate is a theorem which will be inspected after the proof (via
+    -- 'queryTheorem'). This attribute behaves exactly as if, every time the predicate is invoked,
+    -- the invocation were modified with 'track'.
+    Theorem
+    -- | Makes a predicate semi-deterministic (that is, succeeds at most once). This attribute
+    -- behaves exactly as if, every time the predicate is invoked, the invocation were modified with
+    -- 'once'.
+  | SemiDet
+  deriving (Show, Eq, Ord)
+
+-- | Define a predicate. This function behaves exactly like 'predicate', except that it allows the
+-- caller to specify a set of 'PredicateAttribute' objects to modify the behavior of the predicate.
+predicate' :: TermEntry t => [PredicateAttribute] -> String -> ClauseWriter t b -> Predicate t
+predicate' attrs name cw arg = tell $ applyAttrs (sort attrs) $
+  Ast.PredGoal (Ast.Predicate name arg) (map ($name) $ execClauseWriter cw)
+  where applyAttrs [] g = g
+        applyAttrs (Theorem:as) g = applyAttrs as $ Ast.Track g
+        applyAttrs (SemiDet:as) g = applyAttrs as $ Ast.Once g
 
 -- | Make a statement about when a 'Predicate' holds for inputs of a particular form. A 'match'
 -- statement succeeds when the input can unify with the argument to 'match'. When attempting to
@@ -290,6 +309,11 @@ once gw = tell $ Once $ execGoalWriter gw
 -- | Discard all choicepoints created since entering the current predicate.
 cut :: GoalWriter ()
 cut = tell Cut
+
+-- | Record the result of a 'Goal' if it is successfully proven. Results annotated with 'track' can
+-- be inspected after the proof is complete via 'queryTheorem'.
+track :: GoalWriter a -> GoalWriter ()
+track gw = tell $ Track $ execGoalWriter gw
 
 -- | Determine whether a term is fully unified. The predicate @unified? x@ succeeds if and only if
 -- @x@ is bound to a constant (a term containing no variables) at the time of evaluation. Note that

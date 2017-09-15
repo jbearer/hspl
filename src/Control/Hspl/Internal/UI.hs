@@ -147,6 +147,7 @@ formatGoal (Alternatives x g xs) =
   "findAll " ++ parensTerm x ++ " " ++ parensGoal g ++ " " ++ parensTerm xs
 formatGoal (Once g) = "once " ++ parensGoal g
 formatGoal Cut = "cut"
+formatGoal (Track g) = "track " ++ parensGoal g
 
 -- | Similar to 'formatGoal', but wraps the output in parentheses if it is not a single token.
 parensGoal :: Goal -> String

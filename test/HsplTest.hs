@@ -12,6 +12,7 @@ import qualified Control.Hspl.Internal.Solver as Solver
 
 import Control.Monad.Writer
 import Data.Data
+import Data.List (permutations)
 import GHC.Generics
 
 data Arities = A1 Char
@@ -143,24 +144,28 @@ test = describeModule "Control.Hspl" $ do
       Ast.fromTerm (A3 $$ ('a', 'b', 'c')) `shouldBe` Just (A3 'a' 'b' 'c')
       Ast.fromTerm (A4 $$ ('a', 'b' ,'c', 'd')) `shouldBe` Just (A4 'a' 'b' 'c' 'd')
 
-  describe "the semiDet predicate constructor" $
-    it "should wrap the predicate in once whenever it is invoked" $ do
-        let p :: ClauseWriter Char ()
-            p = do match(char "x") |- true
-                   match(char "y") |- false
-                   match 'z'
-
-        execGoalWriter (semiDetPredicate "foo" p? char "z") `shouldEqual`
-          Once (execGoalWriter $ predicate "foo" p? char "z")
-
-  describe "the once predicate" $
-    it "should create a Once goal" $
-      execGoalWriter (once true) `shouldBe`
-        Once (execGoalWriter true)
+  describe "predicate attributes" $ do
+    let p :: ClauseWriter Char ()
+        p = do match(char "x") |- true
+               match(char "y") |- false
+               match 'z'
+    withParams [(SemiDet, Once), (Theorem, Track)] $ \(attr, g) ->
+      it "should wrap the predicate in once whenever it is invoked" $
+          execGoalWriter (predicate' [attr] "foo" p? char "z") `shouldEqual`
+            g (execGoalWriter $ predicate "foo" p? char "z")
+    withParams (permutations [SemiDet, Theorem]) $ \attrs ->
+      it "should apply in the order: Theorem, SemiDet" $
+        execGoalWriter (predicate' attrs "foo" p? char "z") `shouldEqual`
+          Once (Track $ execGoalWriter $ predicate "foo" p? char "z")
 
   describe "the cut predicate" $
     it "should create a Cut goal" $
       execGoalWriter cut `shouldBe` Cut
+
+  withParams [(lnot, Not), (once, Once), (track, Track)] $ \(p, g) ->
+    describe "goal-modifying predicates" $
+      it "should create a nested goal" $
+        execGoalWriter (p true) `shouldBe` g (execGoalWriter true)
 
   describe "The enum predicate" $
     it "should backtrack over all elements of a bounded enumerable type" $ do
@@ -317,13 +322,11 @@ test = describeModule "Control.Hspl" $ do
     it "should succeed if the terms are equal" $ do
       let sols = runHspl $ 'a' |<=| 'a'
       length sols `shouldBe` 1
-      queryTheorem (head sols) (Equal (toTerm 'a') (toTerm 'a')) `shouldBe`
-        [Equal (toTerm 'a') (toTerm 'a')]
+      getTheorem (head sols) `shouldBe` execGoalWriter ('a' |<=| 'a')
     it "should succeed if the left-hand side is less than the right-hand side" $ do
       let sols = runHspl $ 'a' |<=| 'b'
       length sols `shouldBe` 1
-      queryTheorem (head sols) (LessThan (toTerm 'a') (toTerm 'b')) `shouldBe`
-        [LessThan (toTerm 'a') (toTerm 'b')]
+      getTheorem (head sols) `shouldBe` execGoalWriter ('a' |<=| 'b')
     it "should unify variables on the left-hand side if possible" $ do
       let sols = runHspl $ char "x" |<=| 'a'
       length sols `shouldBe` 1
@@ -336,13 +339,11 @@ test = describeModule "Control.Hspl" $ do
     it "should succeed if the terms are equal" $ do
       let sols = runHspl $ 'a' |>=| 'a'
       length sols `shouldBe` 1
-      queryTheorem (head sols) (Equal (toTerm 'a') (toTerm 'a')) `shouldBe`
-        [Equal (toTerm 'a') (toTerm 'a')]
+      getTheorem (head sols) `shouldBe` execGoalWriter ('a' |>=| 'a')
     it "should succeed if the left-hand side is greater than the right-hand side" $ do
       let sols = runHspl $ 'b' |>=| 'a'
       length sols `shouldBe` 1
-      queryTheorem (head sols) (LessThan (toTerm 'a') (toTerm 'b')) `shouldBe`
-        [LessThan (toTerm 'a') (toTerm 'b')]
+      getTheorem (head sols) `shouldBe` execGoalWriter ('b' |>=| 'a')
     it "should unify variables on the left-hand side if possible" $ do
       let sols = runHspl $ char "x" |>=| 'a'
       length sols `shouldBe` 1
@@ -350,10 +351,6 @@ test = describeModule "Control.Hspl" $ do
     it "should have lower precedence than arithmetic operators" $
       exec ((1 :: Int) |>=| (2 :: Int) |+| (3 :: Int)) `shouldBe`
         exec ((1 :: Int) |>=| ((2 :: Int) |+| (3 :: Int)))
-
-  describe "the lnot predicate" $
-    it "should create a Not goal from an inner goal" $
-      execGoalWriter (lnot $ foo? 'a') `shouldBe` Not (PredGoal (Ast.predicate "foo" 'a') fooDefs)
 
   describe "the ||| predicate" $ do
     let exec = execGoalWriter

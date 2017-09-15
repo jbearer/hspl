@@ -280,18 +280,19 @@ newtype DebugSolverT m a = DebugSolverT { unDebugSolverT :: SolverT SolverState 
   deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadLogic, MonadLogicCut, MonadVarGenerator, MonadUnification)
 
 -- | Same as callWith, but for unitary provers.
-callWith :: Monad m => MsgType -> DebugSolverT m [Goal] -> DebugSolverT m [Goal]
+callWith :: Monad m => MsgType -> DebugSolverT m Theorem -> DebugSolverT m Theorem
 callWith m cont = do
   s <- gets goalStack
   let dc = DC { stack = s, status = m, msg = formatGoal (head s) }
   yield dc
   ifte cont
-    (\p -> do thm <- munify $ head p
-              yield dc { status = Exit, msg = formatGoal thm } >> return p)
+    (\thm -> do thm' <- munify thm
+                yield dc { status = Exit, msg = formatGoal thm' }
+                return thm)
     (yield dc { status = Fail } >> mzero)
 
 -- | Attempt to prove a subgoal and log 'Call', 'Exit', and 'Fail' messages as appropriate.
-call :: Monad m => DebugSolverT m [Goal] -> DebugSolverT m [Goal]
+call :: Monad m => DebugSolverT m Theorem -> DebugSolverT m Theorem
 call = callWith Call
 
 -- | Run a 'DebugSolverT' action with the given goal at the top of the goal stack.
@@ -310,6 +311,9 @@ instance Monad m => MonadState SolverState (DebugSolverT m) where
   state = DebugSolverT . state
 
 instance Monad m => MonadSolver (DebugSolverT m) where
+  recordThm = DebugSolverT . recordThm
+  getRecordedThms = DebugSolverT getRecordedThms
+
   tryPredicate p c = goalFrame (PredGoal p []) (call $ provePredicate p c)
   retryPredicate p c = goalFrame (PredGoal p []) (callWith Redo $ provePredicate p c)
   tryUnifiable t1 t2 = goalFrame (CanUnify t1 t2) (call $ proveUnifiable t1 t2)
@@ -328,6 +332,7 @@ instance Monad m => MonadSolver (DebugSolverT m) where
   tryAlternatives x g xs = goalFrame (Alternatives x g xs) (call $ proveAlternatives x g xs)
   tryOnce g = goalFrame (Once g) (call $ proveOnce g)
   tryCut = goalFrame Cut (call proveCut)
+  tryTrack g = goalFrame (Track g) (call $ proveTrack g)
 
   failUnknownPred p@(Predicate name _) = do
     s <- gets $ (PredGoal p [] :) . goalStack

@@ -19,7 +19,7 @@ import Data.Monoid hiding (Sum, Product)
 import Data.Typeable
 
 instance NFData ProofResult where
-  rnf ProofResult {..} = mainTheorem `seq` subTheorems `seq` rnf unifiedVars
+  rnf ProofResult {..} = mainTheorem `seq` trackedTheorems `seq` rnf unifiedVars
 
 instance NFData Unifier where
   rnf m = m `seq` ()
@@ -71,11 +71,6 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       let us = runTest (predicate "foo" (Var "x" :: Var Char)) simpleSubGoal
       length us `shouldBe` 1
       queryVar (head us) (Var "x") `shouldBe` Unified 'a'
-    it "should return subtheorems proven in the course of the proof" $ do
-      let results = runTest (predicate "foo" 'a') simpleSubGoal
-      length results `shouldBe` 1
-      queryTheorem (head results) (PredGoal (predicate "bar" (Var "x" :: Var Char)) []) `shouldBe`
-        [PredGoal (predicate "bar" 'a') []]
   describe "proveUnifiable" $ do
     let runTest :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> [ProofResult]
         runTest t1 t2 = observeResults $ proveUnifiable (toTerm t1) (toTerm t2)
@@ -213,10 +208,6 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should apply unifications made while proving the left-hand side to the right-hand side" $
       runTest (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
               (CanUnify (toTerm 'b') (toTerm (Var "x" :: Var Char))) `shouldBe` []
-    it "should return proofs of both subgoals" $ do
-      let results = runTest Top Top
-      length results `shouldBe` 1
-      queryTheorem (head results) Top `shouldBe` [Top, Top]
   describe "an Or goal" $ do
     let runTest g1 g2 = observeResults $ prove $ Or g1 g2
     it "should succeed when only the left goal succeeds" $ do
@@ -267,11 +258,6 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
                                         ]
     it "should fail when both goals fail" $
       runTest (PredGoal (predicate "fake" ()) []) (PredGoal (predicate "fake" ()) []) `shouldBe` []
-    withParams [(Top, Bottom), (Bottom, Top)] $ \(l, r) ->
-      it "should return a proof of the successful subgoal" $ do
-        let results = runTest l r
-        length results `shouldBe` 1
-        queryTheorem (head results) Top `shouldBe` [Top]
   describe "proveTop" $
     it "should always succeed" $
       getAllTheorems (observeResults proveTop) `shouldBe` [Top]
@@ -299,8 +285,8 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         output `shouldBe` ""
   describe "an Alternatives proof" $ do
     let runTest x g xs = observeResults $ proveAlternatives x g xs
-    let xIsAOrB = Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                     (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+    let xIsAOrB = Or (Track $ CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                     (Track $ CanUnify (toTerm $ Var "x") (toTerm 'b'))
     let x :: Term Char
         x = toTerm $ Var "x"
         xs :: Term [Char]
@@ -327,9 +313,9 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should take place in the same environment as the parent goal" $ do
       let g = PredGoal (predicate "foo" 'a')
                        [HornClause (predicate "foo" (Var "x" :: Var Char))
-                                   (Alternatives (toTerm (Var "y" :: Var Char))
-                                                 (Equal (toTerm (Var "y" :: Var Char)) (toTerm $ Var "x"))
-                                                 (toTerm [Var "x"]))
+                                   (Track $ Alternatives (toTerm (Var "y" :: Var Char))
+                                                         (Equal (toTerm (Var "y" :: Var Char)) (toTerm $ Var "x"))
+                                                         (toTerm [Var "x"]))
                        ]
       let results = runHspl g
       length results `shouldBe` 1
@@ -359,7 +345,7 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       let results = runTest x xIsAOrB xs
       length results `shouldBe` 1
       queryTheorem (head results) (CanUnify (toTerm (Var "l" :: Var Char)) (toTerm $ Var "r"))
-        `shouldBe` [CanUnify (toTerm 'a') (toTerm 'a'), CanUnify (toTerm 'b') (toTerm 'b')]
+        `shouldBePermutationOf` [CanUnify (toTerm 'a') (toTerm 'a'), CanUnify (toTerm 'b') (toTerm 'b')]
     when "the template variable is already bound" $
       it "should return a list of the bound variable" $ do
         let results = runHspl $ CanUnify (toTerm $ Var "y") (toTerm 'c') <>
@@ -389,25 +375,32 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       length results `shouldBe` 1
       getTheorem (head results) `shouldBe` Once (PredGoal (predicate "mortal" "hypatia") [])
       queryVar (head results) (Var "x") `shouldBe` Unified "hypatia"
-    it "should return a proof of the inner goal" $ do
+  describe "proveTrack" $ do
+    let runTest g = observeResults $ proveTrack g
+    it "should fail if the inner goal fails" $
+      runTest Bottom `shouldBe` []
+    it "should succeed once for each time the inner goal succeeds" $ do
+      getAllTheorems (runTest Top) `shouldBe` [Track Top]
+      getAllTheorems (runTest $ Or Top Top) `shouldBe` [Track $ Or Top Top, Track $ Or Top Top]
+    it "should emit a searchable proof of the inner goal" $ do
       let results = runTest Top
       length results `shouldBe` 1
       queryTheorem (head results) Top `shouldBe` [Top]
   describe "a proof search" $ do
     it "should find goals which unify with a target goal" $
-      queryTheorem (ProofResult (IsUnified $ toTerm 'a') [IsUnified $ toTerm 'b'] mempty)
+      queryTheorem (ProofResult (IsUnified $ toTerm 'a') [IsUnified $ toTerm 'a', IsUnified $ toTerm 'b'] mempty)
                    (IsUnified (toTerm (Var "x" :: Var Char))) `shouldBe`
         [IsUnified $ toTerm 'a', IsUnified $ toTerm 'b']
     it "should unify proven theorems using the final unifier" $
-      queryTheorem (ProofResult (CanUnify (toTerm $ Var "x") (toTerm 'a')) [] ('a' // Var "x"))
+      queryTheorem (ProofResult Top [CanUnify (toTerm $ Var "x") (toTerm 'a')] ('a' // Var "x"))
                    (CanUnify (toTerm (Var "l" :: Var Char)) (toTerm $ Var "r")) `shouldBe`
         [CanUnify (toTerm 'a') (toTerm 'a')]
     let shouldMatch patt goal =
-          do queryTheorem (ProofResult patt [patt] mempty) goal `shouldBe` [goal, goal]
-             queryTheorem (ProofResult goal [goal] mempty) patt `shouldBe` [goal, goal]
+          do queryTheorem (ProofResult Top [patt] mempty) goal `shouldBe` [goal]
+             queryTheorem (ProofResult Top [goal] mempty) patt `shouldBe` [goal]
     let shouldNotMatch patt goal =
-          do queryTheorem (ProofResult patt [patt] mempty) goal `shouldBe` []
-             queryTheorem (ProofResult goal [goal] mempty) patt `shouldBe` []
+          do queryTheorem (ProofResult Top [patt] mempty) goal `shouldBe` []
+             queryTheorem (ProofResult Top [goal] mempty) patt `shouldBe` []
     context "for a predicate goal" $ do
       it "should match when the names are the same and the arguments unify" $
         PredGoal (predicate "foo" (Var "x" :: Var Char)) [] `shouldMatch`

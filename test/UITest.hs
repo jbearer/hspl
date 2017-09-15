@@ -184,7 +184,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
         it "should format a binary term goal" $
           formatGoal (execGoalWriter (t `op` t)) `shouldEqual`
             (parensTerm t ++ " " ++ sop ++ " " ++ parensTerm t)
-    withParams [(once, "once"), (lnot, "lnot")] $ \(op, sop) ->
+    withParams [(once, "once"), (lnot, "lnot"), (track, "track")] $ \(op, sop) ->
       withParams (map tell [Top, Not Top]) $ \gw ->
         it "should format a unary subgoal" $
           formatGoal (execGoalWriter $ op gw) `shouldBe`

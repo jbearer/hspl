@@ -110,7 +110,10 @@ class MonadLogic m => MonadLogicCut m where
   -- | Execute the given 'MonadLogicCut' computation in a new frame on the cut stack.
   cutFrame :: m a -> m a
 
-  {-# MINIMAL (cut | commit), cutFrame #-}
+  -- | Determine whether 'cut' or 'commit' has been called in the current cut frame.
+  hasCut :: m Bool
+
+  {-# MINIMAL (cut | commit), cutFrame, hasCut #-}
 
 -- | Types which can be split into two components and recombined. Used by 'LogicT' to split a state
 -- into backtracking and global components.
@@ -171,10 +174,31 @@ instance SplittableState (Backtracking s) where
   splitState (Backtracking s) = (s, ())
   combineState s () = Backtracking s
 
+putGlobal :: (SplittableState s, MonadState s m) => GlobalState s -> m ()
+putGlobal gs = do
+  (bs, _) <- gets splitState
+  put $ combineState bs gs
+
 -- | A monad transformer for performing backtracking computations layered over another monad 'm',
 -- with the ability to 'cut', or discard any unexplored choice points, at any time. 'CutT' also
 -- embeds a backtracking state (but no global state) into the computation. Use 'LogicT' for a logic
 -- monad with both backtracking and global state.
+--
+-- The semantics of how cut and state interact with the methods of the 'MonadLogic' class are
+-- subtle. First, 'cut' and 'state' do not "bubble" through 'msplit'. In other words, the
+-- computation @msplit (put s)@ leaves the state unchanged, and the computation
+-- @liftM (fst.fromJust) (msplit $ commit a) <|> return b@ produces two results, @a@ and @b@.
+--
+-- The reason for this seemingly counterintuitive behavior is to avoid confusing semantics when
+-- using 'msplit' to convert a 'MonadLogic' computation into a list of results (as in 'runManyCutT',
+-- for example). In general, without this design decision, the behavior would get confusing whenever
+-- the suspension returned by 'msplit' was executed in the same branch of computation as 'msplit'
+-- itself.
+--
+-- However, in cases where the suspension is not executed in the same branch as 'msplit' (such as
+-- in 'once', when it is never executed, or in 'ifte', where it is executed in a separate branch
+-- via 'mplus') we can get away with more intuitive semantics. Thus, we override the definitions of
+-- 'once' and 'ifte' so that affects ('state' and 'cut') bubble through.
 newtype CutT s m a = CutT {
   -- | Run a 'CutT' computation with the specified initial success and failure computations, state,
   -- and cut stack.
@@ -257,11 +281,23 @@ instance MonadIO m => MonadIO (CutT s m) where
 
 instance Monad m => MonadLogic (CutT s m) where
   msplit m = CutT $ \sk s c fk ck -> do
-                (r, s', c') <- runCutT m extract s c (return (Nothing, s, c)) [return (Nothing, s ,c)]
-                let fk' = if c' then head ck else fk
-                sk r s' c' fk' ck
-    where extract a s c fk _ = return (Just (a, lift fk >>= reflect'), s, c)
-          reflect' (fk, _, _) = reflect fk
+    split <- runCutT m sk' s c (return Nothing) [return Nothing]
+    sk split s c fk ck
+    where sk' a _ _ fk _ = return $ Just (a, lift fk >>= reflect)
+
+  once m = do
+    split <- msplit $ liftM3 (,,) m get hasCut
+    case split of
+      Just ((a, s, c), _) -> put s >> if c then commit a else return a
+      Nothing -> mzero
+
+  ifte cond t e = do
+    split <- msplit $ liftM3 (,,) cond get hasCut
+    case split of
+      Just (r, fk) ->
+        let sk (a, s, c) = put s >> (if c then commit a else return a) >>= t
+        in sk r `mplus` (fk >>= sk)
+      Nothing -> e
 
 instance MonadState s (CutT s m) where
   get = CutT $ \sk s c fk ck -> sk s s c fk ck
@@ -273,19 +309,20 @@ instance Monad m => MonadLogicCut (CutT s m) where
           fk [] = fail "commit: cut stack underflow"
 
   cutFrame m = do
-    didCut <- getCut
+    didCut <- hasCut
     pushCutFrame
     putCut False
     r <- m
     putCut didCut
     popCutFrame
     return r
-    where getCut = CutT $ \sk s c fk ck -> sk c s c fk ck
-          putCut c = CutT $ \sk s _ fk ck -> sk () s c fk ck
+    where putCut c = CutT $ \sk s _ fk ck -> sk () s c fk ck
           pushCutFrame = CutT $ \sk s c fk ck -> sk () s c fk (fk:ck)
           popCutFrame = CutT $ \sk s c fk ck -> sk () s c fk (pop ck)
           pop (_:cuts) = cuts
           pop [] = fail "popCutFrame: cut stack underflow"
+
+  hasCut = CutT $ \sk s c fk ck -> sk c s c fk ck
 
 -- | Wrapper around the backtracking component of an arbitrary 'SplittableState' type. This wrapper
 -- is only necessary for GHC 7.10, because the typechecker gets confused by the type family
@@ -301,8 +338,25 @@ newtype LTGS s = LTGS { unLTGS :: GlobalState s }
 -- with the ability to 'cut', or discard any unexplored choice points, at any time. 'LogicT' also
 -- embeds both backtracking and global state into the computation, implementing the
 -- 'MonadLogicState' interface.
+--
+-- See the note on 'CutT' for a description of how and why 'msplit' interacts with statefulness and
+-- 'cut'. Note that global state is handled in the same way as backtracking state: it is not
+-- affected by 'msplit', but is affected by 'once' and 'ifte'.
 newtype LogicT s m a = LogicT { unLogicT :: CutT (LTBS s) (StateT (LTGS s) m) a }
-  deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadIO, MonadLogic, MonadLogicCut)
+  deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadIO, MonadLogicCut)
+
+instance (Monad m, SplittableState s) => MonadLogic (LogicT s m) where
+  msplit m = do
+    s <- get
+    split <- LogicT $ msplit $ unLogicT m
+    nextGlobal <- gets global
+    put s
+    return $ case split of
+      Just (a, fk) -> Just (a, putGlobal nextGlobal >> LogicT fk)
+      Nothing -> Nothing
+
+  once = LogicT . once . unLogicT
+  ifte c t e = LogicT $ ifte (unLogicT c) (unLogicT.t) (unLogicT e)
 
 instance MonadTrans (LogicT s) where
   lift m = LogicT $ lift $ lift m

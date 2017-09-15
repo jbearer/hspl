@@ -373,7 +373,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           rename (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
             constr (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
     context "of unary outer goals" $
-      withParams [Not, Once] $ \constr ->
+      withParams [Not, Once, Track] $ \constr ->
         it "should rename variables in the inner goal" $
           rename (constr $ PredGoal (predicate "foo" (Var "x" :: Var Bool)) []) `shouldBe`
             constr (PredGoal (predicate "foo" (Fresh 0 :: Var Bool)) [])
@@ -520,7 +520,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           unify u (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
             constr (toTerm 'a') (toTerm (Var "y" :: Var Char))
     context "to a unary outer goal" $
-      withParams [Not, Once] $ \constr ->
+      withParams [Not, Once, Track] $ \constr ->
         it "should unify the inner goal" $
           unify (toTerm 'a' // Var "x")
                     (constr $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []) `shouldBe`

@@ -27,7 +27,7 @@ selectPrime = predicate "selectPrime" $ do
     selectPrime? (v"xs", v"y")
 
 power :: Predicate (Integer, Integer, Integer)
-power = semiDetPredicate "power" $ do
+power = predicate' [SemiDet] "power" $ do
   match(__, 0 :: Integer, 1 :: Integer)
   match(v"b", v"p", v"r") |- do
     v"p1" |==| v"p" |-| (1 :: Integer)

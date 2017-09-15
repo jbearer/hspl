@@ -794,6 +794,9 @@ data Goal =
             -- | A goal with a side-effects. Always succeeds, but causes unexplored choice points
             -- created since the last predicate to be discarded.
           | Cut
+            -- | Indicates that the inner 'Goal' should be recorded for future inspection if it is
+            -- proven. 'Track' succeeds whenever the inner 'Goal' does.
+          | Track Goal
 deriving instance Show Goal
 
 instance Eq Goal where
@@ -829,6 +832,7 @@ instance Eq Goal where
     Nothing -> False
   (==) (Once g) (Once g') = g == g'
   (==) Cut Cut = True
+  (==) (Track g) (Track g') = g == g'
   (==) _ _ = False
 
 instance Monoid Goal where

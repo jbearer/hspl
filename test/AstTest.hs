@@ -547,7 +547,7 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
           char (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
             bool (toTerm (Var "x" :: Var Bool)) (toTerm (Var "y" :: Var Bool))
   describe "unary outer goals" $
-    withParams [Not, Once] $ \constr ->
+    withParams [Not, Once, Track] $ \constr ->
       it "should compare according to the inner goal" $ do
         constr (PredGoal (predicate "foo" ()) []) `shouldEqual`
           constr (PredGoal (predicate "foo" ()) [])

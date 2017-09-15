@@ -290,6 +290,7 @@ instance Unifiable Goal where
   unify u (Alternatives x g xs) = Alternatives (unify u x) (unify u g) (unify u xs)
   unify u (Once g) = Once $ unify u g
   unify _ Cut = Cut
+  unify u (Track g) = Track $ unify u g
 
 instance Unifiable HornClause where
   unify u (HornClause p n) = HornClause (unify u p) (unify u n)
@@ -425,6 +426,7 @@ renameGoal Bottom = return Bottom
 renameGoal (Alternatives x g xs) = liftM3 Alternatives (renameTerm x) (renameGoal g) (renameTerm xs)
 renameGoal (Once g) = liftM Once $ renameGoal g
 renameGoal Cut = return Cut
+renameGoal (Track g) = Track `liftM` renameGoal g
 
 -- | Rename all of the variables in a clause.
 renameClause :: MonadVarGenerator m => HornClause -> m HornClause

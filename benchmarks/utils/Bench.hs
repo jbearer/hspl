@@ -272,6 +272,8 @@ genPrologGoal (Alternatives x g xs) =
 genPrologGoal (Once g) = "once(" ++ genPrologGoal g ++ ")"
 genPrologGoal Cut = "!"
 
+genPrologGoal (Track g) = genPrologGoal g
+
 prologAtomCase :: String -> String
 prologAtomCase "" = ""
 prologAtomCase (c:cs) = toLower c : cs

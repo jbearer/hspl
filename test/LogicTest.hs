@@ -67,13 +67,18 @@ test = describeModule "Control.Hspl.Internal.Logic" $ do
         observeAllLogicT m ()
         output <- readFile f
         output `shouldSatisfy` null
-    it "should bubble through msplit" $ do
-      let m = (msplit (commit 'a') <|> return (Just ('b', mzero))) >>= maybe mzero (return . fst)
-      runTest m () [('a', ())]
-      runTest (cutFrame (commit 'a' <|> return 'b') <|> return 'c') ()
-        [('a', ()), ('c', ())]
-      runTest (cutFrame ((return 'a' <|> return 'b') >>= \c -> commit [c, 'y'] <|> return [c, 'z']) <|> return "foo") ()
-        [("ay", ()), ("foo", ())]
+
+  describe "hasCut" $ do
+    it "should return False when cut has not been called" $ do
+      runTest hasCut () [(False, ())]
+      runTest (cutFrame hasCut) () [(False, ())]
+    it "should return True when cut has been called in the current frame" $ do
+      runTest (cut >> hasCut) () [(True, ())]
+      runTest (cutFrame (cut >> hasCut)) () [(True, ())]
+    it "should return False when cut has been called, but not in the current frame" $ do
+      runTest (liftM3 (,,) hasCut (cutFrame $ cut >> hasCut) hasCut) () [((False, True, False), ())]
+      runTest (liftM3 (,,) (cut >> hasCut) (cutFrame hasCut) hasCut) () [((True, False, True), ())]
+      runTest (cut >> cutFrame (liftM2 (,) hasCut (cut >> hasCut))) () [((False, True), ())]
 
   describe "mzero" $ do
     it "should abort the current branch and backtrack" $ do
@@ -159,3 +164,59 @@ test = describeModule "Control.Hspl.Internal.Logic" $ do
         [(0, ())]
       runTest (msplit count >>= \(Just (a1, fk)) -> return a1 <|> (msplit fk >>= \(Just (a2, _)) -> return a2)) ()
         [(0, ()), (1, ())]
+    let collect :: MonadLogic m => m a -> m [a]
+        collect m = do split <- msplit m
+                       case split of
+                         Just (a, fk) -> (a:) `liftM` collect fk
+                         Nothing -> return []
+    let collectWithCut :: MonadLogicCut m => m a -> m [a]
+        collectWithCut m = do split <- msplit $ liftM2 (,) m hasCut
+                              case split of
+                                Just ((a, True), _) -> return [a]
+                                Just ((a, False), fk) -> (a:) `liftM` collectWithCut (fst `liftM` fk)
+                                Nothing -> return []
+    context "when a result cuts" $ do
+      it "should not cut" $
+        runTest (((fst.fromJust) `liftM` msplit (commit 'a' <|> return 'b')) <|> return 'c') ()
+          [('a', ()), ('c', ())]
+      it "but should indicate that cut was called" $
+        runTest (collect $ (commit 'a' <|> return 'b') >> hasCut) ()
+          [([True], ())]
+
+    context "when a result affects backtracking state" $ do
+      it "should not affect the state outside of msplit" $
+        runTest (msplit (put $ Backtracking 'a') >> gets backtracking) (Backtracking 'z')
+          [('z', Backtracking 'z')]
+      it "should not affect the state in the next result" $
+        runTest (collect $ (put (Backtracking 'a') >> gets backtracking) <|> gets backtracking) (Backtracking 'z')
+          [("az", Backtracking 'z')]
+    context "when a result affects global state" $ do
+      it "should not affect the state outside of msplit" $
+        runTest (msplit (put $ Global 'a') >> gets global) (Global 'z')
+          [('z', Global 'z')]
+      it "should affect the state in the next result" $
+        runTest (collect $ (put (Global 'a') >> gets global) <|> gets global) (Global 'z')
+          [("aa", Global 'z')]
+
+  describe "once" $ do
+    it "should fail if the inner computation fails" $
+      runTest (once mzero :: Logic () ()) () []
+    it "should succeed exactly once if the inner computation succeeds at all" $ do
+      runTest (once $ return 'a') () [('a', ())]
+      runTest (once $ return 'a' <|> return 'b') () [('a', ())]
+    it "should cut if the inner computation cuts" $
+      runTest (once (commit 'a') <|> return 'b') () [('a', ())]
+    it "should affect state" $
+      runTest (once (put (LogicState 'a' 'b') <|> put (LogicState 'c' 'd')) >> get) (LogicState 'x' 'y')
+        [(LogicState 'a' 'b', LogicState 'a' 'b')]
+
+  describe "ifte" $ do
+    it "should execute the else branch if the condition fails" $
+      runTest (ifte mzero return (return 'b')) () [('b', ())]
+    it "should execute the then branch each time the condition succeeds" $
+      runTest (ifte (return 'a' <|> return 'b') return (return 'c')) () [('a', ()), ('b', ())]
+    it "should cut if the inner computation cuts" $
+      runTest (ifte (commit 'a') return mzero <|> return 'b') () [('a', ())]
+    it "should affect state" $
+      runTest (ifte (put (LogicState 'a' 'b') <|> put (LogicState 'c' 'd')) (const get) mzero) (LogicState 'x' 'y')
+        [(LogicState 'a' 'b', LogicState 'a' 'b'), (LogicState 'c' 'd', LogicState 'c' 'd')]
