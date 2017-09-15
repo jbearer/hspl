@@ -49,7 +49,6 @@ import qualified Prelude
 
 import Control.Hspl.Internal.Ast
 
-import Control.Monad.State
 import Data.List (intercalate)
 import Data.Map (Map)
 import qualified Data.Map as M
@@ -104,7 +103,14 @@ lookup key (VarMap typeMap) = do
 -- | The left-biased union of two 'VarMap's. This is the operation used for 'mappend' in the
 -- 'Monoid' instance.
 union :: Typeable f => VarMap f -> VarMap f -> VarMap f
-union m1 = execState (for_ m1 $ \k v -> modify $ \m -> insert k v m)
+union (VarMap m1) (VarMap m2) = VarMap $ M.mapWithKey updateSubMap m1 `M.union` m2
+  where updateSubMap :: Typeable f => TypeRep -> SubMap f -> SubMap f
+        updateSubMap ty (SubMap m) =
+          case M.lookup ty m2 of
+            Just (SubMap m') -> case cast m' of
+              Just m'' -> SubMap $ m `M.union` m''
+              Nothing -> SubMap m
+            Nothing -> SubMap m
 
 -- | Retrieve the value associated with a given key, or a default value if that key is not in the
 -- 'VarMap'.

@@ -78,23 +78,6 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
   describe "a unifier" $ do
     it "should have a singleton substitution operator" $
       True // Var "x" `shouldBe` M.singleton (Var "x") (toTerm True)
-    when "composed with another" $ do
-      it "should result in the union of unifiers if the unifiers are disjoint" $ do
-        (toTerm True // Var "x" `compose` toTerm False // Var "y") `shouldBe`
-          (toTerm True // Var "x" <> toTerm False // Var "y")
-        (toTerm True // Var "x" `compose` toTerm 'a' // Var "x") `shouldBe`
-          (toTerm True // Var "x" <> toTerm 'a' // Var "x")
-      it "should apply substitutions in the rhs to terms in the lhs" $ do
-        (toTerm (Var "y" :: Var Bool) // Var "x") `compose` (toTerm True // Var "y") `shouldBe`
-          M.fromList [Entry (Var "x") (toTerm True), Entry (Var "y") (toTerm True)]
-        (toTerm (Var "y" :: Var Bool, 'a') // Var "x") `compose` (toTerm True // Var "y") `shouldBe`
-          M.fromList [Entry (Var "x") (toTerm (True, 'a')), Entry (Var "y") (toTerm True)]
-        (toTerm [toTerm $ Var "y", toTerm 'b'] // Var "x") `compose` (toTerm 'a' // Var "y") `shouldBe`
-          M.fromList [Entry (Var "x") (toTerm ['a', 'b']), Entry (Var "y") (toTerm 'a')]
-        (adt Just (Var "y" :: Var Char) // Var "x") `compose` (toTerm 'a' // Var "y") `shouldBe`
-          M.fromList [Entry (Var "x") (toTerm $ Just 'a'), Entry (Var "y") (toTerm 'a')]
-      it "should prefer the lhs when the same variable appears on both sides" $
-        (toTerm True // Var "x") `compose` (toTerm False // Var "x") `shouldBe` toTerm True // Var "x"
     when "empty" $ do
       it "should act as an identity of composition" $ do
         let u = toTerm True // Var "x"
@@ -129,6 +112,12 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       findVar (toTerm True // Var "x") (Var "x" :: Var Bool) `shouldBe` Unified True
       let t = adt Just (Var "y" :: Var Bool)
       findVar (t // Var "x") (Var "x" :: Var (Maybe Bool)) `shouldBe` Partial t
+
+      findVar ((Var "y" :: Var Char) // Var "x" <> 'a' // Var "y") (Var "x" :: Var Char) `shouldBe`
+        Unified 'a'
+      findVar ((Var "y" :: Var (Maybe Char)) // Var "x" <> adt Just (Var "z" :: Var Char) // Var "y")
+              (Var "x" :: Var (Maybe Char)) `shouldBe`
+        Partial (adt Just (Var "z" :: Var Char))
   describe "term unification" $ do
     context "of anonymous variables" $ do
       it "should always succeed" $ do
@@ -479,6 +468,13 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
         unify (toTerm (1 :: Int) // Var "x" <> (2 :: Int) // Var "y")
                   (Modulus (toTerm (Var "x" :: Var Int)) (toTerm $ Var "y")) `shouldBe`
           Modulus (toTerm (1 :: Int)) (toTerm (2 :: Int))
+    it "should apply the unifier recursively" $ do
+      unify (adt Just (Var "y" :: Var Char) // Var "x" <> 'a' // Var "y")
+            (toTerm (True, Var "x" :: Var (Maybe Char)))
+        `shouldBe` toTerm (True, Just 'a')
+      unify ((Var "ys" :: Var String) // Var "xs" <> "foo" // Var "ys")
+            (List $ VarCons (toTerm 'a') (Var "xs"))
+        `shouldBe` toTerm "afoo"
   describe "predicate unifier application" $ do
     it "should unify the argument when the unifier applies" $
       unify (toTerm 'a' // Var "x") (predicate "foo" (Var "x" :: Var Char)) `shouldBe`

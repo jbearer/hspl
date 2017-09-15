@@ -137,7 +137,7 @@ type Unifier = VarMap Term
 -- applying the first unifier and then the second in sequence.
 infixr 6 `compose` -- Same as <> for Monoid
 compose :: Unifier -> Unifier -> Unifier
-compose u1 u2 = M.map (unify u2) u1 `M.union` u2
+compose = M.union
 
 -- | A unifier representing the replacement of a variable by a term.
 (//) :: TermData a => a -> Var (HSPLType a) -> Unifier
@@ -252,7 +252,9 @@ instance TermEntry a => Unifiable (TupleTerm a) where
   unify u (TupleN t ts) = TupleN (unify u t) (unify u ts)
 
 instance TermEntry a => Unifiable (Term a) where
-  unify u v@(Variable x) = M.findWithDefault v x u
+  unify u v@(Variable x) = case M.lookup x u of
+    Just t -> unify u t
+    Nothing -> v
   unify _ c@(Constant _) = c
   unify u (Constructor c ts) = Constructor c $ map (termMap $ ETerm . unify u) ts
   unify u (Tup t) = Tup $ unify u t
@@ -325,8 +327,8 @@ data UnificationStatus a =
 findVar :: TermEntry a => Unifier -> Var a -> UnificationStatus a
 findVar u x = case M.lookup x u of
   Nothing -> Ununified
-  Just t -> case fromTerm t of
-    Nothing -> Partial t
+  Just t -> let t' = unify u t in case fromTerm t' of
+    Nothing -> Partial t'
     Just c -> Unified c
 
 -- | A renamer maps variables to 'Fresh' variables with which the former should be renamed.
