@@ -370,6 +370,25 @@ test = describeModule "Control.Hspl" $ do
     it "should create a Bottom goal" $
       execGoalWriter false `shouldBe` Bottom
 
+  describe "the forAll predicate" $ do
+    let testSuccess c a = getAllTheorems (runHspl $ forAll c a) `shouldBe`
+            [execGoalWriter $ forAll c a]
+    it "should succeed if the condition fails" $
+      testSuccess false false
+    it "should succeed when the condition succeeds and the action always succeeds" $ do
+      testSuccess true true
+      testSuccess (int "x" |=| (3::Int) ||| int "x" |=| (2::Int) |+| (1::Int)) ((3::Int) |==| v"x")
+    it "should fail when any of the actions fail" $
+      runHspl (forAll (enum? (v"x" :: Var BoundedEnum)) (v"x" |=| E1)) `shouldBe` []
+    it "should not bind any variables" $ do
+      let results = runHspl $ forAll (v"x" |=| 'a') true
+      length results `shouldBe` 1
+      queryVar (head results) (char "x") `shouldBe` Ununified
+
+      let results = runHspl $ forAll true (v"x" |=| 'a')
+      length results `shouldBe` 1
+      queryVar (head results) (char "x") `shouldBe` Ununified
+
   describe "arithmetic operators" $ do
     it "should create a sum of terms" $ do
       ((3 :: Int) |+| (2 :: Int)) `shouldBe`

@@ -67,6 +67,7 @@ module Control.Hspl (
   , (|||)
   , true
   , false
+  , forAll
   -- * Running HSPL programs
   , runHspl
   , runHspl1
@@ -374,6 +375,16 @@ true = tell Top
 -- | A predicate which always fails.
 false :: GoalWriter ()
 false = tell Bottom
+
+-- | @forAll cond action@ asserts that for every environment in which @cond@ succeeds, @action@
+-- follows. In other words, there are no variable bindings such that @cond@ succeeds and @action@
+-- fails, or
+--
+-- prop> forall cond action = lnot (cond >> lnot action)
+--
+-- This negative formulation of the predicate implies that no new variable bindings are created.
+forAll :: GoalWriter a -> GoalWriter b -> GoalWriter ()
+forAll cond action = lnot (cond >> lnot action)
 
 -- | Simplify a term and test for equality. The right-hand side is evaluated, and the resulting
 -- constant is then unified with the left-hand side. Note that '|==|' will cause a run-time error if
