@@ -61,7 +61,6 @@ module Control.Hspl.Internal.Debugger (
   -- , DebugCont
   -- * Entry points
   , debug
-  , unsafeDebug
   ) where
 
 import           Control.Applicative hiding ((<|>))
@@ -76,7 +75,6 @@ import           Data.List
 import           Data.Maybe
 import           System.Console.ANSI
 import           System.IO
-import           System.IO.Unsafe
 import           Text.Parsec hiding (Error, tokens)
 
 import Control.Hspl.Internal.Ast hiding (predicate)
@@ -583,10 +581,3 @@ debug c g =
   let cr = weave sequentialBinder weaveAwaitMaybeYield terminalCoroutine (solverCoroutine g)
       st = pogoStick runIdentity cr
   in fmap snd $ runDebugStateT c st -- Keep the solver output, ignore the terminal output
-
--- | Immediately run the debugger outside of the 'IO' monad. This function simply passes the result
--- of 'debug' to 'unsafePerformIO'. Because of this, it should never be used in production. The
--- intended use for this function is to import the module containing the HSPL program into a REPL
--- and run 'unsafeDebug' from there.
-unsafeDebug :: Goal -> [ProofResult]
-unsafeDebug = unsafePerformIO . debug debugConfig

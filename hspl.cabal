@@ -40,6 +40,7 @@ library
     cpp-options:       -DSHOW_TERMS
   exposed-modules:     Control.Hspl
                      , Control.Hspl.List
+                     , Control.Hspl.Debug
                      , Control.Hspl.Examples
                      , Control.Hspl.Internal.Ast
                      , Control.Hspl.Internal.Unification
