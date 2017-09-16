@@ -787,7 +787,7 @@ data Goal =
           | Bottom
             -- | Similar to Prolog's @findall/3@. @Alternatives template goal bag@ is a goal which
             -- succeeds if @bag@ unifies with the alternatives of @template@ in @goal@.
-          | forall t. TermEntry t => Alternatives (Term t) Goal (Term [t])
+          | forall t. TermEntry t => Alternatives (Maybe Int) (Term t) Goal (Term [t])
             -- | A goal which succeeds at most once. If the inner goal succeeds multiple times, only
             -- the first result is taken.
           | Once Goal
@@ -827,9 +827,12 @@ instance Eq Goal where
   (==) (Or g1 g2) (Or g1' g2') = g1 == g1' && g2 == g2'
   (==) Top Top = True
   (==) Bottom Bottom = True
-  (==) (Alternatives x g xs) (Alternatives x' g' xs') = case cast (x', xs') of
+  (==) (Alternatives n1 x g xs) (Alternatives n2 x' g' xs') = matchN n1 n2 && case cast (x', xs') of
     Just t' -> (x, xs) == t' && g == g'
     Nothing -> False
+    where matchN Nothing Nothing = True
+          matchN (Just n) (Just n') = n == n'
+          matchN _ _ = False
   (==) (Once g) (Once g') = g == g'
   (==) Cut Cut = True
   (==) (Track g) (Track g') = g == g'

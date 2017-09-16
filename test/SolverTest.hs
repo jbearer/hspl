@@ -284,7 +284,7 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         output <- readFile f
         output `shouldBe` ""
   describe "an Alternatives proof" $ do
-    let runTest x g xs = observeResults $ proveAlternatives x g xs
+    let runTest x g xs = observeResults $ proveAlternatives Nothing x g xs
     let xIsAOrB = Or (Track $ CanUnify (toTerm $ Var "x") (toTerm 'a'))
                      (Track $ CanUnify (toTerm $ Var "x") (toTerm 'b'))
     let x :: Term Char
@@ -294,13 +294,13 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should unify a variable with a list of alternatives" $ do
       let results = runTest x xIsAOrB xs
       length results `shouldBe` 1
-      getTheorem (head results) `shouldBe` Alternatives x xIsAOrB (toTerm ['a', 'b'])
+      getTheorem (head results) `shouldBe` Alternatives Nothing x xIsAOrB (toTerm ['a', 'b'])
       queryVar (head results) (Var "x" :: Var Char) `shouldBe` Ununified
       queryVar (head results) (Var "xs") `shouldBe` Unified "ab"
     it "should succeed even if the inner goal fails" $ do
       let results = runTest x Bottom xs
       length results `shouldBe` 1
-      getTheorem (head results) `shouldBe` Alternatives x Bottom (List Nil)
+      getTheorem (head results) `shouldBe` Alternatives Nothing x Bottom (List Nil)
       queryVar (head results) (Var "xs" :: Var String) `shouldBe` Unified []
     it "should fail if the output term does not unify with the alternatives" $ do
       runTest x xIsAOrB (toTerm [Var "y" :: Var Char]) `shouldBe` []
@@ -308,22 +308,25 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should handle complex templates" $ do
       let results = runTest (adt Just x) xIsAOrB (toTerm (Var "xs" :: Var [Maybe Char]))
       length results `shouldBe` 1
-      getTheorem (head results) `shouldBe` Alternatives (adt Just x) xIsAOrB (toTerm [Just 'a', Just 'b'])
+      getTheorem (head results) `shouldBe`
+        Alternatives Nothing (adt Just x) xIsAOrB (toTerm [Just 'a', Just 'b'])
       queryVar (head results) (Var "xs") `shouldBe` Unified [Just 'a', Just 'b']
     it "should take place in the same environment as the parent goal" $ do
       let g = PredGoal (predicate "foo" 'a')
                        [HornClause (predicate "foo" (Var "x" :: Var Char))
-                                   (Track $ Alternatives (toTerm (Var "y" :: Var Char))
-                                                         (Equal (toTerm (Var "y" :: Var Char)) (toTerm $ Var "x"))
-                                                         (toTerm [Var "x"]))
+                                   (Track $ Alternatives Nothing
+                                              (toTerm (Var "y" :: Var Char))
+                                              (Equal (toTerm (Var "y" :: Var Char)) (toTerm $ Var "x"))
+                                              (toTerm [Var "x"]))
                        ]
       let results = runHspl g
       length results `shouldBe` 1
-      case queryTheorem (head results) (Alternatives (toTerm (Var "x" :: Var Char))
-                                                     (Equal (toTerm (Var "l" :: Var Char))
-                                                            (toTerm $ Var "r"))
-                                                     (toTerm (Var "xs"))) of
-        [Alternatives x g xs] -> do
+      case queryTheorem (head results) (Alternatives Nothing
+                                          (toTerm (Var "x" :: Var Char))
+                                          (Equal (toTerm (Var "l" :: Var Char))
+                                                 (toTerm $ Var "r"))
+                                          (toTerm (Var "xs"))) of
+        [Alternatives Nothing x g xs] -> do
           case cast x of
             Just (x' :: Term Char) -> x' `shouldBeAlphaEquivalentTo` (Var "y" :: Var Char)
             Nothing -> failure $ "Expected y :: Char, but got " ++ show x
@@ -346,19 +349,24 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       length results `shouldBe` 1
       queryTheorem (head results) (CanUnify (toTerm (Var "l" :: Var Char)) (toTerm $ Var "r"))
         `shouldBePermutationOf` [CanUnify (toTerm 'a') (toTerm 'a'), CanUnify (toTerm 'b') (toTerm 'b')]
+    it "should return a requested number of results" $ do
+      let results = runHspl $ Alternatives (Just 1) x xIsAOrB xs
+      length results `shouldBe` 1
+      getTheorem (head results) `shouldBe` Alternatives (Just 1) x xIsAOrB (toTerm "a")
+      queryVar (head results) (Var "xs") `shouldBe` Unified "a"
     when "the template variable is already bound" $
       it "should return a list of the bound variable" $ do
         let results = runHspl $ CanUnify (toTerm $ Var "y") (toTerm 'c') <>
-                                Alternatives (toTerm $ Var "y") xIsAOrB xs
+                                Alternatives Nothing (toTerm $ Var "y") xIsAOrB xs
         length results `shouldBe` 1
         getTheorem (head results) `shouldBe` And (CanUnify (toTerm 'c') (toTerm 'c'))
-                                                 (Alternatives (toTerm 'c') xIsAOrB (toTerm ['c', 'c']))
+                                                 (Alternatives Nothing (toTerm 'c') xIsAOrB (toTerm ['c', 'c']))
         queryVar (head results) (Var "xs") `shouldBe` Unified ['c', 'c']
     when "the template variable is unbound" $
       it "should return a list of variables" $ do
         let results = runTest x Top xs
         length results `shouldBe` 1
-        getTheorem (head results) `shouldBe` Alternatives x Top (toTerm [x])
+        getTheorem (head results) `shouldBe` Alternatives Nothing x Top (toTerm [x])
         queryVar (head results) (Var "xs") `shouldBe` Partial (toTerm [x])
   describe "proveOnce" $ do
     let runTest g = observeResults $ proveOnce g
@@ -442,16 +450,19 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         it "should match" $
           g `shouldMatch` g
     context "for an alternatives goal" $ do
-      it "should match when the arguments match" $
-        Alternatives (toTerm (Var "x" :: Var Char)) Top (toTerm $ Var "xs") `shouldMatch`
-          Alternatives (toTerm 'a') Top (toTerm "foo")
+      withParams [Nothing, Just 42] $ \n ->
+        it "should match when the arguments match" $
+          Alternatives n (toTerm (Var "x" :: Var Char)) Top (toTerm $ Var "xs") `shouldMatch`
+            Alternatives n (toTerm 'a') Top (toTerm "foo")
       it "should not match when the arguments don't match" $ do
-        Alternatives (toTerm 'a') Top (toTerm "foo") `shouldNotMatch`
-          Alternatives (toTerm 'b') Top (toTerm "foo")
-        Alternatives (toTerm 'a') Top (toTerm "foo") `shouldNotMatch`
-          Alternatives (toTerm 'a') Cut (toTerm "foo")
-        Alternatives (toTerm 'a') Top (toTerm "foo") `shouldNotMatch`
-          Alternatives (toTerm 'a') Top (toTerm "bar")
+        Alternatives Nothing (toTerm 'a') Top (toTerm "foo") `shouldNotMatch`
+          Alternatives Nothing (toTerm 'b') Top (toTerm "foo")
+        Alternatives Nothing (toTerm 'a') Top (toTerm "foo") `shouldNotMatch`
+          Alternatives Nothing (toTerm 'a') Cut (toTerm "foo")
+        Alternatives Nothing (toTerm 'a') Top (toTerm "foo") `shouldNotMatch`
+          Alternatives Nothing (toTerm 'a') Top (toTerm "bar")
+        Alternatives Nothing (toTerm 'a') Top (toTerm "foo") `shouldNotMatch`
+          Alternatives (Just 42) (toTerm 'a') Top (toTerm "foo")
 
   describe "the \"get theorems\" feature" $ do
     it "should return the theorem at the root of a proof tree" $

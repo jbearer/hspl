@@ -37,6 +37,7 @@ import Control.Monad.State
 import Data.Char
 import Data.Data
 import Data.List
+import Data.Maybe
 import Data.Time.Clock
 import Data.CallStack
 import GHC.Generics
@@ -270,8 +271,10 @@ genPrologGoal (Or g1 g2) = "(" ++ genPrologGoal g1 ++ ";" ++ genPrologGoal g2 ++
 genPrologGoal Top = "true"
 genPrologGoal Bottom = "false"
 
-genPrologGoal (Alternatives x g xs) =
-  "findall(" ++ genPrologTerm x ++ "," ++ genPrologGoal g ++ "," ++ genPrologTerm xs ++ ")"
+genPrologGoal (Alternatives n x g xs)
+  | isJust n = error "No Prolog analog for Alternatives.Just"
+  | otherwise =
+      "findall(" ++ genPrologTerm x ++ "," ++ genPrologGoal g ++ "," ++ genPrologTerm xs ++ ")"
 
 genPrologGoal (Once g) = "once(" ++ genPrologGoal g ++ ")"
 genPrologGoal Cut = "!"

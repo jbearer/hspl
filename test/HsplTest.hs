@@ -214,9 +214,13 @@ test = describeModule "Control.Hspl" $ do
         nil `shouldBe` toTerm ([] :: [Bool])
 
   describe "findAll" $
-    it "should generate an Alternatives goal" $
+    it "should generate an Alternatives Nothing goal" $
       astGoal (findAll (char "x") (v"x" |=| 'a') (v"xs")) `shouldBe`
-        Alternatives (toTerm $ char "x") (CanUnify (toTerm $ Var "x") (toTerm 'a')) (toTerm $ v"xs")
+        Alternatives Nothing (toTerm $ char "x") (CanUnify (toTerm $ Var "x") (toTerm 'a')) (toTerm $ v"xs")
+  describe "findN" $
+    it "should generate an Alternatives Just goal" $
+      astGoal (findN 5 (char "x") (v"x" |=| 'a') (v"xs")) `shouldBe`
+        Alternatives (Just 5) (toTerm $ char "x") (CanUnify (toTerm $ Var "x") (toTerm 'a')) (toTerm $ v"xs")
   describe "bagOf" $ do
     it "should bind a list to all alternatives of a variable" $ do
       let l = enumFromTo minBound maxBound :: [BoundedEnum]
@@ -239,6 +243,34 @@ test = describeModule "Control.Hspl" $ do
           st -> failure $ "Expected Partial [x], but got " ++ show st
     it "should fail if the inner goal fails" $
       runHspl (bagOf (char "x") false (v"xs")) `shouldBe` []
+  describe "bagOfN" $ do
+    it "should bind a list to all alternatives of a variable" $ do
+      let l = enumFromTo minBound maxBound :: [BoundedEnum]
+      let us = runHspl $ bagOfN 42 (v"x" :: Var BoundedEnum) (enum? (v"x" :: Var BoundedEnum)) (v"xs")
+      length us `shouldBe` 1
+      queryVar (head  us) (v"xs") `shouldBe` Unified l
+    it "should handle ununified solutions" $ do
+        let us = runHspl $ bagOfN 42 (Var "x" :: Var (Maybe Char))
+                                     ((Var "x" :: Var (Maybe Char)) |=| Just $$ char "y")
+                                     (v"xs")
+        length us `shouldBe` 1
+        case queryVar (head us) (Var "xs" :: Var [Maybe Char]) of
+          Partial t -> t `shouldBeAlphaEquivalentTo` [Just $$ char "y"]
+          st -> failure $ "Expected Partial (Just $$ y), but got " ++ show st
+
+        let us = runHspl $ bagOfN 42 (char "x") (char "x" |=| char "y") (v"xs")
+        length us `shouldBe` 1
+        case queryVar (head us) (char \* "xs") of
+          Partial t -> t `shouldBeAlphaEquivalentTo` [char "x"]
+          st -> failure $ "Expected Partial [x], but got " ++ show st
+    it "should fail if the inner goal fails" $
+      runHspl (bagOfN 42 (char "x") false (v"xs")) `shouldBe` []
+    it "should return at most the requested number of results" $ do
+      let results = runHspl $ bagOfN 2 (v"x" :: Var BoundedEnum) (enum? (v"x" :: Var BoundedEnum)) (v"xs")
+      length results `shouldBe` 1
+      getTheorem (head results) `shouldBe`
+        bagOfN 2 (v"x") (enum? (v"x" :: Var BoundedEnum)) (toTerm [E1, E2])
+      queryVar (head results) (v"xs") `shouldBe` Unified [E1, E2]
 
   describe "the unified predicate" $
     it "should create an IsUnified goal" $

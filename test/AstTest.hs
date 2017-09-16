@@ -570,41 +570,52 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       it "should not equal any other goal" $
         constr `shouldNotEqual` And constr constr
   describe "Alternatives goals" $ do
-    context "of the same type" $
-      it "should compare according to the subcomponents" $ do
-        let g = Alternatives (toTerm (Var "x" :: Var Char))
-                             (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm (Var "xs" :: Var [Char]))
-        g `shouldEqual` g
+    withParams [Nothing, Just 42] $ \n ->
+      context "with the same limit" $ do
+        context "of the same type" $
+          it "should compare according to the subcomponents" $ do
+            let g = Alternatives n (toTerm (Var "x" :: Var Char))
+                                   (Equal (toTerm 'a') (toTerm 'b'))
+                                   (toTerm $ Var "xs")
+            g `shouldEqual` g
 
-        Alternatives (toTerm (Var "x" :: Var Char))
+            Alternatives n (toTerm (Var "x" :: Var Char))
+                           (Equal (toTerm 'a') (toTerm 'b'))
+                           (toTerm $ Var "xs") `shouldNotEqual`
+              Alternatives n (toTerm (Var "y" :: Var Char))
                              (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm (Var "xs" :: Var [Char])) `shouldNotEqual`
-          Alternatives (toTerm (Var "y" :: Var Char))
-                             (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm (Var "xs" :: Var [Char]))
+                             (toTerm $ Var "xs")
 
-        Alternatives (toTerm (Var "x" :: Var Char))
-                             (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm (Var "xs" :: Var [Char])) `shouldNotEqual`
-          Alternatives (toTerm (Var "x" :: Var Char))
+            Alternatives n (toTerm (Var "x" :: Var Char))
+                           (Equal (toTerm 'a') (toTerm 'b'))
+                           (toTerm $ Var "xs") `shouldNotEqual`
+              Alternatives n (toTerm (Var "x" :: Var Char))
                              (Equal (toTerm 'b') (toTerm 'a'))
-                             (toTerm (Var "xs" :: Var [Char]))
+                             (toTerm $ Var "xs")
 
-        Alternatives (toTerm (Var "x" :: Var Char))
+            Alternatives n (toTerm (Var "x" :: Var Char))
+                           (Equal (toTerm 'a') (toTerm 'b'))
+                           (toTerm $ Var "xs") `shouldNotEqual`
+              Alternatives n (toTerm (Var "x" :: Var Char))
                              (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm (Var "xs" :: Var [Char])) `shouldNotEqual`
-          Alternatives (toTerm (Var "x" :: Var Char))
+                             (toTerm $ Var "ys")
+        context "of different types" $
+          it "should compare unequal" $
+            Alternatives n (toTerm (Var "x" :: Var Char))
+                           (Equal (toTerm 'a') (toTerm 'b'))
+                           (toTerm $ Var "xs") `shouldNotEqual`
+              Alternatives n (toTerm (Var "x" :: Var Bool))
                              (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm (Var "ys" :: Var [Char]))
-    context "of different types" $
-      it "should compare unequal" $
-        Alternatives (toTerm (Var "x" :: Var Char))
-                             (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm (Var "xs" :: Var [Char])) `shouldNotEqual`
-          Alternatives (toTerm (Var "x" :: Var Bool))
-                             (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm (Var "xs" :: Var [Bool]))
+                             (toTerm $ Var "xs")
+    context "with different limits" $
+      it "should compare unequal" $ do
+        let runTest n1 n2 =
+              let g n = Alternatives n (toTerm (Var "x" :: Var Char)) Top (toTerm $ Var "xs")
+              in do g n1 `shouldNotEqual` g n2
+                    g n2 `shouldNotEqual` g n1
+
+        runTest Nothing (Just 42)
+        runTest (Just 42) (Just 43)
   describe "goals" $
     it "should form a monoid under conjunction" $ do
       mempty `shouldBe` Top

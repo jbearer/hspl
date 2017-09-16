@@ -39,7 +39,9 @@ module Control.Hspl (
   -- | Some predicates have special semantics. These can appear as goals on the right-hand side of
   -- '|-'.
   , findAll
+  , findN
   , bagOf
+  , bagOfN
   , once
   , cut
   , track
@@ -252,17 +254,19 @@ p |- gs =
 -- Note that 'findAll' succeeds even if the inner goal fails, so long as @list@ unifies with an
 -- empty list.
 findAll :: (TermData a, TermData b, HSPLType b ~ [HSPLType a]) => a -> Goal -> b -> Goal
-findAll x gw xs =
-  let g = astGoal gw
-  in tell $ Ast.Alternatives (toTerm x) g (toTerm xs)
+findAll x g xs = tell $ Ast.Alternatives Nothing (toTerm x) (astGoal g) (toTerm xs)
+
+-- | @findN n@ is like 'findAll', but collects at most @n@ results.
+findN :: (TermData a, TermData b, HSPLType b ~ [HSPLType a]) => Int -> a -> Goal -> b -> Goal
+findN n x g xs = tell $ Ast.Alternatives (Just n) (toTerm x) (astGoal g) (toTerm xs)
 
 -- | Like 'findAll', but fails if the inner goal fails.
-bagOf :: forall a b. (TermData a, TermData b, HSPLType b ~ [HSPLType a]) => a -> Goal -> b -> Goal
-bagOf x gw xs =
-  let p :: Predicate [HSPLType a]
-      p = predicate "bagOf" $
-            match(v"x" <:> v"xs") |- findAll x gw (v"x" <:> v"xs")
-  in p? xs
+bagOf :: (TermData a, TermData b, HSPLType b ~ [HSPLType a]) => a -> Goal -> b -> Goal
+bagOf x g xs = findAll x g xs >> xs |=| __ <:> __
+
+-- | @bagOfN n@ is like 'bagOf', but collects at most @n@ results.
+bagOfN :: (TermData a, TermData b, HSPLType b ~ [HSPLType a]) => Int -> a -> Goal -> b -> Goal
+bagOfN n x g xs = findN n x g xs >> xs |=| __ <:> __
 
 -- | Convert a possibly non-deterministic goal into a semi-deterministic goal. If a goal @g@
 -- succeeds at all, then the goal @once g@ succeeds exactly once, and the result is the first

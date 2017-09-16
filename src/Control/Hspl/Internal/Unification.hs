@@ -289,7 +289,7 @@ instance Unifiable Goal where
   unify u (Or g1 g2) = Or (unify u g1) (unify u g2)
   unify _ Top = Top
   unify _ Bottom = Bottom
-  unify u (Alternatives x g xs) = Alternatives (unify u x) (unify u g) (unify u xs)
+  unify u (Alternatives n x g xs) = Alternatives n (unify u x) (unify u g) (unify u xs)
   unify u (Once g) = Once $ unify u g
   unify _ Cut = Cut
   unify u (Track g) = Track $ unify u g
@@ -425,7 +425,8 @@ renameGoal (And g1 g2) = liftM2 And (renameGoal g1) (renameGoal g2)
 renameGoal (Or g1 g2) = liftM2 Or (renameGoal g1) (renameGoal g2)
 renameGoal Top = return Top
 renameGoal Bottom = return Bottom
-renameGoal (Alternatives x g xs) = liftM3 Alternatives (renameTerm x) (renameGoal g) (renameTerm xs)
+renameGoal (Alternatives n x g xs) =
+  liftM3 (Alternatives n) (renameTerm x) (renameGoal g) (renameTerm xs)
 renameGoal (Once g) = liftM Once $ renameGoal g
 renameGoal Cut = return Cut
 renameGoal (Track g) = Track `liftM` renameGoal g

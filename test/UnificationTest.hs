@@ -382,18 +382,19 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       withParams [Top, Bottom, Cut] $ \constr ->
         it "should be a noop" $
           rename constr `shouldBe` constr
-    context "of Alternatives goals" $ do
-      let go x g xs = rename $ Alternatives (toTerm x) g (toTerm xs)
-      it "should rename variables in each subcomponent" $
-        go (Var "x" :: Var Char) (Equal (toTerm 'a') (toTerm $ Var "y")) (Var "xs") `shouldBe`
-          go (Fresh 0 :: Var Char) (Equal (toTerm 'a') (toTerm $ Fresh 1)) (Fresh 2)
-      it "should rename the same variables the same way" $
-        go (Var "x" :: Var Char)
-           (PredGoal (predicate "foo" (Var "x" :: Var Char, Var "xs" :: Var [Char])) [])
-           (Var "xs") `shouldBe`
-          go (Fresh 0 :: Var Char)
-             (PredGoal (predicate "foo" (Fresh 0 :: Var Char, Fresh 1 :: Var [Char])) [])
-             (Fresh 1)
+    withParams [Nothing, Just 42] $ \n ->
+      context "of Alternatives goals" $ do
+        let go x g xs = rename $ Alternatives n (toTerm x) g (toTerm xs)
+        it "should rename variables in each subcomponent" $
+          go (Var "x" :: Var Char) (Equal (toTerm 'a') (toTerm $ Var "y")) (Var "xs") `shouldBe`
+            go (Fresh 0 :: Var Char) (Equal (toTerm 'a') (toTerm $ Fresh 1)) (Fresh 2)
+        it "should rename the same variables the same way" $
+          go (Var "x" :: Var Char)
+             (PredGoal (predicate "foo" (Var "x" :: Var Char, Var "xs" :: Var [Char])) [])
+             (Var "xs") `shouldBe`
+            go (Fresh 0 :: Var Char)
+               (PredGoal (predicate "foo" (Fresh 0 :: Var Char, Fresh 1 :: Var [Char])) [])
+               (Fresh 1)
   describe "clause renaming" $ do
     let rename = doRenameClause
     it "should rename variables in the positive literal" $
@@ -532,13 +533,14 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       withParams [Top, Bottom, Cut] $ \constr ->
         it "should be a noop" $
           unify (toTerm 'a' // Var "x") constr `shouldBe` constr
-    context "to an Alternatives goal" $
-      it "should unify each subcomponent" $
-        unify (toTerm 'a' // Var "x" <> toTerm "foo" // Var "xs")
-                  (Alternatives (toTerm (Var "x" :: Var Char))
-                                (Equal (toTerm 'a') (toTerm $ Var "x"))
-                                (toTerm $ Var "xs")) `shouldBe`
-          Alternatives (toTerm 'a') (Equal (toTerm 'a') (toTerm 'a')) (toTerm "foo")
+    withParams [Nothing, Just 42] $ \n ->
+      context "to an Alternatives goal" $
+        it "should unify each subcomponent" $
+          unify (toTerm 'a' // Var "x" <> toTerm "foo" // Var "xs")
+                    (Alternatives n (toTerm (Var "x" :: Var Char))
+                                    (Equal (toTerm 'a') (toTerm $ Var "x"))
+                                    (toTerm $ Var "xs")) `shouldBe`
+            Alternatives n (toTerm 'a') (Equal (toTerm 'a') (toTerm 'a')) (toTerm "foo")
   describe "clause unifier application" $ do
     it "should unify the positive literal when the unifier applies" $
       unify (toTerm 'a' // Var "x")

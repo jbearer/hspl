@@ -123,14 +123,16 @@ queryTheorem ProofResult {..} target = do
                                            return $ Or g1'' g2''
     matchGoal Top Top = Just Top
     matchGoal Bottom Bottom = Just Bottom
-    matchGoal (Alternatives x g xs) (Alternatives x' g' xs') =
-      let t = toTerm (x, xs)
-          t' = toTerm (x', xs')
-      in case cast t' >>= mgu t of
-        Just u -> do
-          g'' <- matchGoal g g'
-          return $ Alternatives (unify u x) g'' (unify u xs)
-        Nothing -> Nothing
+    matchGoal (Alternatives n x g xs) (Alternatives n' x' g' xs')
+      | n /= n' = Nothing
+      | otherwise =
+        let t = toTerm (x, xs)
+            t' = toTerm (x', xs')
+        in case cast t' >>= mgu t of
+          Just u -> do
+            g'' <- matchGoal g g'
+            return $ Alternatives n (unify u x) g'' (unify u xs)
+          Nothing -> Nothing
 
     matchGoal (Once g) (Once g') = Once `fmap` matchGoal g g'
     matchGoal Cut Cut = Just Cut
@@ -328,7 +330,9 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   -- | Attempt to prove an 'Alternatives' goal. In addition to any effects performed in the monad,
   -- this computation should have the following semantics:
   --
-  --   1. Obtain all solutions of the inner goal, as if through 'runHspl'.
+  --   1. If the first parameter is 'Nothing', obtain all solutions of the inner goal, as if through
+  --   'runHspl'. Otherwise, obtain at most the indicated number of solutions, as if through
+  --   'runHsplN'.
   --   2. For each solution, apply the unifier to the template 'Term' (first argument).
   --   3. Attempt to unify the resulting list with the output 'Term' (third argument).
   --
@@ -337,7 +341,7 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   -- empty list with the output term.
   --
   -- The zero-overhead version is 'proveAlternatives'.
-  tryAlternatives :: TermEntry a => Term a -> Goal -> Term [a] -> m Theorem
+  tryAlternatives :: TermEntry a => Maybe Int -> Term a -> Goal -> Term [a] -> m Theorem
   -- | Attempt to prove a 'Once' goal. This computation should extract the first result from the
   -- inner goal and return it. It should ignore any further solutions to the inner goal. The zero-
   -- overhead version is 'proveOnce'.
@@ -460,9 +464,10 @@ proveBottom :: MonadSolver m => m Theorem
 proveBottom = mzero
 
 -- | Zero-overhead version of 'tryAlternatives'.
-proveAlternatives :: (MonadSolver m, TermEntry a) => Term a -> Goal -> Term [a] -> m Theorem
-proveAlternatives x g xs = do
-  results <- getAlternatives $ prove g
+proveAlternatives :: (MonadSolver m, TermEntry a) =>
+                     Maybe Int -> Term a -> Goal -> Term [a] -> m Theorem
+proveAlternatives maybeN x g xs = do
+  results <- getAlternatives maybeN $ prove g
   -- Since we threw out local unifications, we must unify the local theorems now
   let (thms, us) = unzip [(map (unify localU) ts, localU) | (ts, localU) <- results]
   forM_ (concat thms) recordThm
@@ -470,12 +475,20 @@ proveAlternatives x g xs = do
   let mu = mgu xs alternatives
   guard $ isJust mu
   addUnifier $ fromJust mu
-  return $ Alternatives x g xs
-  where getAlternatives m = getAlternatives' $ m >> liftM2 (,) getRecordedThms getUnifier
-        getAlternatives' m = do split <- msplit m
-                                case split of
-                                   Just (a, fk) -> (a:) `liftM` getAlternatives' fk
-                                   Nothing -> return []
+  return $ Alternatives maybeN x g xs
+  where getAlternatives mn m =
+          let m' = m >> liftM2 (,) getRecordedThms getUnifier
+          in case mn of
+            Just n -> extractN n m'
+            Nothing -> extractAll m'
+        extractN n m
+          | n <= 0 = return []
+          | otherwise = extract (extractN $ n-1) m
+        extractAll = extract extractAll
+        extract next m = do split <- msplit m
+                            case split of
+                              Just (a, fk) -> (a:) `liftM` next fk
+                              Nothing -> return []
 
 -- | Zero-overhead version of 'tryOnce'.
 proveOnce :: MonadSolver m => Goal -> m Theorem
@@ -510,7 +523,7 @@ prove g = case g of
   Or g1 g2 -> tryOrLeft g1 g2 `mplus` tryOrRight g1 g2
   Top -> tryTop
   Bottom -> tryBottom
-  Alternatives x g' xs -> tryAlternatives x g' xs
+  Alternatives n x g' xs -> tryAlternatives n x g' xs
   Once g' -> tryOnce g'
   Cut -> tryCut
   Track g' -> tryTrack g'

@@ -143,8 +143,9 @@ formatGoal (And g1 g2) = parensGoal g1 ++ " >> " ++ parensGoal g2
 formatGoal (Or g1 g2) = parensGoal g1 ++ " ||| " ++ parensGoal g2
 formatGoal Top = "true"
 formatGoal Bottom = "false"
-formatGoal (Alternatives x g xs) =
-  "findAll " ++ parensTerm x ++ " " ++ parensGoal g ++ " " ++ parensTerm xs
+formatGoal (Alternatives n x g xs) =
+  maybe "findAll" (("findN " ++) . show) n ++ " " ++
+  parensTerm x ++ " " ++ parensGoal g ++ " " ++ parensTerm xs
 formatGoal (Once g) = "once " ++ parensGoal g
 formatGoal Cut = "cut"
 formatGoal (Track g) = "track " ++ parensGoal g

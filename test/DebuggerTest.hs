@@ -351,7 +351,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceFail orFailGoal
     let alternativesOrGoal = Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
                                 (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-    let alternativesGoal = Alternatives (toTerm (Var "x" :: Var Char)) alternativesOrGoal (toTerm $ Var "xs")
+    let alternativesGoal = Alternatives Nothing (toTerm (Var "x" :: Var Char)) alternativesOrGoal (toTerm $ Var "xs")
     let alternativesTrace = do
           traceCall alternativesGoal
           traceCall alternativesOrGoal
@@ -364,24 +364,36 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceExit $ CanUnify (toTerm 'b') (toTerm 'b')
           traceExit $ Or (CanUnify (toTerm 'b') (toTerm 'a'))
                          (CanUnify (toTerm 'b') (toTerm 'b'))
-          traceExit $ Alternatives (toTerm $ Var "x")
-                                   (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                                       (CanUnify (toTerm $ Var "x") (toTerm 'b')))
-                                   (toTerm ['a', 'b'])
-    let alternativesFailInnerGoal = Alternatives (toTerm (Var "x" :: Var Char))
-                                                 Bottom
-                                                 (toTerm $ Var "xs")
+          traceExit $ Alternatives Nothing (toTerm $ Var "x")
+                                           (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                               (CanUnify (toTerm $ Var "x") (toTerm 'b')))
+                                           (toTerm ['a', 'b'])
+    let alternativesFailInnerGoal = Alternatives Nothing (toTerm (Var "x" :: Var Char))
+                                                         Bottom
+                                                         (toTerm $ Var "xs")
     let alternativesFailInnerTrace = do
           traceCall alternativesFailInnerGoal
           traceCall Bottom
           traceFail Bottom
-          traceExit $ Alternatives (toTerm (Var "x" :: Var Char)) Bottom (List Nil)
-    let alternativesFailGoal = Alternatives (toTerm (Var "x" :: Var Char)) Top (List Nil)
+          traceExit $ Alternatives Nothing (toTerm (Var "x" :: Var Char)) Bottom (List Nil)
+    let alternativesFailGoal = Alternatives Nothing (toTerm (Var "x" :: Var Char)) Top (List Nil)
     let alternativesFailTrace = do
           traceCall alternativesFailGoal
           traceCall Top
           traceExit Top
           traceFail alternativesFailGoal
+    let alternativesNGoal = Alternatives (Just 1) (toTerm (Var "x" :: Var Char)) alternativesOrGoal (toTerm $ Var "xs")
+    let alternativesNTrace = do
+          traceCall alternativesNGoal
+          traceCall alternativesOrGoal
+          traceCall $ CanUnify (toTerm $ Var "x") (toTerm 'a')
+          traceExit $ CanUnify (toTerm 'a') (toTerm 'a')
+          traceExit $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
+                         (CanUnify (toTerm 'a') (toTerm 'b'))
+          traceExit $ Alternatives (Just 1) (toTerm $ Var "x")
+                                            (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                                (CanUnify (toTerm $ Var "x") (toTerm 'b')))
+                                            (toTerm "a")
     let onceGoal = Once $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
                              (CanUnify (toTerm $ Var "x") (toTerm 'b'))
     let onceTrace = do
@@ -438,6 +450,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run alternativesGoal alternativesTrace
       run alternativesFailInnerGoal alternativesFailInnerTrace
       run alternativesFailGoal alternativesFailTrace
+      run alternativesNGoal alternativesNTrace
       run onceGoal onceTrace
       run onceFailGoal onceFailTrace
       run cutGoal cutTrace

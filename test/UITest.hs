@@ -201,10 +201,13 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
         formatGoal g `shouldBe` sg
     withParams [toTerm $ v"x", Just $$ char "x"] $ \x ->
       withParams [Top, Not Top] $ \g ->
-        withParams [toTerm $ v"xs", nil] $ \xs ->
-          it "should format an Alternatives as if it were a call to findAll" $
+        withParams [toTerm $ v"xs", nil] $ \xs -> do
+          it "should format an Alternatives Nothing as if it were a call to findAll" $
             formatGoal (astGoal $ findAll x (tell g) xs) `shouldBe`
               ("findAll " ++ parensTerm x ++ " " ++ parensGoal g ++ " " ++ parensTerm xs)
+          it "should format an Alternatives Just as if it were a call to findN" $
+            formatGoal (astGoal $ findN 42 x (tell g) xs) `shouldBe`
+              ("findN 42 " ++ parensTerm x ++ " " ++ parensGoal g ++ " " ++ parensTerm xs)
   describe "parensGoal" $ do
     withParams [ PredGoal (Ast.predicate "foo" ()) []
                , CanUnify (toTerm 'a') (toTerm 'b')
@@ -215,7 +218,8 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
                , And Top Bottom
                , Or Top Bottom
                , Once Top
-               , Alternatives (toTerm $ char "x") Top (toTerm $ char \* "xs")
+               , Alternatives Nothing (toTerm $ char "x") Top (toTerm $ char \* "xs")
+               , Alternatives (Just 42) (toTerm $ char "x") Top (toTerm $ char \* "xs")
                ] $ \g ->
       it "should add parentheses where necessary" $
         parensGoal g `shouldBe` ("(" ++ formatGoal g ++ ")")
