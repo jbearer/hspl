@@ -12,6 +12,7 @@ import qualified Control.Hspl as Hspl
 import Control.Hspl.Internal.Ast
 import qualified Control.Hspl.Internal.Ast as Ast
 import Control.Hspl.Internal.UI
+import Control.Hspl.Internal.Syntax
 
 import Control.Monad
 import Control.Monad.Writer
@@ -182,18 +183,18 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
     withParams [((|=|), "|=|"), (is, "`is`"), ((|==|), "|==|"), ((|<|), "|<|")] $ \(op, sop) ->
       withParams [toTerm (1 :: Int), (1 :: Int) |+| (2 :: Int)] $ \t ->
         it "should format a binary term goal" $
-          formatGoal (execGoalWriter (t `op` t)) `shouldEqual`
+          formatGoal (astGoal (t `op` t)) `shouldEqual`
             (parensTerm t ++ " " ++ sop ++ " " ++ parensTerm t)
     withParams [(once, "once"), (lnot, "lnot"), (track, "track")] $ \(op, sop) ->
       withParams (map tell [Top, Not Top]) $ \gw ->
         it "should format a unary subgoal" $
-          formatGoal (execGoalWriter $ op gw) `shouldBe`
-            (sop ++ " " ++ parensGoal (execGoalWriter gw))
+          formatGoal (astGoal $ op gw) `shouldBe`
+            (sop ++ " " ++ parensGoal (astGoal gw))
     withParams [((>>), ">>"), ((|||), "|||")] $ \(op, sop) ->
       withParams (map tell [Top, Not Top]) $ \gw ->
         it "should format binary subgoals" $ do
-          let g = execGoalWriter gw
-          formatGoal (execGoalWriter (gw `op` gw)) `shouldBe`
+          let g = astGoal gw
+          formatGoal (astGoal (gw `op` gw)) `shouldBe`
             (parensGoal g ++ " " ++ sop ++ " " ++ parensGoal g)
     withParams [(Top, "true"), (Bottom, "false"), (Cut, "cut")] $ \(g, sg) ->
       it "should format unitary goals" $
@@ -202,7 +203,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
       withParams [Top, Not Top] $ \g ->
         withParams [toTerm $ v"xs", nil] $ \xs ->
           it "should format an Alternatives as if it were a call to findAll" $
-            formatGoal (execGoalWriter $ findAll x (tell g) xs) `shouldBe`
+            formatGoal (astGoal $ findAll x (tell g) xs) `shouldBe`
               ("findAll " ++ parensTerm x ++ " " ++ parensGoal g ++ " " ++ parensTerm xs)
   describe "parensGoal" $ do
     withParams [ PredGoal (Ast.predicate "foo" ()) []
@@ -224,7 +225,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
 
   describe "formatClause" $
     it "should show a ClauseWriter" $ do
-      let runTest cw lns = let [f] = execClauseWriter cw
+      let runTest cw lns = let [f] = astClause cw
                            in formatClause (f "") `shouldEqual` intercalate "\n" lns
       let foo = Hspl.predicate "foo" $ match 'a'
       runTest (match ()) ["match ()"]

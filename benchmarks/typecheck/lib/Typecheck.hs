@@ -38,7 +38,7 @@ instance Termable Expr
 type Env = [(String, Type)]
 
 env :: String -> Var Env
-env = Var
+env = v
 
 wellTypedWithEnv :: Predicate (Env, Expr, Type)
 wellTypedWithEnv = predicate "wellTyped" $ do

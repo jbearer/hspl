@@ -50,6 +50,7 @@ library
                      , Control.Hspl.Internal.UI
                      , Control.Hspl.Internal.VarMap
                      , Control.Hspl.Internal.Logic
+                     , Control.Hspl.Internal.Syntax
 
 test-suite hspl-test
   type:                exitcode-stdio-1.0
@@ -84,6 +85,7 @@ test-suite hspl-test
                      , VarMapTest
                      , LogicTest
                      , ListTest
+                     , SyntaxTest
 
 source-repository head
   type:     git

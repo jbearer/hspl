@@ -26,7 +26,11 @@ import Control.Hspl.Internal.Ast ( Term (..)
                                  , termMap
                                  , fromTerm
                                  )
+import qualified Control.Hspl.Internal.Ast as Ast
+import Control.Hspl.Internal.Syntax
+
 import Control.Hspl
+import qualified Control.Hspl as Hspl
 
 import Control.Exception (evaluate)
 import Control.Monad.State
@@ -141,7 +145,7 @@ findPrologExecutable = go ["swipl", "prolog"]
 callProlog :: String -> FilePath -> IO ()
 callProlog exe srcFile = callProcess exe ["-l", srcFile, "-t", "hsplRun"]
 
-compileProlog :: FilePath -> Goal -> IO FilePath
+compileProlog :: FilePath -> Ast.Goal -> IO FilePath
 compileProlog srcFile g = do
   tmp <- getTemporaryDirectory
   UTCTime { utctDayTime=ts } <- getCurrentTime
@@ -163,7 +167,7 @@ shouldExecute key include exclude
   | key `elem` exclude = False
   | otherwise = True
 
-bench :: String -> GoalWriter a -> Benchmark (Maybe [ProofResult])
+bench :: String -> Hspl.Goal -> Benchmark (Maybe [ProofResult])
 bench key gw = do
   st@BenchState {..} <- get
   if shouldExecute key (includeKeys config) (excludeKeys config)
@@ -176,7 +180,7 @@ bench key gw = do
       (plResult, factor) <-
         if shouldUseProlog config
           then do
-            compiledProlog <- liftIO $ compileProlog prologFile $ execGoalWriter gw
+            compiledProlog <- liftIO $ compileProlog prologFile $ astGoal gw
             plStart <- liftIO getCurrentTime
             liftIO $ callProlog prologExecutable compiledProlog
             plEnd <- liftIO getCurrentTime
@@ -247,7 +251,7 @@ genPrologTerm (Quotient t1 t2) = "(" ++ genPrologTerm t1 ++ ") / (" ++ genProlog
 genPrologTerm (IntQuotient t1 t2) = "div(" ++ genPrologTerm t1 ++ "," ++ genPrologTerm t2 ++ ")"
 genPrologTerm (Modulus t1 t2) = "mod(" ++ genPrologTerm t1 ++ "," ++ genPrologTerm t2 ++ ")"
 
-genPrologGoal :: Goal -> String
+genPrologGoal :: Ast.Goal -> String
 genPrologGoal (PredGoal (Predicate name arg) _) = prologAtomCase name ++ "(" ++ expand arg ++ ")"
   where expand (Tup tup) = joinTup tup
         expand t = genPrologTerm t

@@ -17,11 +17,12 @@ module Control.Hspl.Debug (
 import Control.Hspl
 import qualified Control.Hspl.Internal.Debugger as D
 import Control.Hspl.Internal.Debugger (DebugConfig (..), debugConfig)
+import Control.Hspl.Internal.Syntax
 
 -- | Prove the given goal in an interactive debugger with the given configuration options.
-debugWith :: DebugConfig -> GoalWriter a -> IO [ProofResult]
-debugWith c g = D.debug c $ execGoalWriter g
+debugWith :: DebugConfig -> Goal -> IO [ProofResult]
+debugWith c g = D.debug c $ astGoal g
 
 -- | Run the debugger with the default configuration (see 'debugConfig').
-debug :: GoalWriter a -> IO [ProofResult]
+debug :: Goal -> IO [ProofResult]
 debug = debugWith debugConfig

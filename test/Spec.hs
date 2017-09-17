@@ -11,6 +11,7 @@ import qualified UITest as UI
 import qualified VarMapTest as VarMap
 import qualified LogicTest as Logic
 import qualified ListTest as List
+import qualified SyntaxTest as Syntax
 
 main :: IO ()
 main = hspec $ do
@@ -25,3 +26,4 @@ main = hspec $ do
   VarMap.test
   Logic.test
   List.test
+  Syntax.test
