@@ -139,7 +139,7 @@ script:
       stack --no-terminal -j1 --dump-logs $ARGS bench
       ;;
     cabal)
-      cabal install --enable-tests --enable-benchmarks --force-reinstalls --ghc-options=-O0 --reorder-goals --max-backjumps=1 $CABALARGS $PACKAGES
+      travis_wait cabal install --enable-tests --enable-benchmarks --force-reinstalls --ghc-options=-O0 --reorder-goals --max-backjumps=1 $CABALARGS $PACKAGES
       ORIGDIR=$(pwd)
       for dir in $PACKAGES
       do
