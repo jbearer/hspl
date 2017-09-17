@@ -14,71 +14,53 @@ cache:
   - $HOME/.cabal
   - $HOME/.stack
 
-# The different configurations we want to test. We have BUILD=cabal which uses
-# cabal-install, and BUILD=stack which uses Stack. More documentation on each
-# of those below.
-#
 # We set the compiler values here to tell Travis to use a different
 # cache file per set of arguments.
 matrix:
   include:
-  # We grab the appropriate GHC and cabal-install versions from hvr's PPA. See:
-  # https://github.com/hvr/multi-ghc-travis
-  - env: BUILD=cabal GHCVER=7.8.4 CABALVER=1.18 HAPPYVER=1.19.5 ALEXVER=3.1.7
-    compiler: ": #GHC 7.8.4"
-    addons: {apt: {packages: [cabal-install-1.18,ghc-7.8.4,happy-1.19.5,alex-3.1.7], sources: [hvr-ghc]}}
-  - env: BUILD=cabal GHCVER=7.10.3 CABALVER=1.22 HAPPYVER=1.19.5 ALEXVER=3.1.7
-    compiler: ": #GHC 7.10.3"
-    addons: {apt: {packages: [cabal-install-1.22,ghc-7.10.3,happy-1.19.5,alex-3.1.7], sources: [hvr-ghc]}}
-  - env: BUILD=cabal GHCVER=8.0.2 CABALVER=1.24 HAPPYVER=1.19.5 ALEXVER=3.1.7
-    compiler: ": #GHC 8.0.2"
-    addons: {apt: {packages: [cabal-install-1.24,ghc-8.0.2,happy-1.19.5,alex-3.1.7], sources: [hvr-ghc]}}
-
-  # The Stack builds. We can pass in arbitrary Stack arguments via the ARGS
-  # variable, such as using --stack-yaml to point to a different file.
-  - env: BUILD=stack ARGS="" TESTARGS="--coverage --haddock"
-    compiler: ": #stack default"
+  - env: ARGS="" TESTARGS="--coverage --haddock"
+    compiler: "default"
     addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
-  - env: BUILD=stack ARGS="--resolver lts-2"
-    compiler: ": #stack 7.8.4"
+  - env: ARGS="--resolver lts-2"
+    compiler: "7.8.4"
     addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
-  - env: BUILD=stack ARGS="--resolver lts-3" TESTARGS=""
-    compiler: ": #stack 7.10.2"
+  - env: ARGS="--resolver lts-3" TESTARGS=""
+    compiler: "7.10.2"
     addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
-  - env: BUILD=stack ARGS="--resolver lts-6" TESTARGS=""
-    compiler: ": #stack 7.10.3"
+  - env: ARGS="--resolver lts-6" TESTARGS=""
+    compiler: "7.10.3"
     addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
-  - env: BUILD=stack ARGS="--resolver lts-7" TESTARGS="--haddock"
-    compiler: ": #stack 8.0.1"
+  - env: ARGS="--resolver lts-7" TESTARGS="--haddock"
+    compiler: "8.0.1"
     addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
-  - env: BUILD=stack ARGS="--resolver lts-8" TESTARGS="--haddock"
-    compiler: ": #stack 8.0.2"
+  - env: ARGS="--resolver lts-8" TESTARGS="--haddock"
+    compiler: "8.0.2"
     addons: {apt: {packages: [libgmp-dev, swi-prolog]}}
 
   # Build on macOS in addition to Linux
-  - env: BUILD=stack ARGS="" TESTARGS="--haddock"
-    compiler: ": #stack default osx"
+  - env: ARGS="" TESTARGS="--haddock"
+    compiler: "default osx"
     os: osx
 
-  - env: BUILD=stack ARGS="--resolver lts-3" TESTARGS=""
-    compiler: ": #stack 7.10.2 osx"
+  - env: ARGS="--resolver lts-3" TESTARGS=""
+    compiler: "7.10.2 osx"
     os: osx
 
-  - env: BUILD=stack ARGS="--resolver lts-6" TESTARGS=""
-    compiler: ": #stack 7.10.3 osx"
+  - env: ARGS="--resolver lts-6" TESTARGS=""
+    compiler: "7.10.3 osx"
     os: osx
 
-  - env: BUILD=stack ARGS="--resolver lts-7" TESTARGS="--haddock"
-    compiler: ": #stack 8.0.1 osx"
+  - env: ARGS="--resolver lts-7" TESTARGS="--haddock"
+    compiler: "8.0.1 osx"
     os: osx
 
-  - env: BUILD=stack ARGS="--resolver lts-8" TESTARGS="--haddock"
-    compiler: ": #stack 8.0.2 osx"
+  - env: ARGS="--resolver lts-8" TESTARGS="--haddock"
+    compiler: "8.0.2 osx"
     os: osx
 
 before_install:
@@ -114,54 +96,19 @@ install:
 - if [ -f configure.ac ]; then autoreconf -i; fi
 - |
   set -ex
-  case "$BUILD" in
-    stack)
-      stack --no-terminal --install-ghc $ARGS test $TESTARGS --bench --only-dependencies
-      ;;
-    cabal)
-      cabal --version
-      travis_retry cabal update
-
-      # Get the list of packages from the stack.yaml file
-      PACKAGES=$(stack --install-ghc query locals | grep '^ *path' | sed 's@^ *path:@@')
-
-      cabal install --only-dependencies --enable-tests --enable-benchmarks --force-reinstalls --ghc-options=-O0 --reorder-goals --max-backjumps=-1 $CABALARGS $PACKAGES
-      ;;
-  esac
+  stack --no-terminal --install-ghc $ARGS test $TESTARGS --bench --only-dependencies
   set +ex
 
 script:
 - |
   set -ex
-  case "$BUILD" in
-    stack)
-      stack --no-terminal $ARGS test $TESTARGS --bench --no-run-benchmarks --no-haddock-deps hspl
-      stack --no-terminal -j1 --dump-logs $ARGS bench
-      ;;
-    cabal)
-      travis_wait cabal install --enable-tests --enable-benchmarks --force-reinstalls --ghc-options=-O0 --reorder-goals --max-backjumps=1 $CABALARGS $PACKAGES
-      ORIGDIR=$(pwd)
-      for dir in $PACKAGES
-      do
-        cd $dir
-        cabal check || [ "$CABALVER" == "1.16" ]
-        cabal sdist
-        PKGVER=$(cabal info . | awk '{print $2;exit}')
-        SRC_TGZ=$PKGVER.tar.gz
-        cd dist
-        tar zxfv "$SRC_TGZ"
-        cd "$PKGVER"
-        cabal configure --enable-tests
-        cabal build
-        cd $ORIGDIR
-      done
-      ;;
-  esac
+  stack --no-terminal $ARGS test $TESTARGS --bench --no-run-benchmarks --no-haddock-deps hspl
+  stack --no-terminal -j1 --dump-logs $ARGS bench
   set +ex
 
 after_success:
 - |
-  if [ "$BUILD" == "stack" ] && echo "$TESTARGS" | grep -- --coverage; then
+  if echo "$TESTARGS" | grep -- --coverage; then
     travis_retry curl -L https://github.com/rubik/stack-hpc-coveralls/releases/download/v0.0.4.0/shc-linux-x64-8.0.1.tar.bz2 | tar -xj
     ./shc hspl hspl-test
   fi
