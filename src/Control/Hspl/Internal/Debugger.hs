@@ -328,8 +328,8 @@ instance Monad m => MonadSolver (DebugSolverT m) where
   tryTop = goalFrame Top (call proveTop)
   tryBottom = goalFrame Bottom (call proveBottom)
   tryAlternatives n x g xs = goalFrame (Alternatives n x g xs) (call $ proveAlternatives n x g xs)
-  tryOnce g = goalFrame (Once g) (call $ proveOnce g)
   tryCut = goalFrame Cut (call proveCut)
+  tryCutFrame g = goalFrame (CutFrame g) (call $ proveCutFrame g)
   tryTrack g = goalFrame (Track g) (call $ proveTrack g)
 
   failUnknownPred p@(Predicate name _) = do

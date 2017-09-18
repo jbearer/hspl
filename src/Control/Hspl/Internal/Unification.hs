@@ -290,8 +290,8 @@ instance Unifiable Goal where
   unify _ Top = Top
   unify _ Bottom = Bottom
   unify u (Alternatives n x g xs) = Alternatives n (unify u x) (unify u g) (unify u xs)
-  unify u (Once g) = Once $ unify u g
   unify _ Cut = Cut
+  unify u (CutFrame g) = CutFrame $ unify u g
   unify u (Track g) = Track $ unify u g
 
 instance Unifiable HornClause where
@@ -427,8 +427,8 @@ renameGoal Top = return Top
 renameGoal Bottom = return Bottom
 renameGoal (Alternatives n x g xs) =
   liftM3 (Alternatives n) (renameTerm x) (renameGoal g) (renameTerm xs)
-renameGoal (Once g) = liftM Once $ renameGoal g
 renameGoal Cut = return Cut
+renameGoal (CutFrame g) = CutFrame `liftM` renameGoal g
 renameGoal (Track g) = Track `liftM` renameGoal g
 
 -- | Rename all of the variables in a clause.

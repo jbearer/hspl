@@ -788,12 +788,12 @@ data Goal =
             -- | Similar to Prolog's @findall/3@. @Alternatives template goal bag@ is a goal which
             -- succeeds if @bag@ unifies with the alternatives of @template@ in @goal@.
           | forall t. TermEntry t => Alternatives (Maybe Int) (Term t) Goal (Term [t])
-            -- | A goal which succeeds at most once. If the inner goal succeeds multiple times, only
-            -- the first result is taken.
-          | Once Goal
             -- | A goal with a side-effects. Always succeeds, but causes unexplored choice points
             -- created since the last predicate to be discarded.
           | Cut
+            -- | Prove a goal in a new cut frame: if cut is called during the proof, it will not
+            -- affect choice points created prior to entering the goal.
+          | CutFrame Goal
             -- | Indicates that the inner 'Goal' should be recorded for future inspection if it is
             -- proven. 'Track' succeeds whenever the inner 'Goal' does.
           | Track Goal
@@ -833,8 +833,8 @@ instance Eq Goal where
     where matchN Nothing Nothing = True
           matchN (Just n) (Just n') = n == n'
           matchN _ _ = False
-  (==) (Once g) (Once g') = g == g'
   (==) Cut Cut = True
+  (==) (CutFrame g) (CutFrame g') = g == g'
   (==) (Track g) (Track g') = g == g'
   (==) _ _ = False
 

@@ -150,20 +150,31 @@ test = describeModule "Control.Hspl" $ do
         p = do match(char "x") |- true
                match(char "y") |- false
                match 'z'
-    withParams [(SemiDet, Once), (Theorem, Track)] $ \(attr, g) ->
-      it "should wrap the predicate in once whenever it is invoked" $
-          astGoal (predicate' [attr] "foo" p? char "z") `shouldEqual`
-            g (astGoal $ predicate "foo" p? char "z")
+    withParams [(SemiDet, once), (Theorem, track)] $ \(attr, g) ->
+      it "should wrap the predicate whenever it is invoked" $
+          (predicate' [attr] "foo" p? char "z") `shouldEqual`
+            g (predicate "foo" p? char "z")
     withParams (permutations [SemiDet, Theorem]) $ \attrs ->
       it "should apply in the order: Theorem, SemiDet" $
-        astGoal (predicate' attrs "foo" p? char "z") `shouldEqual`
-          Once (Track $ astGoal $ predicate "foo" p? char "z")
+        (predicate' attrs "foo" p? char "z") `shouldEqual`
+          once (track $ predicate "foo" p? char "z")
 
   describe "the cut predicate" $
     it "should create a Cut goal" $
       astGoal cut `shouldBe` Cut
 
-  withParams [(lnot, Not), (once, Once), (track, Track)] $ \(p, g) ->
+  describe "the once predicate" $ do
+    it "should fail when the inner goal fails" $
+      runHspl (once false) `shouldBe` []
+    it "should succeed when the inner goal succeeds" $
+      getAllTheorems (runHspl $ once true) `shouldBe` [once true]
+    it "should succeed at most once" $
+      getAllTheorems (runHspl $ once $ true ||| true) `shouldBe` [once $ true ||| true]
+    it "should not affect backtracking outside of its scope" $
+      getAllTheorems (runHspl $ once (true ||| true) ||| true) `shouldBe`
+        replicate 2 (once (true ||| true) ||| true)
+
+  withParams [(lnot, Not), (cutFrame, CutFrame), (track, Track)] $ \(p, g) ->
     describe "goal-modifying predicates" $
       it "should create a nested goal" $
         astGoal (p true) `shouldBe` g (astGoal true)

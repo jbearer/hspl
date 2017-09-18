@@ -146,8 +146,8 @@ formatGoal Bottom = "false"
 formatGoal (Alternatives n x g xs) =
   maybe "findAll" (("findN " ++) . show) n ++ " " ++
   parensTerm x ++ " " ++ parensGoal g ++ " " ++ parensTerm xs
-formatGoal (Once g) = "once " ++ parensGoal g
 formatGoal Cut = "cut"
+formatGoal (CutFrame g) = "cutFrame " ++ parensGoal g
 formatGoal (Track g) = "track " ++ parensGoal g
 
 -- | Similar to 'formatGoal', but wraps the output in parentheses if it is not a single token.

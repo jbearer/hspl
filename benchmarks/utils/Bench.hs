@@ -276,8 +276,8 @@ genPrologGoal (Alternatives n x g xs)
   | otherwise =
       "findall(" ++ genPrologTerm x ++ "," ++ genPrologGoal g ++ "," ++ genPrologTerm xs ++ ")"
 
-genPrologGoal (Once g) = "once(" ++ genPrologGoal g ++ ")"
 genPrologGoal Cut = "!"
+genPrologGoal (CutFrame g) = "call(" ++ genPrologGoal g ++ ")"
 
 genPrologGoal (Track g) = genPrologGoal g
 

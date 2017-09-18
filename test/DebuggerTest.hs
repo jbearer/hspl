@@ -394,24 +394,6 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                                             (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
                                                 (CanUnify (toTerm $ Var "x") (toTerm 'b')))
                                             (toTerm "a")
-    let onceGoal = Once $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                             (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-    let onceTrace = do
-          traceCall onceGoal
-          traceCall $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
-                         (CanUnify (toTerm $ Var "x") (toTerm 'b'))
-          traceCall $ CanUnify (toTerm $ Var "x") (toTerm 'a')
-          traceExit $ CanUnify (toTerm 'a') (toTerm 'a')
-          traceExit $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
-                         (CanUnify (toTerm 'a') (toTerm 'b'))
-          traceExit $ Once $ Or (CanUnify (toTerm 'a') (toTerm 'a'))
-                                (CanUnify (toTerm 'a') (toTerm 'b'))
-    let onceFailGoal = Once Bottom
-    let onceFailTrace = do
-          traceCall onceFailGoal
-          traceCall Bottom
-          traceFail Bottom
-          traceFail onceFailGoal
 
     let cutGoal = Or Cut Top
     let cutTrace = do
@@ -419,6 +401,28 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall Cut
           traceExit Cut
           traceExit cutGoal
+
+    let cutFrameGoal = Or (CutFrame $ Or Cut Top) Top
+    let cutFrameTrace = do
+          traceCall cutFrameGoal
+          traceCall $ CutFrame $ Or Cut Top
+          traceCall $ Or Cut Top
+          traceCall Cut
+          traceExit Cut
+          traceExit $ Or Cut Top
+          traceExit $ CutFrame $ Or Cut Top
+          traceExit cutFrameGoal
+          traceRedo cutFrameGoal
+          traceCall Top
+          traceExit Top
+          traceExit cutFrameGoal
+    let cutFrameFailGoal = CutFrame Bottom
+    let cutFrameFailTrace = do
+          traceCall cutFrameFailGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceFail cutFrameFailGoal
+
     let run g = runTest g (replicate 999 "step")
 
     it "should prompt after every step of computation" $ do
@@ -451,9 +455,9 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run alternativesFailInnerGoal alternativesFailInnerTrace
       run alternativesFailGoal alternativesFailTrace
       run alternativesNGoal alternativesNTrace
-      run onceGoal onceTrace
-      run onceFailGoal onceFailTrace
       run cutGoal cutTrace
+      run cutFrameGoal cutFrameTrace
+      run cutFrameFailGoal cutFrameFailTrace
 
   describe "the next command" $ do
     it "should skip to the next event at the current depth" $ do

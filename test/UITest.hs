@@ -185,7 +185,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
         it "should format a binary term goal" $
           formatGoal (astGoal (t `op` t)) `shouldEqual`
             (parensTerm t ++ " " ++ sop ++ " " ++ parensTerm t)
-    withParams [(once, "once"), (lnot, "lnot"), (track, "track")] $ \(op, sop) ->
+    withParams [(lnot, "lnot"), (cutFrame, "cutFrame"), (track, "track")] $ \(op, sop) ->
       withParams (map tell [Top, Not Top]) $ \gw ->
         it "should format a unary subgoal" $
           formatGoal (astGoal $ op gw) `shouldBe`
@@ -217,9 +217,9 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
                , Not Top
                , And Top Bottom
                , Or Top Bottom
-               , Once Top
                , Alternatives Nothing (toTerm $ char "x") Top (toTerm $ char \* "xs")
                , Alternatives (Just 42) (toTerm $ char "x") Top (toTerm $ char \* "xs")
+               , CutFrame Top
                ] $ \g ->
       it "should add parentheses where necessary" $
         parensGoal g `shouldBe` ("(" ++ formatGoal g ++ ")")

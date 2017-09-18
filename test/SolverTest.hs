@@ -283,6 +283,15 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         observeAllSolverT (proveCut <|> (liftIO (writeFile f "foo") >> proveTop)) ()
         output <- readFile f
         output `shouldBe` ""
+  describe "proveCutFrame" $ do
+    let runTest g = observeResults $ proveCutFrame g
+    it "should fail when the inner goal fails" $
+      runTest Bottom `shouldBe` []
+    it "should succeed when the inner goal succeeds" $ do
+      getAllTheorems (runTest Top) `shouldBe` [CutFrame Top]
+      getAllTheorems (runTest $ Or Top Top) `shouldBe` replicate 2 (CutFrame $ Or Top Top)
+    it "should save choicepoints" $
+      length (getAllTheorems $ observeResults $ prove $ Or (CutFrame $ Or Cut Top) Top) `shouldBe` 2
   describe "an Alternatives proof" $ do
     let runTest x g xs = observeResults $ proveAlternatives Nothing x g xs
     let xIsAOrB = Or (Track $ CanUnify (toTerm $ Var "x") (toTerm 'a'))
@@ -368,21 +377,6 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         length results `shouldBe` 1
         getTheorem (head results) `shouldBe` Alternatives Nothing x Top (toTerm [x])
         queryVar (head results) (Var "xs") `shouldBe` Partial (toTerm [x])
-  describe "proveOnce" $ do
-    let runTest g = observeResults $ proveOnce g
-    it "should fail if the inner goal fails" $
-      runTest Bottom `shouldBe` []
-    it "should succeed if the inner goal succeeds" $ do
-      let results = runTest (PredGoal (predicate "foo" (Var "x" :: Var Char, Var "y" :: Var Char)) [simpleBinary])
-      length results `shouldBe` 1
-      getTheorem (head results) `shouldBe` Once (PredGoal (predicate "foo" ('a', 'b')) [])
-      queryVar (head results) (Var "x") `shouldBe` Unified 'a'
-      queryVar (head results) (Var "y") `shouldBe` Unified 'b'
-
-      let results = runTest (PredGoal (predicate "mortal" (Var "x" :: Var String)) [mortal])
-      length results `shouldBe` 1
-      getTheorem (head results) `shouldBe` Once (PredGoal (predicate "mortal" "hypatia") [])
-      queryVar (head results) (Var "x") `shouldBe` Unified "hypatia"
   describe "proveTrack" $ do
     let runTest g = observeResults $ proveTrack g
     it "should fail if the inner goal fails" $
@@ -439,7 +433,7 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         it "should not match when the arguments don't match" $ do
           g Top Bottom `shouldNotMatch` g Top Top
           g Top Bottom `shouldNotMatch` g Bottom Bottom
-    withParams [Not, Once] $ \g ->
+    withParams [Not, CutFrame, Track] $ \g ->
       context "for unary subgoals" $ do
         it "should match when the arguments match" $
           g Top `shouldMatch` g Top

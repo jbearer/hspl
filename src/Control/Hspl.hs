@@ -44,6 +44,7 @@ module Control.Hspl (
   , bagOfN
   , once
   , cut
+  , cutFrame
   , track
   -- *** Unification, identity, equality, and inequality
   , (|=|)
@@ -202,7 +203,7 @@ predicate = predicate' []
 data PredicateAttribute =
     -- N.B. The order in which the constructors are defined is the order in which they will be
     -- applied to the predicate. For instance, if both Theorem and SemiDet attribtues are specified,
-    -- the resulting goal will be of the form `Once (Track g)`.
+    -- the resulting goal will be of the form `once (track g)`.
 
     -- | Informs HSPL that a predicate is a theorem which will be inspected after the proof (via
     -- 'queryTheorem'). This attribute behaves exactly as if, every time the predicate is invoked,
@@ -217,11 +218,11 @@ data PredicateAttribute =
 -- | Define a predicate. This function behaves exactly like 'predicate', except that it allows the
 -- caller to specify a set of 'PredicateAttribute' objects to modify the behavior of the predicate.
 predicate' :: TermEntry t => [PredicateAttribute] -> String -> Clause t -> Predicate t
-predicate' attrs name cw arg = tell $ applyAttrs (sort attrs) $
+predicate' attrs name cw arg = applyAttrs (sort attrs) $ tell $
   Ast.PredGoal (Ast.Predicate name arg) (map ($name) $ astClause cw)
   where applyAttrs [] g = g
-        applyAttrs (Theorem:as) g = applyAttrs as $ Ast.Track g
-        applyAttrs (SemiDet:as) g = applyAttrs as $ Ast.Once g
+        applyAttrs (Theorem:as) g = applyAttrs as $ track g
+        applyAttrs (SemiDet:as) g = applyAttrs as $ once g
 
 -- | Make a statement about when a 'Predicate' holds for inputs of a particular form. A 'match'
 -- statement succeeds when the input can unify with the argument to 'match'. When attempting to
@@ -272,11 +273,16 @@ bagOfN n x g xs = findN n x g xs >> xs |=| __ <:> __
 -- succeeds at all, then the goal @once g@ succeeds exactly once, and the result is the first
 -- solution of @g@. If @g@ fails, then @once g@ also fails.
 once :: Goal -> Goal
-once gw = tell $ Ast.Once $ astGoal gw
+once gw = cutFrame (gw >> cut)
 
 -- | Discard all choicepoints created since entering the current predicate.
 cut :: Goal
 cut = tell Ast.Cut
+
+-- | Prove a 'Goal' in a new cut frame. The goal will be proven as normal, except that if it calls
+-- 'cut', choice points created before entering the cut frame will not be discarded.
+cutFrame :: Goal -> Goal
+cutFrame = tell . Ast.CutFrame . astGoal
 
 -- | Record the result of a 'Goal' if it is successfully proven. Results annotated with 'track' can
 -- be inspected after the proof is complete via 'queryTheorem'.

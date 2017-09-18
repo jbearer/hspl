@@ -59,8 +59,8 @@ module Control.Hspl.Internal.Solver (
   , proveTop
   , proveBottom
   , proveAlternatives
-  , proveOnce
   , proveCut
+  , proveCutFrame
   , proveTrack
   , prove
   ) where
@@ -134,8 +134,10 @@ queryTheorem ProofResult {..} target = do
             return $ Alternatives n (unify u x) g'' (unify u xs)
           Nothing -> Nothing
 
-    matchGoal (Once g) (Once g') = Once `fmap` matchGoal g g'
     matchGoal Cut Cut = Just Cut
+    matchGoal (CutFrame g) (CutFrame g') = CutFrame `fmap` matchGoal g g'
+
+    matchGoal (Track g) (Track g') = Track `fmap` matchGoal g g'
 
     matchGoal _ _ = Nothing
 
@@ -342,14 +344,14 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   --
   -- The zero-overhead version is 'proveAlternatives'.
   tryAlternatives :: TermEntry a => Maybe Int -> Term a -> Goal -> Term [a] -> m Theorem
-  -- | Attempt to prove a 'Once' goal. This computation should extract the first result from the
-  -- inner goal and return it. It should ignore any further solutions to the inner goal. The zero-
-  -- overhead version is 'proveOnce'.
-  tryOnce :: Goal -> m Theorem
   -- | Emit a proof of 'Cut'. This computation always succeeds, and the proof is always trivial.
   -- However, it should perform the side-effect of discarding all unexplored choicepoints created
-  -- since entering the last clause of a predicate. The zero-overhead version is 'proveCut'.
+  -- since entering the last 'CutFrame'. The zero-overhead version is 'proveCut'.
   tryCut :: m Theorem
+  -- | Attempt to prove the given goal in a new cut frame. The proof proceeds as norm, except that
+  -- if 'Cut' is encountered during the proof, it does not affect choice points created since
+  -- entering the 'CutFrame' goal. The zero-overhead version is 'proveCutFrame'.
+  tryCutFrame :: Goal -> m Theorem
   -- | Attempt to prove a 'Track' goal. This computation should succeed whenever the inner goal
   -- does. It should then return a list consisting of any theorems proven in the inner goal, as well
   -- as the inner goal itself. The inner goal should be at the head of the list. The zero-overhead
@@ -380,8 +382,8 @@ instance (SplittableState s, Monad m) => MonadSolver (SolverT s m) where
   tryTop = proveTop
   tryBottom = proveBottom
   tryAlternatives = proveAlternatives
-  tryOnce = proveOnce
   tryCut = proveCut
+  tryCutFrame = proveCutFrame
   tryTrack = proveTrack
   failUnknownPred = const mzero
   errorUninstantiatedVariables = error "Variables are not sufficiently instantiated."
@@ -490,13 +492,13 @@ proveAlternatives maybeN x g xs = do
                               Just (a, fk) -> (a:) `liftM` next fk
                               Nothing -> return []
 
--- | Zero-overhead version of 'tryOnce'.
-proveOnce :: MonadSolver m => Goal -> m Theorem
-proveOnce g = Once `liftM` once (prove g)
-
 -- | Zero-overhead version of 'tryCut'.
 proveCut :: MonadSolver m => m Theorem
 proveCut = commit Cut
+
+-- | Zero-overhead version of 'tryCutFrame'.
+proveCutFrame :: MonadSolver m => Goal -> m Theorem
+proveCutFrame g = CutFrame `liftM` cutFrame (prove g)
 
 -- | Zero-overhead version of 'tryTrack'.
 proveTrack :: MonadSolver m => Goal -> m Theorem
@@ -524,6 +526,6 @@ prove g = case g of
   Top -> tryTop
   Bottom -> tryBottom
   Alternatives n x g' xs -> tryAlternatives n x g' xs
-  Once g' -> tryOnce g'
   Cut -> tryCut
+  CutFrame g' -> tryCutFrame g'
   Track g' -> tryTrack g'
