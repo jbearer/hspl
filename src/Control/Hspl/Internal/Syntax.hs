@@ -18,13 +18,20 @@ Also provided are functions to convert these user-facing types to their internal
 Functions for converting the other way are primarily provided through instances, e.g. 'tell'.
 -}
 module Control.Hspl.Internal.Syntax (
+  -- * Goals
     GoalWriter (..)
   , Goal
   , Theorem
   , astGoal
+  -- * Clauses
   , ClauseWriter (..)
   , Clause
   , astClause
+  -- * Conditionals
+  , CondBranch (..)
+  , CondWriter (..)
+  , CondBody
+  , execCond
   ) where
 
 import qualified Control.Hspl.Internal.Ast as Ast
@@ -67,3 +74,19 @@ type Clause t = ClauseWriter t ()
 -- | Retrieve the internal representation of a 'Ast.HornClause' from a 'Clause'.
 astClause :: ClauseWriter t a -> [String -> Ast.HornClause]
 astClause = execWriter . unCW
+
+-- | A single branch of a conditional block, consisting of a condition 'Goal' and an action 'Goal'.
+data CondBranch = Branch Goal Goal
+  deriving (Show, Eq)
+
+-- | The body of a conditional block. The 'MonadWriter' instance can be used for appending
+-- 'CondBranch'es to the block.
+newtype CondWriter a = CondWriter { unCondWriter :: Writer [CondBranch] a }
+  deriving (Functor, Applicative, Monad, MonadWriter [CondBranch])
+
+-- | The body of a conditional block.
+type CondBody = CondWriter ()
+
+-- | Retrieve the list of branches from a conditional block.
+execCond :: CondWriter a -> [CondBranch]
+execCond = execWriter . unCondWriter

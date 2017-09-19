@@ -26,15 +26,11 @@ wellTyped(Gamma, preOp(negate, Expr), intType) :- !,
 wellTyped(Gamma, preOp(not, Expr), boolType) :- !,
     wellTyped(Gamma, Expr, boolType).
 
-wellTyped(Gamma, binOp(L, Op, R), intType) :-
-    memberchk(Op, [plus, minus, times, divide]),
-    !,
-    wellTyped(Gamma, L, intType),
-    wellTyped(Gamma, R, intType).
-wellTyped(Gamma, binOp(L, Op, R), boolType) :-
-    memberchk(Op, [and, or]),
-    !,
-    wellTyped(Gamma, L, boolType),
-    wellTyped(Gamma, R, boolType).
+wellTyped(Gamma, binOp(L, Op, R), T) :- !,
+    (  memberchk(Op, [plus, minus, times, divide])
+    -> wellTyped(Gamma, L, intType), wellTyped(Gamma, R, intType), T = intType
+    ;  memberchk(Op, [and, or])
+    -> wellTyped(Gamma, L, boolType), wellTyped(Gamma, R, boolType), T = boolType
+    ).
 
 wellTyped(Expr, Type) :- wellTyped([], Expr, Type).

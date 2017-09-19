@@ -65,6 +65,9 @@ module Control.Hspl (
   , true
   , false
   , forAll
+  -- ** Conditional blocks
+  , cond
+  , (->>)
   -- * Running HSPL programs
   , runHspl
   , runHspl1
@@ -306,13 +309,13 @@ variable = predicate "variable" $ match(v"x" :: Var a) |-
               tell $ Ast.IsVariable (toTerm (v"x" :: Var a))
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
-infix 2 |=|
+infix 3 |=|
 (|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
 t1 |=| t2 = tell $ Ast.CanUnify (toTerm t1) (toTerm t2)
 
 -- | Negation of '|=|'. The predicate @t1 |\\=| t2@ succeeds if and only if @t1 |=| t2@ fails. No
 -- new bindings are created.
-infix 2 |\=|
+infix 3 |\=|
 (|\=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
 t1 |\=| t2 = lnot $ t1 |=| t2
 
@@ -325,6 +328,32 @@ is t1 t2 = tell $ Ast.Identical (toTerm t1) (toTerm t2)
 -- No new bindings are created.
 isnt :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
 isnt t1 t2 = lnot $ t1 `is` t2
+
+-- | Execute a conditional block. A conditional block consists of a sequence of condition/action
+-- pairs (defined via '->>'). Each branch is considered in order by first executing the condition
+-- and then, if that succeeds, the action. If a condition succeeds, the whole block succeeds or
+-- fails depending on the result of the action, and no more branches are tried. If none of the
+-- branches succeed, the overall goal fails.
+--
+-- For example,
+--
+-- @
+--  cond $ do
+--    x |=| 0 ->> ifZero? x
+--    x |>| 0 ->> ifPositive? x
+--    true    ->> ifNegative? x
+-- @
+--
+-- Note that 'cond' introduces a new cut frame.
+cond :: CondBody -> Goal
+cond body = cutFrame $ foldr (|||) false $ map branchGoal $ execCond body
+  where branchGoal (Branch c action) = c >> cut >> action
+
+-- | Define a branch of a conditional block (see 'cond'). The left-hand side is the condition goal;
+-- the right-hand side is the goal to be executed if the condition succeeds.
+infix 2 ->>
+(->>) :: Goal -> Goal -> CondBody
+c ->> ifTrue = tell [Branch c ifTrue]
 
 -- | Logical negation. @lnot p@ is a predicate which is true if and only if the predicate @p@ is
 -- false. @lnot@ does not create any new bindings.
@@ -359,12 +388,12 @@ false = tell Ast.Bottom
 --
 -- This negative formulation of the predicate implies that no new variable bindings are created.
 forAll :: Goal -> Goal -> Goal
-forAll cond action = lnot (cond >> lnot action)
+forAll c action = lnot (c >> lnot action)
 
 -- | Simplify a term and test for equality. The right-hand side is evaluated, and the resulting
 -- constant is then unified with the left-hand side. Note that '|==|' will cause a run-time error if
 -- the right-hand side expression contains unbound variables.
-infix 2 |==|
+infix 3 |==|
 (|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
 a |==| b = tell $ Ast.Equal (toTerm a) (toTerm b)
 
@@ -372,14 +401,14 @@ a |==| b = tell $ Ast.Equal (toTerm a) (toTerm b)
 -- new bindings are created. Note that in order to prove @t1 |\\==| t2@, the system will attempt to
 -- prove @t1 |==| t2@ and then negate the result. This means that @t1 |\\==| t2@ will still result
 -- in a runtime error if @t2@ has uninstantiated variables.
-infix 2 |\==|
+infix 3 |\==|
 (|\==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
 a |\==| b = lnot $ a |==| b
 
 -- | Simplify terms and test for inequality. Both terms are evaluated and the resulting constants
 -- are compared using '<'. No new bindings are created. Note that a runtime error will be raised if
 -- /either/ term contains uninstantiated variables.
-infix 2 |<|
+infix 3 |<|
 (|<|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
 t1 |<| t2 = tell $ Ast.LessThan (toTerm t1) (toTerm t2)
 
@@ -390,13 +419,13 @@ t1 |<| t2 = tell $ Ast.LessThan (toTerm t1) (toTerm t2)
 -- right-hand side. However, if unification fails, then the left-hand side /will/ be evaluated in
 -- order to perform the inequality check, at which point a runtime error will be raised if the left-
 -- hand side contains uninstantiated variables.
-infix 2 |<=|
+infix 3 |<=|
 (|<=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
 t1 |<=| t2 = t1 |==| t2 ||| (t1 |\==| t2 >> t1 |<| t2)
 
 -- | Simplify terms and test for inequality. @t1 |>| t2@ is equivalent to @t2 |<| t1@. See '|<|' for
 -- details.
-infix 2 |>|
+infix 3 |>|
 (|>|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
 t1 |>| t2 = t2 |<| t1
 
@@ -404,7 +433,7 @@ t1 |>| t2 = t2 |<| t1
 -- in the order of evaluation. Like '|<=|', '|>=|' evaluates its right-hand argument first and then
 -- short-circuits if the result unifies with the left-hand side. The left-hand side is only
 -- evaluated if unification fails.
-infix 2 |>=|
+infix 3 |>=|
 (|>=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
 t1 |>=| t2 = t1 |==| t2 ||| (t1 |\==| t2 >> t1 |>| t2)
 
@@ -612,7 +641,7 @@ subterms in an ADT via the '$$' constructor. See 'Control.Hspl.Examples.adts' fo
 --    toTerm (Leaf a) = Leaf $$ a
 --    toTerm (Tree a l r) = Tree $$ (a, l, r)
 -- @
-infixr 3 $$
+infixr 4 $$
 ($$) :: AdtTerm f a r => f -> a -> Term r
 ($$) = adt
 

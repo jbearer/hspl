@@ -76,16 +76,17 @@ wellTypedWithEnv = predicate "wellTyped" $ do
     cut
     wellTypedWithEnv? (v"env", v"expr", BoolType)
 
-  match (v"env", BinOp $$ (v"l", v"op", v"r"), IntType) |- do
-    once $ L.member? (v"op", [Plus, Minus, Times, Divide])
+  match (v"env", BinOp $$ (v"l", v"op", v"r"), v"type") |- do
     cut
-    wellTypedWithEnv? (v"env", v"l", IntType)
-    wellTypedWithEnv? (v"env", v"r", IntType)
-  match (v"env", BinOp $$ (v"l", v"op", v"r"), BoolType) |- do
-    once $ L.member? (v"op", [And, Or])
-    cut
-    wellTypedWithEnv? (v"env", v"l", BoolType)
-    wellTypedWithEnv? (v"env", v"r", BoolType)
+    cond $ do
+      once (L.member? (v"op", [Plus, Minus, Times, Divide])) ->> do
+        wellTypedWithEnv? (v"env", v"l", IntType)
+        wellTypedWithEnv? (v"env", v"r", IntType)
+        v"type" |=| IntType
+      once (L.member? (v"op", [And, Or])) ->> do
+        wellTypedWithEnv? (v"env", v"l", BoolType)
+        wellTypedWithEnv? (v"env", v"r", BoolType)
+        v"type" |=| BoolType
 
 wellTyped :: Predicate (Expr, Type)
 wellTyped = predicate "wellTyped" $

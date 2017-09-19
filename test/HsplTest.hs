@@ -502,3 +502,29 @@ test = describeModule "Control.Hspl" $ do
         Ast.Product (Ast.Modulus (toTerm (Var "x" :: Var Int))
                                  (toTerm (Var "y" :: Var Int)))
                     (toTerm (Var "z" :: Var Int))
+
+  describe "condition blocks" $ do
+    it "should fail if no condition succeeds" $
+      runHspl (cond $ do { false ->> true; false ->> true }) `shouldBe` []
+    it "should execute the action for the first condition that succeeds" $ do
+      let g = cond $ do { true ->> v"x" |=| 'a'; true ->> v"x" |=| 'b'}
+      let results = runHspl g
+      getAllTheorems results `shouldBe` [cond $ do { true ->> 'a' |=| 'a'; true ->> 'a' |=| 'b'}]
+      queryVar (head results) (char "x") `shouldBe` Unified 'a'
+
+      let g = cond $ do { false ->> v"x" |=| 'a'; true ->> v"x" |=| 'b'}
+      let results = runHspl g
+      getAllTheorems results `shouldBe` [cond $ do { false ->> 'b' |=| 'a'; true ->> 'b' |=| 'b'}]
+      queryVar (head results) (char "x") `shouldBe` Unified 'b'
+    it "should make bindings in the condition" $ do
+      let g = cond $ v"x" |=| 'a' ->> v"y" |=| Just $$ char"x"
+      let results = runHspl g
+      getAllTheorems results `shouldBe` [cond $ 'a' |=| 'a' ->> Just 'a' |=| Just 'a']
+      queryVar (head results) (char "x") `shouldBe` Unified 'a'
+      queryVar (head results) (auto "y") `shouldBe` Unified (Just 'a')
+    it "should parse branches correctly" $ do
+      let g = cond $ v"x" |==| (0::Int) |+| (1::Int) ->> v"y" |==| v"x" |+| (2::Int)
+      let results = runHspl g
+      getAllTheorems results `shouldBe` [cond $ (1::Int) |==| (1::Int) ->> (3::Int) |==| (3::Int)]
+      queryVar (head results) (int "x") `shouldBe` Unified 1
+      queryVar (head results) (int "y") `shouldBe` Unified 3

@@ -32,3 +32,9 @@ test = describeModule "Control.Hspl.Internal.Syntax" $ do
         [ HornClause (predicate "foo" 'a') Top
         , HornClause (predicate "foo" 'b') Top
         ]
+  describe "execCond" $
+    it "should return a list of cond branches" $ do
+      let top = tell Top
+      let bottom = tell Bottom
+      let branches = [Branch top bottom, Branch bottom top]
+      execCond (tell branches) `shouldBe` branches

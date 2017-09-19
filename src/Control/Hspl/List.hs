@@ -80,14 +80,12 @@ delete = predicate "delete" $
 --
 -- 'nth' currently uses an efficient implementation ported from the SWI Prolog standard library.
 nth :: forall a. TermEntry a => Predicate (Int, [a], a)
-nth = predicate "nth" $ do
-  match (v"index", v"list", v"elem") |- do
-    unified? (int "index")
-    cut
-    nthDet? (int "index", v"list", v"elem")
-
-  match (v"index", v"head" <:> v"tail", v"elem") |-
-    nthGen? (v"tail", v"elem", v"head", 0::Int, v"index")
+nth = predicate "nth" $
+  match (v"index", v"list", v"elem") |-
+    cond $ do
+      unified? int "index" ->> nthDet? (int "index", v"list", v"elem")
+      true ->> do (v"head" :: Var a) <:> v"tail" |=| v"list"
+                  nthGen? (v"tail", v"elem", v"head", 0::Int, v"index")
 
   where
     -- Take the nth element deterministically, with 6-way loop unrolling
