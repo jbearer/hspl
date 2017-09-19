@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraints
@@ -141,9 +142,63 @@ import           Control.Hspl.Internal.Solver ( ProofResult
 import           Control.Hspl.Internal.Syntax
 import           Control.Hspl.Internal.Unification (UnificationStatus (..))
 
+-- Operator precedences
+#define PREC 9
+
+infix PREC ?
+
+infixl PREC |*|
+infixl PREC |/|
+infixl PREC |\|
+infixl PREC |%|
+
+infixr PREC \*
+infixr PREC <:>
+
+#undef PREC
+#define PREC 8
+
+infixl PREC |+|
+infixl PREC |-|
+
+#undef PREC
+#define PREC 4
+
+infixr PREC $$
+
+#undef PREC
+#define PREC 3
+
+infix PREC `is`
+infix PREC `isnt`
+infix PREC |=|
+infix PREC |\=|
+infix PREC |==|
+infix PREC |\==|
+infix PREC |<|
+infix PREC |<=|
+infix PREC |>|
+infix PREC |>=|
+
+#undef PREC
+#define PREC 2
+
+infix PREC ->>
+
+#undef PREC
+#define PREC 1
+
+infixl PREC |||
+
+#undef PREC
+#define PREC 0
+
+infixr PREC |-
+
+#undef PREC
+
 -- | Predicate application. @pred? term@ is a goal that succeeds if the predicate @pred@ applied
 -- to @term@ is true.
-infix 9 ?
 (?) :: TermData a => Predicate (HSPLType a) -> a -> Goal
 p? arg = p $ toTerm arg
 
@@ -237,7 +292,6 @@ match t = tell [\p -> Ast.HornClause (Ast.predicate p $ toTerm t) Ast.Top]
 -- | Indicates the beginning of a list of subgoals in a predicate definition. Whenever the 'match'
 -- statement on the left-hand side of '|-' succeeds, the solver attempts to prove all subgoals on
 -- the right-hand side. If it is successful, then the overall predicate succeeds.
-infixr 0 |-
 (|-) :: Clause t -> Goal -> Clause t
 p |- gs =
   let [f] = astClause p
@@ -309,13 +363,11 @@ variable = predicate "variable" $ match(v"x" :: Var a) |-
               tell $ Ast.IsVariable (toTerm (v"x" :: Var a))
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
-infix 3 |=|
 (|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
 t1 |=| t2 = tell $ Ast.CanUnify (toTerm t1) (toTerm t2)
 
 -- | Negation of '|=|'. The predicate @t1 |\\=| t2@ succeeds if and only if @t1 |=| t2@ fails. No
 -- new bindings are created.
-infix 3 |\=|
 (|\=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
 t1 |\=| t2 = lnot $ t1 |=| t2
 
@@ -351,7 +403,6 @@ cond body = cutFrame $ foldr (|||) false $ map branchGoal $ execCond body
 
 -- | Define a branch of a conditional block (see 'cond'). The left-hand side is the condition goal;
 -- the right-hand side is the goal to be executed if the condition succeeds.
-infix 2 ->>
 (->>) :: Goal -> Goal -> CondBody
 c ->> ifTrue = tell [Branch c ifTrue]
 
@@ -365,7 +416,6 @@ lnot p =
 -- | Logical disjunction. @p ||| q@ is a predicate which is true if either @p@ is true or @q@ is
 -- true. @|||@ will backtrack over alternatives, so if both @p@ and @q@ are true, it will produce
 -- multiple solutions.
-infixl 1 |||
 (|||) :: Goal -> Goal -> Goal
 gw1 ||| gw2 =
   let g1 = astGoal gw1
@@ -393,7 +443,6 @@ forAll c action = lnot (c >> lnot action)
 -- | Simplify a term and test for equality. The right-hand side is evaluated, and the resulting
 -- constant is then unified with the left-hand side. Note that '|==|' will cause a run-time error if
 -- the right-hand side expression contains unbound variables.
-infix 3 |==|
 (|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
 a |==| b = tell $ Ast.Equal (toTerm a) (toTerm b)
 
@@ -401,14 +450,12 @@ a |==| b = tell $ Ast.Equal (toTerm a) (toTerm b)
 -- new bindings are created. Note that in order to prove @t1 |\\==| t2@, the system will attempt to
 -- prove @t1 |==| t2@ and then negate the result. This means that @t1 |\\==| t2@ will still result
 -- in a runtime error if @t2@ has uninstantiated variables.
-infix 3 |\==|
 (|\==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
 a |\==| b = lnot $ a |==| b
 
 -- | Simplify terms and test for inequality. Both terms are evaluated and the resulting constants
 -- are compared using '<'. No new bindings are created. Note that a runtime error will be raised if
 -- /either/ term contains uninstantiated variables.
-infix 3 |<|
 (|<|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
 t1 |<| t2 = tell $ Ast.LessThan (toTerm t1) (toTerm t2)
 
@@ -419,13 +466,11 @@ t1 |<| t2 = tell $ Ast.LessThan (toTerm t1) (toTerm t2)
 -- right-hand side. However, if unification fails, then the left-hand side /will/ be evaluated in
 -- order to perform the inequality check, at which point a runtime error will be raised if the left-
 -- hand side contains uninstantiated variables.
-infix 3 |<=|
 (|<=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
 t1 |<=| t2 = t1 |==| t2 ||| (t1 |\==| t2 >> t1 |<| t2)
 
 -- | Simplify terms and test for inequality. @t1 |>| t2@ is equivalent to @t2 |<| t1@. See '|<|' for
 -- details.
-infix 3 |>|
 (|>|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
 t1 |>| t2 = t2 |<| t1
 
@@ -433,45 +478,38 @@ t1 |>| t2 = t2 |<| t1
 -- in the order of evaluation. Like '|<=|', '|>=|' evaluates its right-hand argument first and then
 -- short-circuits if the result unifies with the left-hand side. The left-hand side is only
 -- evaluated if unification fails.
-infix 3 |>=|
 (|>=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
 t1 |>=| t2 = t1 |==| t2 ||| (t1 |\==| t2 >> t1 |>| t2)
 
 -- | Addition. Create a term representing the sum of two terms.
-infixl 8 |+|
 (|+|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
 a |+| b = Ast.Sum (toTerm a) (toTerm b)
 
 -- | Subtraction. Create a term representing the difference of two terms.
-infixl 8 |-|
 (|-|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
 a |-| b = Ast.Difference (toTerm a) (toTerm b)
 
 -- | Multiplication. Create a term representing the product of two terms.
-infixl 9 |*|
 (|*|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
 a |*| b = Ast.Product (toTerm a) (toTerm b)
 
 -- | Division. Create a term representing the quotient of two terms. Both operands must be of
 -- 'Fractional' type.
-infixl 9 |/|
 (|/|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Fractional (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
 a |/| b = Ast.Quotient (toTerm a) (toTerm b)
 
 -- | Integer divison. Create a term representing the the quotient of two terms, truncated towards 0.
 -- Both operands must be of 'Integral' type.
-infixl 9 |\|
 (|\|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Integral (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
 a |\| b = Ast.IntQuotient (toTerm a) (toTerm b)
 
 -- | Modular arithmetic. Create a term representing the remainer when dividing the first term by the
 -- second. Both operands must be of 'Integral' type.
-infixl 9 |%|
 (|%|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Integral (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
 a |%| b = Ast.Modulus (toTerm a) (toTerm b)
@@ -591,7 +629,6 @@ double = Var
 --
 -- >>> char \* "x"
 -- x :: [Char]
-infixr 9 \*
 (\*) :: Typeable a => (String -> Var a) -> String -> Var [a]
 (\*) _ = Var
 
@@ -641,7 +678,6 @@ subterms in an ADT via the '$$' constructor. See 'Control.Hspl.Examples.adts' fo
 --    toTerm (Leaf a) = Leaf $$ a
 --    toTerm (Tree a l r) = Tree $$ (a, l, r)
 -- @
-infixr 4 $$
 ($$) :: AdtTerm f a r => f -> a -> Term r
 ($$) = adt
 
@@ -672,7 +708,6 @@ some higher-level predicates for working with lists (such as 'Control.Hspl.List.
 --
 -- >>> 'a' <:> auto "x"
 -- 'a', x :: [Char]
-infixr 9 <:>
 (<:>) :: (TermData a, TermData as, [HSPLType a] ~ HSPLType as) => a -> as -> Term (HSPLType as)
 t <:> ts = Ast.List $ case Ast.getListTerm $ toTerm ts of
   Left x -> Ast.VarCons (toTerm t) x

@@ -295,38 +295,62 @@ test = describeModule "Control.Hspl" $ do
                  [Ast.HornClause (Ast.predicate "variable" (int "x")) (IsVariable $ toTerm $ int "x")]
 
   describe "the |=| predicate" $ do
-    let exec = astGoal
     it "should create a CanUnify goal from TermData" $ do
-      exec ('a' |=| 'b') `shouldBe` CanUnify (toTerm 'a') (toTerm 'b')
-      exec ('a' |=| char "x") `shouldBe` CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))
-      exec (char "x" |=| 'a') `shouldBe` CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a')
-      exec (char "x" |=| char "y") `shouldBe`
+      astGoal ('a' |=| 'b') `shouldBe` CanUnify (toTerm 'a') (toTerm 'b')
+      astGoal ('a' |=| char "x") `shouldBe` CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))
+      astGoal (char "x" |=| 'a') `shouldBe` CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a')
+      astGoal (char "x" |=| char "y") `shouldBe`
         CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))
+    it "should have lower precedence than binary term constructors" $ do
+      astGoal ("foo" |=| 'f' <:> "oo") `shouldBe` CanUnify (toTerm "foo") (toTerm "foo")
+      astGoal ("foo" |=| "f" <++> "oo") `shouldBe` CanUnify (toTerm "foo") (toTerm "foo")
+      astGoal ((3::Int) |=| (1::Int) |+| (2::Int)) `shouldBe`
+        CanUnify (toTerm (3::Int)) ((1::Int) |+| (2::Int))
+      astGoal ((3::Int) |=| (1::Int) |*| (2::Int)) `shouldBe`
+        CanUnify (toTerm (3::Int)) ((1::Int) |*| (2::Int))
   describe "the |\\=| predicate" $ do
-    let exec = astGoal
     it "should create a (Not . CanUnify) goal from TermData" $ do
-      exec ('a' |\=| 'b') `shouldBe` Not (CanUnify (toTerm 'a') (toTerm 'b'))
-      exec ('a' |\=| char "x") `shouldBe` Not (CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char)))
-      exec (char "x" |\=| 'a') `shouldBe` Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
-      exec (char "x" |\=| char "y") `shouldBe`
+      astGoal ('a' |\=| 'b') `shouldBe` Not (CanUnify (toTerm 'a') (toTerm 'b'))
+      astGoal ('a' |\=| char "x") `shouldBe` Not (CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char)))
+      astGoal (char "x" |\=| 'a') `shouldBe` Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
+      astGoal (char "x" |\=| char "y") `shouldBe`
         Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
+    it "should have lower precedence than binary term constructors" $ do
+      astGoal ("foo" |\=| 'f' <:> "oo") `shouldBe` Not (CanUnify (toTerm "foo") (toTerm "foo"))
+      astGoal ("foo" |\=| "f" <++> "oo") `shouldBe` Not (CanUnify (toTerm "foo") (toTerm "foo"))
+      astGoal ((3::Int) |\=| (1::Int) |+| (2::Int)) `shouldBe`
+        Not (CanUnify (toTerm (3::Int)) ((1::Int) |+| (2::Int)))
+      astGoal ((3::Int) |\=| (1::Int) |*| (2::Int)) `shouldBe`
+        Not (CanUnify (toTerm (3::Int)) ((1::Int) |*| (2::Int)))
 
   describe "the `is` predicate" $ do
-    let exec = astGoal
     it "should create an Identical goal from TermData" $ do
-      exec ('a' `is` 'b') `shouldBe` Identical (toTerm 'a') (toTerm 'b')
-      exec ('a' `is` char "x") `shouldBe` Identical (toTerm 'a') (toTerm (Var "x" :: Var Char))
-      exec (char "x" `is` 'a') `shouldBe` Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a')
-      exec (char "x" `is` char "y") `shouldBe`
+      astGoal ('a' `is` 'b') `shouldBe` Identical (toTerm 'a') (toTerm 'b')
+      astGoal ('a' `is` char "x") `shouldBe` Identical (toTerm 'a') (toTerm (Var "x" :: Var Char))
+      astGoal (char "x" `is` 'a') `shouldBe` Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a')
+      astGoal (char "x" `is` char "y") `shouldBe`
         Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))
+    it "should have lower precedence than binary term constructors" $ do
+      astGoal ("foo" `is` 'f' <:> "oo") `shouldBe` Identical (toTerm "foo") (toTerm "foo")
+      astGoal ("foo" `is` "f" <++> "oo") `shouldBe` Identical (toTerm "foo") (toTerm "foo")
+      astGoal ((3::Int) `is` (1::Int) |+| (2::Int)) `shouldBe`
+        Identical (toTerm (3::Int)) ((1::Int) |+| (2::Int))
+      astGoal ((3::Int) `is` (1::Int) |*| (2::Int)) `shouldBe`
+        Identical (toTerm (3::Int)) ((1::Int) |*| (2::Int))
   describe "the `isnt` predicate" $ do
-    let exec = astGoal
     it "should create a (Not . Identical) goal from TermData" $ do
-      exec ('a' `isnt` 'b') `shouldBe` Not (Identical (toTerm 'a') (toTerm 'b'))
-      exec ('a' `isnt` char "x") `shouldBe` Not (Identical (toTerm 'a') (toTerm (Var "x" :: Var Char)))
-      exec (char "x" `isnt` 'a') `shouldBe` Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
-      exec (char "x" `isnt` char "y") `shouldBe`
+      astGoal ('a' `isnt` 'b') `shouldBe` Not (Identical (toTerm 'a') (toTerm 'b'))
+      astGoal ('a' `isnt` char "x") `shouldBe` Not (Identical (toTerm 'a') (toTerm (Var "x" :: Var Char)))
+      astGoal (char "x" `isnt` 'a') `shouldBe` Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
+      astGoal (char "x" `isnt` char "y") `shouldBe`
         Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
+    it "should have lower precedence than binary term constructors" $ do
+      astGoal ("foo" `isnt` 'f' <:> "oo") `shouldBe` Not (Identical (toTerm "foo") (toTerm "foo"))
+      astGoal ("foo" `isnt` "f" <++> "oo") `shouldBe` Not (Identical (toTerm "foo") (toTerm "foo"))
+      astGoal ((3::Int) `isnt` (1::Int) |+| (2::Int)) `shouldBe`
+        Not (Identical (toTerm (3::Int)) ((1::Int) |+| (2::Int)))
+      astGoal ((3::Int) `isnt` (1::Int) |*| (2::Int)) `shouldBe`
+        Not (Identical (toTerm (3::Int)) ((1::Int) |*| (2::Int)))
 
   describe "the |==| predicate" $ do
     let exec = astGoal
