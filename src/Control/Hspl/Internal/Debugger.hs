@@ -83,6 +83,7 @@ import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Tuple
 import Control.Hspl.Internal.UI
 import Control.Hspl.Internal.Unification (MonadVarGenerator, MonadUnification (..), munify)
+import Control.Hspl.Internal.VarMap (for_)
 
 -- | Structure used to specify configuration options for the debugger.
 data DebugConfig = DebugConfig {
@@ -166,7 +167,7 @@ data Command =
 
 -- | A usage message describing the various commands offered by the debugger.
 debugHelp :: String
-debugHelp = unlines
+debugHelp = intercalate "\n"
   ["s, step: proceed one predicate call"
   ,"n, next: proceed to the next call, failure, or exit at this level"
   ,"f, finish: proceed to the exit or failure of the current goal"
@@ -251,12 +252,12 @@ runDebugStateT config m = do
 -- | Monad which runs the interactive debugger terminal. It maintains some state, and performs
 -- computations in the 'IO' monad. At certain times, it yields control to the calling routine, which
 -- should run one step of the computation and then pass control back to the terminal, along with
--- some context about the current state of the computation.
-type TerminalCoroutine = Coroutine (Await (Maybe DebugContext)) (DebugStateT IO)
+-- some context about the current state of the computation or a final result.
+type TerminalCoroutine = Coroutine (Await (Maybe (Either DebugContext ProofResult))) (DebugStateT IO)
 
 -- | Monad transformer which runs an HSPL program, yielding control and context at each important
 -- step of the computation.
-type SolverCoroutine m = Coroutine (Yield DebugContext) m
+type SolverCoroutine m = Coroutine (Yield (Either DebugContext ProofResult)) m
 
 -- | State maintained by the solver coroutine.
 data SolverState = Solver {
@@ -348,7 +349,7 @@ instance Monad m => MonadSolver (DebugSolverT m) where
 
 -- | Suspend a 'SolverCoroutine' with the given context.
 yield :: Monad m => DebugContext -> DebugSolverT m ()
-yield dc = DebugSolverT $ lift $ CR.yield dc
+yield dc = DebugSolverT $ lift $ CR.yield $ Left dc
 
 -- | Format a goal stack in a manner suitable for displaying to the user. If a number @n@ is
 -- specified, then just the top @n@ goals are shown from the stack. Otherwise, the entire stack is
@@ -370,11 +371,17 @@ showBreakpoints bs =
 -- running in interactive mode (i.e. whether 'tty' is set). In interactive mode, the end of line is
 -- a ' ', and the user is prompted for input at the end of the same line. In non-interactive mode,
 -- each line of output is terminated by a '\n' character.
-printLine :: String -> TerminalCoroutine ()
-printLine s = do
+printPrompt :: String -> TerminalCoroutine ()
+printPrompt s = do
   st <- lift get
   let endChar = if tty st then " " else "\n"
   liftIO $ hPutStr (output st) $ s ++ endChar
+
+printLine :: String -> TerminalCoroutine ()
+printLine s = lift (gets output) >>= \h -> liftIO $ hPutStrLn h s
+
+printStr :: String -> TerminalCoroutine ()
+printStr s = lift (gets output) >>= \h -> liftIO $ hPutStr h s
 
 type TerminalParser = ParsecT String () Identity
 
@@ -554,24 +561,38 @@ prompt context@DC { stack = s, status = mtype, msg = m } = do
                             _ -> False
                         | otherwise -> False
   when shouldStop $ do
-    liftIO $ hPutStr (output st) $ "(" ++ show (length s) ++ ") "
+    printStr $ "(" ++ show (length s) ++ ") "
     liftIO $ setSGR [msgColor mtype | useColors st]
-    liftIO $ hPutStr (output st) $ show mtype ++ ": "
+    printStr $ show mtype ++ ": "
     liftIO $ setSGR []
-    printLine m
+    printPrompt m
     repl context
+
+showResult :: ProofResult -> TerminalCoroutine ()
+showResult ProofResult { unifiedVars = u } = do
+  st <- lift get
+  for_ u $ \x t ->
+    case (x, t) of
+      -- Only show user variables bound to a non-variable term
+      (_, Variable _) -> return ()
+      (Var v, _) -> liftIO $ hPutStrLn (output st) $ v ++ " = " ++ formatTerm t
+      _ -> return ()
 
 -- | A coroutine which controls the HSPL solver, yielding control at every important event.
 solverCoroutine :: Monad m => Goal -> SolverCoroutine m [ProofResult]
 solverCoroutine g =
-  observeAllSolverT (unDebugSolverT $ prove g >>= getResult)
-                    Solver { goalStack = [] }
+  let solverT = do r <- prove g >>= getResult
+                   DebugSolverT $ lift $ CR.yield $ Right r
+                   return r
+  in observeAllSolverT (unDebugSolverT solverT) Solver { goalStack = [] }
 
 -- | A coroutine which controls the interactive debugger terminal, periodically yielding control to
 -- the solver.
 terminalCoroutine :: TerminalCoroutine ()
 terminalCoroutine = await >>= \mc -> when (isJust mc) $ do
-  prompt $ fromJust mc
+  case fromJust mc of
+    Left dc -> prompt dc
+    Right r -> showResult r
   terminalCoroutine
 
 -- | Run the debugger with the given configuration and goal. The result of this function is a

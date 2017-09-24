@@ -9,6 +9,8 @@ import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Debugger
 import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.UI
+import Control.Hspl.Internal.Unification
+import Control.Hspl.Internal.VarMap (collect)
 
 import Control.Exception
 import Control.Monad.Coroutine
@@ -27,7 +29,6 @@ deriving instance Show Message
 
 runTest :: Goal -> [String] -> Trace a -> IO ()
 runTest g commands expectedTrace = tempFile2 $ \inFile outFile -> do
-  let expectedOutput = runTrace expectedTrace
   let config = debugConfig { inputFile = inFile
                            , outputFile = outFile
                            , interactive = False
@@ -44,19 +45,20 @@ runTest g commands expectedTrace = tempFile2 $ \inFile outFile -> do
                 "\n--- begin captured stdout ---\n" ++
                 output ++
                 "\n--- end captured stdout ---\n"
-  output `shouldEqual` unlines expectedOutput
+  checkTrace (expectedTrace >> traceEof) (lines output)
 
 data TraceState = TraceState { depth :: Int
                              , depthType :: DepthType
                              , lastMsg :: String
+                             , linesToCheck :: [String]
                              }
 
-type Trace = StateT TraceState (Writer [String])
+type Trace = StateT TraceState IO
 
 data DepthType = Ascending | Descending | Fixed
 
-runTrace :: Trace a -> [String]
-runTrace m = execWriter $ evalStateT m TraceState { depth=1, depthType=Fixed, lastMsg="" }
+checkTrace :: Trace a -> [String] -> Expectation
+checkTrace m lns = void $ runStateT m TraceState { depth=1, depthType=Fixed, lastMsg="", linesToCheck=lns }
 
 setDepth :: Int -> Trace ()
 setDepth d = modify $ \ts -> ts { depth = d, depthType = Fixed }
@@ -76,18 +78,34 @@ ascend = do
   gets depth
 
 traceLines :: [String] -> Trace ()
-traceLines msg = lift (tell msg) >> modify (\s -> s { lastMsg = last msg })
+traceLines expected = do
+  (actual, rest) <- gets $ splitAt (length expected) . linesToCheck
+  lift $ actual `shouldEqual` expected
+  modify (\s -> s { lastMsg = last expected, linesToCheck = rest })
 
 trace :: String -> Trace ()
 trace = traceLines . (:[])
 
+tracePermutation :: [String] -> Trace ()
+tracePermutation expected = do
+  (actual, rest) <- gets $ splitAt (length expected) . linesToCheck
+  lift $ actual `shouldBePermutationOf` expected
+  modify (\s -> s { linesToCheck = rest })
+
 traceInfoLines :: [String] -> Trace ()
-traceInfoLines msg = do
+traceInfoLines expected = do
   prev <- gets lastMsg
-  tell $ msg ++ [prev]
+  (actual, rest) <- gets $ splitAt (length expected + 1) . linesToCheck
+  lift $ actual `shouldEqual` (expected ++ [prev])
+  modify (\s -> s { linesToCheck = rest })
 
 traceInfo :: String -> Trace ()
 traceInfo = traceInfoLines . (:[])
+
+traceEof :: Trace ()
+traceEof = do
+  lns <- gets linesToCheck
+  lift $ lns `shouldBe` []
 
 traceCall :: Goal -> Trace ()
 traceCall g = do
@@ -113,6 +131,9 @@ traceUnknownPred :: Predicate -> Trace ()
 traceUnknownPred p@(Predicate name arg) = do
   d <- ascend
   trace $ "(" ++ show d ++ ") Error: Unknown predicate \"" ++ name ++ " :: " ++ formatType (predType p) ++ "\""
+
+traceResult :: Unifier -> Trace ()
+traceResult u = tracePermutation $ collect (\(Var x) t -> x ++ " = " ++ formatTerm t) u
 
 -- deep(X) :- foo(X).
 -- foo(X) :- bar(X).
@@ -157,11 +178,11 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                      , msg = ""
                      }
     let runTest input expected =
-          do let st = pogoStick (\(Await f) -> f (Just context)) $ parseCommand input
+          do let st = pogoStick (\(Await f) -> f (Just (Left context))) $ parseCommand input
              output <- runDebugStateT debugConfig st
              output `shouldBe` Right expected
     let shouldFail input err =
-          do let st = pogoStick (\(Await f) -> f (Just context)) $ parseCommand input
+          do let st = pogoStick (\(Await f) -> f (Just (Left context))) $ parseCommand input
              output <- runDebugStateT debugConfig st
              case output of
                 Right c -> failure $ "Expected parser to fail on input \"" ++ input ++ "\" with " ++
@@ -215,7 +236,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     it "should output the previous command when given a blank line" $ do
         freshState <- initTerminalState debugConfig
         let state = freshState { lastCommand = Finish }
-        let m = pogoStick (\(Await f) -> f (Just context)) $ parseCommand ""
+        let m = pogoStick (\(Await f) -> f (Just (Left context))) $ parseCommand ""
         output <- evalStateT m state
         output `shouldBe` Right Finish
 
@@ -228,6 +249,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceExit $ PredGoal (predicate "bar" 'a') []
           traceExit $ PredGoal (predicate "foo" 'a') []
           traceExit $ PredGoal (predicate "deep" 'a') []
+          traceResult $ 'a' // Var "x"
     let wideGoal = PredGoal (predicate "wide"
                       (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide
     let wideTrace = do
@@ -239,6 +261,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall $ PredGoal (predicate "baz" (Var "z" :: Var Char)) []
           traceExit $ PredGoal (predicate "baz" 'c') []
           traceExit $ PredGoal (predicate "wide" ('a', 'b', 'c')) []
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
     let backtrackingGoal = PredGoal (predicate "foo" (Var "x" :: Var Char)) backtracking
     let backtrackingTrace = do
           traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
@@ -253,6 +276,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     let canUnifyTrace = do
           traceCall canUnifyGoal
           traceExit $ CanUnify (toTerm "foo") (toTerm "foo")
+          traceResult $ "foo" // Var "x"
     let canUnifyFailGoal = CanUnify (toTerm "bar") (toTerm "foo")
     let canUnifyFailTrace = do
           traceCall canUnifyFailGoal
@@ -269,6 +293,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     let equalTrace = do
           traceCall equalGoal
           traceExit $ Equal (toTerm (3 :: Int)) (toTerm (3 :: Int))
+          traceResult $ (3::Int) // Var "x"
     let equalFailGoal = Equal (toTerm (2 :: Int)) (Sum (toTerm (1 :: Int)) (toTerm (2 :: Int)))
     let equalFailTrace = do
           traceCall equalFailGoal
@@ -311,6 +336,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceExit $ CanUnify (toTerm "foo") (toTerm "foo")
           traceCall $ Identical (toTerm "foo") (toTerm "foo")
           traceExit $ Identical (toTerm "foo") (toTerm "foo")
+          traceResult $ "foo" // Var "x"
     let andFailLeftGoal = And Bottom Top
     let andFailLeftTrace = traceCall Bottom >> traceFail Bottom
     let andFailRightGoal = And Top Bottom
@@ -339,6 +365,19 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall Top
           traceExit Top
           traceExit orRightGoal
+    let orUnifyGoal = Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                         (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+    let orUnifyTrace = do
+          traceCall orUnifyGoal
+          traceCall $ CanUnify (toTerm $ Var "x") (toTerm 'a')
+          traceExit $ CanUnify (toTerm 'a') (toTerm 'a')
+          traceExit $ Or (CanUnify (toTerm 'a') (toTerm 'a')) (CanUnify (toTerm 'a') (toTerm 'b'))
+          traceResult $ 'a' // Var "x"
+          traceRedo orUnifyGoal
+          traceCall $ CanUnify (toTerm $ Var "x") (toTerm 'b')
+          traceExit $ CanUnify (toTerm 'b') (toTerm 'b')
+          traceExit $ Or (CanUnify (toTerm 'b') (toTerm 'a')) (CanUnify (toTerm 'b') (toTerm 'b'))
+          traceResult $ 'b' // Var "x"
     let orFailGoal = Or Bottom Bottom
     let orFailTrace = do
           traceCall orFailGoal
@@ -368,6 +407,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                                            (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
                                                (CanUnify (toTerm $ Var "x") (toTerm 'b')))
                                            (toTerm ['a', 'b'])
+          traceResult $ "ab" // Var "xs"
     let alternativesFailInnerGoal = Alternatives Nothing (toTerm (Var "x" :: Var Char))
                                                          Bottom
                                                          (toTerm $ Var "xs")
@@ -376,6 +416,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall Bottom
           traceFail Bottom
           traceExit $ Alternatives Nothing (toTerm (Var "x" :: Var Char)) Bottom (List Nil)
+          traceResult $ "" // Var "xs"
     let alternativesFailGoal = Alternatives Nothing (toTerm (Var "x" :: Var Char)) Top (List Nil)
     let alternativesFailTrace = do
           traceCall alternativesFailGoal
@@ -394,6 +435,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                                             (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
                                                 (CanUnify (toTerm $ Var "x") (toTerm 'b')))
                                             (toTerm "a")
+          traceResult $ "a" // Var "xs"
 
     let cutGoal = Or Cut Top
     let cutTrace = do
@@ -448,6 +490,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run andFailRightGoal andFailRightTrace
       run orLeftGoal orLeftTrace
       run orRightGoal orRightTrace
+      run orUnifyGoal orUnifyTrace
       run orFailGoal orFailTrace
       run Top $ traceCall Top >> traceExit Top
       run Bottom $ traceCall Bottom >> traceFail Bottom
@@ -464,10 +507,12 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["next", "next"] $ do
         traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) deep
         traceExit $ PredGoal (predicate "deep" 'a') deep
+        traceResult $ 'a' // Var "x"
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide) ["next", "next"] $ do
         traceCall (PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
         traceExit (PredGoal (predicate "wide" ('a', 'b', 'c')) wide)
+        traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
         ["step", "next", "next", "next", "next", "next", "next", "next"] $ do
@@ -479,12 +524,14 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall $ PredGoal (predicate "baz" (Var "z" :: Var Char)) []
           traceExit $ PredGoal (predicate "baz" 'c') []
           traceExit $ PredGoal (predicate "wide" ('a', 'b', 'c')) wide
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
     it "if no more events at the current depth, it should stop at the next decrease in depth" $
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["step", "next", "next", "next"] $ do
         traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
         traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
         traceExit $ PredGoal (predicate "foo" 'a') []
         traceExit $ PredGoal (predicate "deep" 'a') []
+        traceResult $ 'a' // Var "x"
 
   describe "the finish command" $
     it "should skip to the next decrease in depth" $ do
@@ -494,6 +541,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
           traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
           setDepth 1 >> traceExit (PredGoal (predicate "wide" ('a', 'b', 'c')) [])
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
       runTest (PredGoal (predicate "foo" (Var "x" :: Var Char)) backtracking) ["step", "finish", "finish"] $ do
         traceCall $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []
         traceCall $ PredGoal (predicate "bar" (Var "x" :: Var Char)) []
@@ -509,6 +557,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceInfo "Set breakpoint on baz."
           setDepth 2 >> traceCall (PredGoal (predicate "bar" (Var "y" :: Var Char)) [])
           setDepth 2 >> traceCall (PredGoal (predicate "baz" (Var "z" :: Var Char)) [])
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
     it "should warn when the breakpoint already exists" $
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
@@ -516,6 +565,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
           traceInfo "Set breakpoint on bar."
           traceInfo "Breakpoint bar already exists."
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
   describe "the delete-breakpoint command" $ do
     it "should accept the name of a breakpoint" $
       runTest (PredGoal (predicate "wide"
@@ -524,12 +574,14 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
           traceInfo "Set breakpoint on bar."
           traceInfo "Deleted breakpoint bar."
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
     it "should warn when given a name that does not exist" $
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
         ["db bar", "c"] $ do
           traceCall $ PredGoal (predicate "wide" (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) []
           traceInfo "No breakpoint \"bar\"."
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
     it "should accept the index of a breakpoint" $ do
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
@@ -539,6 +591,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceInfo "Set breakpoint on baz."
           traceInfo "Deleted breakpoint bar."
           traceCall $ PredGoal (predicate "baz" (Var "z" :: Var Char)) []
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
         ["b bar", "b baz", "db 2", "c", "c"] $ do
@@ -547,6 +600,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceInfo "Set breakpoint on baz."
           traceInfo "Deleted breakpoint baz."
           traceCall $ PredGoal (predicate "bar" (Var "y" :: Var Char)) []
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
     withParams ["-1", "0", "2"] $ \index ->
       it "should warn when given an out of range" $
         runTest (PredGoal (predicate "wide"
@@ -556,6 +610,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
             traceInfo "Set breakpoint on bar."
             traceInfo "Index out of range."
             traceCall $ PredGoal (predicate "bar" (Var "y" :: Var Char)) []
+            traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
   describe "the breakpoints command" $ do
     it "should list active breakpoints" $
       runTest (PredGoal (predicate "wide"
@@ -567,6 +622,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceInfoLines ["(1) bar", "(2) baz"]
           setDepth 2 >> traceCall (PredGoal (predicate "bar" (Var "y" :: Var Char)) [])
           setDepth 2 >> traceCall (PredGoal (predicate "baz" (Var "z" :: Var Char)) [])
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
     it "should update to reflect deletions" $
       runTest (PredGoal (predicate "wide"
                 (Var "x" :: Var Char, Var "y" :: Var Char, Var "z" :: Var Char)) wide)
@@ -577,6 +633,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceInfo "Set breakpoint on baz."
           traceInfo "Deleted breakpoint bar."
           traceInfoLines ["(1) foo", "(2) baz"]
+          traceResult $ 'a' // Var "x" <> 'b' // Var "y" <> 'c' // Var "z"
 
   describe "the goals command" $ do
     it "should print the current goal stack" $
@@ -591,6 +648,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           ]
         setDepth 2 >> traceExit (PredGoal (predicate "foo" 'a') [])
         traceExit $ PredGoal (predicate "deep" 'a') []
+        traceResult $ 'a' // Var "x"
     it "should print the top N goals from the current goal stack" $
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["s", "s", "goals 2", "f", "f", "f"] $ do
         traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
@@ -602,6 +660,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           ]
         setDepth 2 >> traceExit (PredGoal (predicate "foo" 'a') [])
         traceExit $ PredGoal (predicate "deep" 'a') []
+        traceResult $ 'a' // Var "x"
     it "should print the current goal" $
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["s", "s", "goal", "f", "f", "f"] $ do
         traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
@@ -610,6 +669,7 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
         traceInfo $ "(3) " ++ formatGoal (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
         setDepth 2 >> traceExit (PredGoal (predicate "foo" 'a') [])
         traceExit $ PredGoal (predicate "deep" 'a') []
+        traceResult $ 'a' // Var "x"
     withParams [0, -1] $ \arg ->
       it "should fail when the argument is not a positive integer" $
         runTest Top ["goals " ++ show arg, "f"] $ do
@@ -620,13 +680,15 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     it "should print a usage message" $
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["help", "finish"] $ do
         traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
-        traceInfo debugHelp
+        traceInfoLines $ lines debugHelp
+        traceResult $ 'a' // Var "x"
 
   describe "a blank command" $
     it "should repeat the previous command" $
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["n", ""] $ do
         traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
         traceExit $ PredGoal (predicate "deep" 'a') []
+        traceResult $ 'a' // Var "x"
 
   describe "an unknown command" $
     it "should trigger a retry prompt" $ do
@@ -634,7 +696,8 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       let err = addErrorMessage (Expect "command") unexpected
       runTest (PredGoal (predicate "deep" (Var "x" :: Var Char)) deep) ["bogus", "finish"] $ do
         traceCall $ PredGoal (predicate "deep" (Var "x" :: Var Char)) []
-        traceLines [show err, "Try \"?\" for help."]
+        traceLines $ lines (show err) ++ ["Try \"?\" for help."]
+        traceResult $ 'a' // Var "x"
 
   describe "an uninstantiated variables error" $
     it "should print the goal stack" $ do
