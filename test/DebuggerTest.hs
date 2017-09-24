@@ -21,6 +21,9 @@ import Control.Monad.Writer (MonadWriter (..), Writer, execWriter)
 import Data.Either
 import Data.List
 import Data.Monoid ((<>))
+import GHC.IO.Handle
+import System.Console.Haskeline hiding (finally)
+import System.IO
 import Text.Parsec.Pos
 import Text.Parsec.Error
 
@@ -29,14 +32,26 @@ deriving instance Show Message
 
 runTest :: Goal -> [String] -> Trace a -> IO ()
 runTest g commands expectedTrace = tempFile2 $ \inFile outFile -> do
-  let config = debugConfig { inputFile = inFile
-                           , outputFile = outFile
-                           , interactive = False
-                           , coloredOutput = False
-                           }
+
   writeFile inFile $ unlines commands
 
-  result <- try $ debug config g
+  -- Redirect stdin and stdout to files
+  inputH <- openFile inFile ReadMode
+  outputH <- openFile outFile WriteMode
+  stdoutOld <- hDuplicate stdout
+  stdinOld <- hDuplicate stdin
+  hDuplicateTo inputH stdin
+  hDuplicateTo outputH stdout
+  hClose inputH
+  hClose outputH
+
+  result <- try (debug g) `finally` do
+    -- Reset stdin and stdout
+    hDuplicateTo stdoutOld stdout
+    hDuplicateTo stdinOld stdin
+    hClose stdoutOld
+    hClose stdinOld
+
   output <- readFile outFile
   case result of
     Right _ -> return ()
@@ -179,11 +194,13 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
                      }
     let runTest input expected =
           do let st = pogoStick (\(Await f) -> f (Just (Left context))) $ parseCommand input
-             output <- runDebugStateT debugConfig st
+             let inputT = runDebugStateT st
+             output <- runInputT defaultSettings inputT
              output `shouldBe` Right expected
     let shouldFail input err =
           do let st = pogoStick (\(Await f) -> f (Just (Left context))) $ parseCommand input
-             output <- runDebugStateT debugConfig st
+             let inputT = runDebugStateT st
+             output <- runInputT defaultSettings inputT
              case output of
                 Right c -> failure $ "Expected parser to fail on input \"" ++ input ++ "\" with " ++
                                      "error (" ++ show err ++
@@ -234,10 +251,10 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     it "should fail when given an unknown command" $
       shouldFail "bogus" (Expect "command")
     it "should output the previous command when given a blank line" $ do
-        freshState <- initTerminalState debugConfig
-        let state = freshState { lastCommand = Finish }
+        let state = Terminal { currentTarget = Any, breakpoints = [], lastCommand = Finish }
         let m = pogoStick (\(Await f) -> f (Just (Left context))) $ parseCommand ""
-        output <- evalStateT m state
+        let inputT = evalStateT m state
+        output <- runInputT defaultSettings inputT
         output `shouldBe` Right Finish
 
   describe "the step command" $ do

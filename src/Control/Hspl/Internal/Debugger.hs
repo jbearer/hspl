@@ -18,15 +18,12 @@ Description : An interactive debugger for HSPL programs.
 Stability   : Internal
 
 This module implements an interactive debugger for HSPL programs. The debugger hooks into the HSPL
-prover using the 'ProverCont' framework, and provides several commands for navigating through an
+prover using the 'MonadSolver' framework, and provides several commands for navigating through an
 HSPL program.
 -}
 module Control.Hspl.Internal.Debugger (
-  -- * Configuration
-    DebugConfig (..)
-  , debugConfig
   -- * Commands
-  , Command (..)
+    Command (..)
   , debugHelp
   , parseCommand
   , getCommand
@@ -38,8 +35,6 @@ module Control.Hspl.Internal.Debugger (
   , Target (..)
   , DebugContext (..)
   , TerminalState (..)
-  , initTerminalState
-  , closeTerminalState
   -- * Control flow
   -- | The complete debugger is composed of two cooperating coroutines. One routine controls the
   -- interactive terminal. It prompts the user for commands, processes them, and displays the output
@@ -58,13 +53,11 @@ module Control.Hspl.Internal.Debugger (
   , SolverCoroutine
   , solverCoroutine
   , DebugSolverT
-  -- , DebugCont
   -- * Entry points
   , debug
   ) where
 
 import           Control.Applicative hiding ((<|>))
-import           Control.Exception (finally)
 import           Control.Monad.Coroutine
 import           Control.Monad.Coroutine.SuspensionFunctors hiding (yield)
 import qualified Control.Monad.Coroutine.SuspensionFunctors as CR
@@ -74,7 +67,7 @@ import           Data.Char
 import           Data.List
 import           Data.Maybe
 import           System.Console.ANSI
-import           System.IO
+import           System.Console.Haskeline
 import           Text.Parsec hiding (Error, tokens)
 
 import Control.Hspl.Internal.Ast hiding (predicate)
@@ -84,62 +77,6 @@ import Control.Hspl.Internal.Tuple
 import Control.Hspl.Internal.UI
 import Control.Hspl.Internal.Unification (MonadVarGenerator, MonadUnification (..), munify)
 import Control.Hspl.Internal.VarMap (for_)
-
--- | Structure used to specify configuration options for the debugger.
-data DebugConfig = DebugConfig {
-                                 -- | File from which to read input commands. If this is the special
-                                 -- string "stdin", then commands are read from standard input.
-                                 -- Otherwise, this is treated as a file path and opened in read-
-                                 -- only mode.
-                                 inputFile :: FilePath
-                                 -- | File to which to write debugger output. If this is the special
-                                 -- string "stdout", then output is written to standard output.
-                                 -- Otherwise, this is treated as a file path and opened in write-
-                                 -- only mode.
-                               , outputFile :: FilePath
-                                 -- | Specifies whether the debugger should run in interactive mode.
-                               , interactive :: Bool
-                                 -- | Specifies whether the debugger should color-code its output.
-                                 -- Should only be used when @outputFile == "stdout"@ and stdout is
-                                 -- a terminal.
-                               , coloredOutput :: Bool
-                               }
-
--- | Sane default values for a 'DebugConfig' which set up the debugger for interactive use at a
--- terminal.
-debugConfig :: DebugConfig
-debugConfig = DebugConfig { inputFile = "stdin"
-                          , outputFile = "stdout"
-                          , interactive = True
-                          , coloredOutput = True
-                          }
-
--- | Initialize the state which will be maintained by 'TerminalCoroutine'. Depending on the
--- configuration, this may include opening file handles, and so the computation must take place in
--- the 'IO' monad.
-initTerminalState :: DebugConfig -> IO TerminalState
-initTerminalState config = do
-  inputH <- if inputFile config == "stdin"
-              then return stdin
-              else openFile (inputFile config) ReadMode
-  outputH <- if outputFile config == "stdout"
-              then return stdout
-              else openFile (outputFile config) WriteMode
-  return Terminal { currentTarget = Any
-                  , lastCommand = Step
-                  , breakpoints = []
-                  , input = inputH
-                  , output = outputH
-                  , tty = interactive config
-                  , useColors = coloredOutput config
-                  }
-
--- | Clean up any state which must be disposed after the termination of a 'TerminalCoroutine'. For
--- example, input and output file handles which were opened in 'initTerminalState' will be closed.
-closeTerminalState :: DebugConfig -> TerminalState -> IO ()
-closeTerminalState config st = do
-  unless (inputFile config == "stdin") $ hClose $ input st
-  unless (outputFile config == "stdout") $ hClose $ output st
 
 -- | The available debugger commands.
 data Command =
@@ -205,6 +142,16 @@ msgColor Exit = SetColor Foreground Vivid Green
 msgColor Fail = SetColor Foreground Vivid Red
 msgColor Error = SetColor Foreground Vivid Red
 
+setColor :: SGR -> TerminalCoroutine ()
+setColor color = do
+  istty <- liftHL haveTerminalUI
+  when istty $ liftIO $ setSGR [color]
+
+resetColor :: TerminalCoroutine ()
+resetColor = do
+  istty <- liftHL haveTerminalUI
+  when istty $ liftIO $ setSGR []
+
 -- | Description of the current status of an HSPL computation.
 data DebugContext = DC {
                          -- | The current 'Goal' stack. During a computation, this stack will always
@@ -228,32 +175,28 @@ data TerminalState = Terminal {
                        -- | List of predicates which we should stop at when running until a
                        -- breakpoint.
                      , breakpoints :: [String]
-                       -- | File 'Handle' from which to read commands.
-                     , input :: Handle
-                       -- | File 'Handle' to which to print output.
-                     , output :: Handle
-                       -- | Whether 'output' is a terminal.
-                     , tty :: Bool
-                       -- | Whether output should be color-coded.
-                     , useColors :: Bool
                      }
 
 -- | Monad transformer which encapsulates the state required by the interactive terminal.
 type DebugStateT = StateT TerminalState
 
 -- | Evaluate a compuation in the 'DebugStateT' monad, returning a computation in the underlying
--- monad. The initial state is derived from the given 'DebugConfig'.
-runDebugStateT :: DebugConfig -> DebugStateT IO a -> IO a
-runDebugStateT config m = do
-  st <- initTerminalState config
-  result <- evalStateT m st `finally` closeTerminalState config st
-  return result
+-- monad.
+runDebugStateT :: (MonadException m, MonadIO m) => DebugStateT m a -> m a
+runDebugStateT m = evalStateT m Terminal { currentTarget = Any
+                                         , lastCommand = Step
+                                         , breakpoints = []
+                                         }
 
 -- | Monad which runs the interactive debugger terminal. It maintains some state, and performs
 -- computations in the 'IO' monad. At certain times, it yields control to the calling routine, which
 -- should run one step of the computation and then pass control back to the terminal, along with
 -- some context about the current state of the computation or a final result.
-type TerminalCoroutine = Coroutine (Await (Maybe (Either DebugContext ProofResult))) (DebugStateT IO)
+type TerminalCoroutine =
+  Coroutine (Await (Maybe (Either DebugContext ProofResult))) (DebugStateT (InputT IO))
+
+liftHL :: InputT IO a -> TerminalCoroutine a
+liftHL = lift.lift
 
 -- | Monad transformer which runs an HSPL program, yielding control and context at each important
 -- step of the computation.
@@ -373,15 +316,15 @@ showBreakpoints bs =
 -- each line of output is terminated by a '\n' character.
 printPrompt :: String -> TerminalCoroutine ()
 printPrompt s = do
-  st <- lift get
-  let endChar = if tty st then " " else "\n"
-  liftIO $ hPutStr (output st) $ s ++ endChar
+  istty <- liftHL haveTerminalUI
+  let endChar = if istty then " " else "\n"
+  liftIO $ putStr $ s ++ endChar
 
 printLine :: String -> TerminalCoroutine ()
-printLine s = lift (gets output) >>= \h -> liftIO $ hPutStrLn h s
+printLine s = liftIO $ putStrLn s
 
 printStr :: String -> TerminalCoroutine ()
-printStr s = lift (gets output) >>= \h -> liftIO $ hPutStr h s
+printStr s = liftIO $ putStr s
 
 type TerminalParser = ParsecT String () Identity
 
@@ -489,9 +432,9 @@ parseCommand s = do
 -- valid command is entered.
 getCommand :: TerminalCoroutine Command
 getCommand = do
-  st <- lift get
-  commStr <- liftIO $ hGetLine $ input st
-  comm <- parseCommand commStr
+  commStr <- liftHL $ getInputLine ""
+  when (isNothing commStr) $ error "Unexpected end of input"
+  comm <- parseCommand $ fromJust commStr
   case comm of
     Left err -> printLine (show err ++ "\nTry \"?\" for help.") >> getCommand
     Right c -> return c
@@ -562,20 +505,19 @@ prompt context@DC { stack = s, status = mtype, msg = m } = do
                         | otherwise -> False
   when shouldStop $ do
     printStr $ "(" ++ show (length s) ++ ") "
-    liftIO $ setSGR [msgColor mtype | useColors st]
+    setColor $ msgColor mtype
     printStr $ show mtype ++ ": "
-    liftIO $ setSGR []
+    resetColor
     printPrompt m
     repl context
 
 showResult :: ProofResult -> TerminalCoroutine ()
-showResult ProofResult { unifiedVars = u } = do
-  st <- lift get
+showResult ProofResult { unifiedVars = u } =
   for_ u $ \x t ->
     case (x, t) of
       -- Only show user variables bound to a non-variable term
       (_, Variable _) -> return ()
-      (Var v, _) -> liftIO $ hPutStrLn (output st) $ v ++ " = " ++ formatTerm t
+      (Var v, _) -> liftIO $ putStrLn $ v ++ " = " ++ formatTerm t
       _ -> return ()
 
 -- | A coroutine which controls the HSPL solver, yielding control at every important event.
@@ -595,10 +537,12 @@ terminalCoroutine = await >>= \mc -> when (isJust mc) $ do
     Right r -> showResult r
   terminalCoroutine
 
--- | Run the debugger with the given configuration and goal. The result of this function is a
--- computaion in the 'IO' monad which, when executed, will run the debugger.
-debug :: DebugConfig -> Goal -> IO [ProofResult]
-debug c g =
+-- | Run the debugger with the given goal. The result of this function is a computation in the 'IO'
+-- monad which, when executed, will run the debugger.
+debug :: Goal -> IO [ProofResult]
+debug g =
   let cr = weave sequentialBinder weaveAwaitMaybeYield terminalCoroutine (solverCoroutine g)
       st = pogoStick runIdentity cr
-  in fmap snd $ runDebugStateT c st -- Keep the solver output, ignore the terminal output
+      inputT = snd `fmap` runDebugStateT st -- Keep the solver output, ignore the terminal output
+      io = runInputT defaultSettings inputT
+  in io

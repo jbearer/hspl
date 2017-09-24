@@ -35,6 +35,7 @@ library
                      , ansi-terminal
                      , monad-coroutine
                      , parsec
+                     , haskeline
   ghc-options:         -Wall
   if flag(ShowTerms)
     cpp-options:       -DSHOW_TERMS
@@ -72,6 +73,7 @@ test-suite hspl-test
                      , monad-coroutine
                      , parsec
                      , transformers
+                     , haskeline
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   other-modules:       Testing
                      , AstTest
