@@ -274,7 +274,7 @@ instance TermEntry a => Unifiable (Term a) where
   unify u (Modulus t1 t2) = Modulus (unify u t1) (unify u t2)
 
 instance Unifiable Predicate where
-  unify u (Predicate name term) = Predicate name (unify u term)
+  unify u (Predicate loc scope name term) = Predicate loc scope name (unify u term)
 
 instance Unifiable Goal where
   unify u (PredGoal p cs) = PredGoal (unify u p) cs
@@ -302,9 +302,9 @@ instance Unifiable HornClause where
 -- literal and the resulting goal is returned. Before unification, the 'HornClause' is renamed apart
 -- so that it does not share any free variables with the goal.
 resolve :: MonadUnification m => Predicate -> HornClause -> m Goal
-resolve (Predicate name arg) c@(HornClause (Predicate name' _) _) =
-  assert (name == name') $ do
-    HornClause (Predicate _ arg') neg <- renameClause c
+resolve (Predicate loc scope name arg) c@(HornClause (Predicate loc' scope' name' _) _) =
+  assert (loc == loc' && scope == scope' && name == name') $ do
+    HornClause (Predicate _ _ _ arg') neg <- renameClause c
     case cast arg' >>= mgu arg of
       Nothing -> mzero
       Just u -> addUnifier u >> munify neg
@@ -409,7 +409,7 @@ renameBinaryTerm constr t1 t2 = do
 
 -- | Rename all of the variables in a predicate.
 renamePredicate :: MonadVarGenerator m => Predicate -> RenamedT m Predicate
-renamePredicate (Predicate name arg) = liftM (Predicate name) $ renameTerm arg
+renamePredicate (Predicate loc scope name arg) = liftM (Predicate loc scope name) $ renameTerm arg
 
 -- | Rename all of the variables in a goal.
 renameGoal :: MonadVarGenerator m => Goal -> RenamedT m Goal

@@ -70,7 +70,7 @@ import           System.Console.ANSI
 import           System.Console.Haskeline
 import           Text.Parsec hiding (Error, tokens)
 
-import Control.Hspl.Internal.Ast hiding (predicate)
+import Control.Hspl.Internal.Ast
 import Control.Hspl.Internal.Logic
 import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Tuple
@@ -276,7 +276,7 @@ instance Monad m => MonadSolver (DebugSolverT m) where
   tryCutFrame g = goalFrame (CutFrame g) (call $ proveCutFrame g)
   tryTrack g = goalFrame (Track g) (call $ proveTrack g)
 
-  failUnknownPred p@(Predicate name _) = do
+  failUnknownPred p@(Predicate _ _ name _) = do
     s <- gets $ (PredGoal p [] :) . goalStack
     -- Since there are no clauses, there will be no corresponding 'Call' message, rather we will fail
     -- immediately. To make the output a little more intuitive, we explicitly log a 'Call' here.
@@ -500,7 +500,7 @@ prompt context@DC { stack = s, status = mtype, msg = m } = do
                       Breakpoint
                         | mtype == Call ->
                           case head s of
-                            PredGoal (Predicate p _) _ -> p `elem` breakpoints st
+                            PredGoal (Predicate _ _ p _) _ -> p `elem` breakpoints st
                             _ -> False
                         | otherwise -> False
   when shouldStop $ do

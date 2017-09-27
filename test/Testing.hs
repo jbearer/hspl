@@ -37,6 +37,8 @@ module Testing (
   , success
   , tempFile
   , tempFile2
+  , predicate
+  , srcLoc
   ) where
 
 import Control.DeepSeq (NFData, force)
@@ -157,3 +159,24 @@ tempFile f = do
 
 tempFile2 :: MonadIO m => (String -> String -> m a) -> m a
 tempFile2 f = tempFile $ \f1 -> tempFile $ \f2 -> f f1 f2
+
+-- Smart constructor for building predicates out of Haskell types. The location of the predicate is
+-- in this file.
+predicate :: TermData a => String -> a -> Predicate
+predicate s a = Predicate (Just srcLoc) Nothing s (toTerm a)
+
+-- Get a dummy SrcLoc object. If base >= 4.8.1, the location will correspond to the call to this
+-- function. Otherwise, the location is meaningless.
+srcLoc :: HasCallStack => SrcLoc
+#if MIN_VERSION_base(4,8,1)
+srcLoc = snd $ last callStack
+#else
+srcLoc = SrcLoc { srcLocPackage = "hspl-test"
+                , srcLocModule = "Testing"
+                , srcLocFile = "test/Testing.hs"
+                , srcLocStartLine = __LINE__
+                , srcLocStartCol = 0
+                , srcLocEndLine = __LINE__
+                , srcLocEndCol = 100
+                }
+#endif

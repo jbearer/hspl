@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraints
@@ -121,6 +122,7 @@ module Control.Hspl (
 
 import Control.Exception (assert)
 import Control.Monad.Writer
+import Data.CallStack
 import Data.Data
 import Data.List (sort)
 
@@ -218,28 +220,11 @@ type Predicate a = Term a -> Goal
 --      odd? int "y"
 -- @
 --
--- There are a few restrictions on the name assigned to a predicate. First, the name must not
--- contain whitespace. It can, however, contain any non-whitespace characters you want.
---
--- Second, the name must be unique among all predicates with the same type. If two predicates of the
--- same type have the same name, the program may exhibit unexpected behavior without explicitly
--- failing. Good practice is to give a predicate the same name as the Haskell identifier to which it
--- is assigned, as in the example above. If that convention is followed, the Haskell compiler can be
--- used to enforce the uniquencess of the names. Unfortunately, this only works for predicates
--- declared at the top level. For predicates defined in a @let@ expression or a @where@ clause, dot-
--- syntax can be used to ensure name uniqueness, as in
---
--- @
---  foo = predicate "foo" $
---    match(char "x") |- bar?(char "x")
---    where bar = predicate "foo.bar" $ match 'a'
--- @
---
--- It is also worth saying a few words about the type of this function. It is polymorphic in the
--- type of the argument to which the predicate can be applied. If no type annotation is given, the
--- compiler will attempt to infer this type from the type of the 'match' statements in the
--- definition. If a type annotation is given, then the type of variables in the 'match' statements
--- can be inferred, allowing the use of 'auto' or 'v'.
+-- It is worth saying a few words about the type of this function. It is polymorphic in the type of
+-- the argument to which the predicate can be applied. If no type annotation is given, the compiler
+-- will attempt to infer this type from the type of the 'match' statements in the definition. If a
+-- type annotation is given, then the type of variables in the 'match' statements can be inferred,
+-- allowing the use of 'auto' or 'v'.
 --
 -- If the GHC extension @ScopedTypeVariables@ is used, type annotations can also be used to declare
 -- generic predicates, like so:
@@ -253,7 +238,70 @@ type Predicate a = Term a -> Goal
 -- @
 --
 -- Note that the generic type must be an instance of 'TermEntry'.
-predicate :: TermEntry t => String -> Clause t -> Predicate t
+--
+-- Finally, a note on naming predicates: the name, type, 'Scope' (if specified) and location of
+-- definition in the source code must uniquely identify a predicate. In the vast majority of cases,
+-- the location in the source code is sufficient, because no two calls to 'predicate' occupy the
+-- same source location. However, there are a few cases in which this restriction matters.
+--
+-- Consider the following potential definition of 'bagOf'. (Note that 'bagOf' is not actually
+-- implemented this way due to the exact problem under discussion.)
+--
+-- @
+--  bagOf :: forall a b. (TermEntry a, TermEntry b, HSPLType b ~ [HSPLType a]) =>
+--           a -> Goal -> b -> Goal
+--  bagOf x g xs = bagOfPred? xs
+--    where bagOfPred :: Predicate (HSPLType b)
+--          bagOfPred = predicate "bagOf" $
+--            match(v"x" \<:> v"xs") |- findAll x g (v"x" \<:> v"xs")
+-- @
+--
+-- Here, the parameter @xs@ is passed as an argument to the predicate @bagOfPred@, while the
+-- parameters @x@ and @g@ are used to dynamically create the body of that predicate. Thus, the
+-- definition of @bagOfPred@ will differ depending on the values of @x@ and @g@, even though each
+-- definition has the same name and occurs at the same source location. For this to be valid, the
+-- name or 'Scope' of the predicate would have to depend on @x@ and @g@ in some way.
+--
+-- In general, it is best to altogether avoid these kinds of dynamically created predicates.
+-- Fortunately, there is usually another way. In this case, it would be better to define 'bagOf'as
+-- follows:
+--
+-- @
+--  bagOf x g xs = findAll x g xs >> x |=| \__ \<:> \__
+-- @
+--
+-- The second case in which the source code location is not enough to uniquely identify a predicate
+-- is when the predicate is created with an alias of 'predicate' or 'predicate''. Consider the
+-- idiom used by HSPL to scope all predicates when compiling with base < 4.8.1:
+--
+-- @
+--  hsplPredicate = predicate' [Scope \"Control.Hspl"]
+-- @
+--
+-- Every predicate defined with @hsplPredicate@ will have the same location: the location of the
+-- call to 'predicate'' in the definition of @hsplPredicate@. We could use a similar workaround
+-- here, but in this special case there is a cleaner solution: we can force the compiler to extend
+-- the callstack information to the /caller/ of @hsplPredicate@, thus making the next stack frame up
+-- available to 'predicate''. This is accomplished as followed:
+--
+-- @
+--  import Data.CallStack
+--  hsplPredicate :: (HasCallStack, TermEntry t) => String -> Clause t -> Predicate t
+--  hsplPredicate = predicate' [Scope \"Control.Hspl"]
+-- @
+--
+-- As a final note, call site location information is not available in versions of the @base@
+-- package prior to @4.8.1@ (roughly corresponding to GHC 7.10.2). If your version of @base@ is
+-- older than that, best practice is to explicitly scope every predicate with 'predicate'' and
+-- scope. If the scope is the name of the module, you need only ensure that your predicate names are
+-- unique within their module. If you make the predicate name the same as the Haskell identifier to
+-- which the predicate is assigned, the Haskell compiler will enforce this uniqueness automatically.
+-- For example,
+--
+-- @
+--  foo = predicate' [Scope \"MyModule"] "foo"
+-- @
+predicate :: (HasCallStack, TermEntry t) => String -> Clause t -> Predicate t
 predicate = predicate' []
 
 -- | Optional attributes which can be applied to the declaration of a predicate (via 'predicate'')
@@ -263,10 +311,18 @@ data PredicateAttribute =
     -- applied to the predicate. For instance, if both Theorem and SemiDet attribtues are specified,
     -- the resulting goal will be of the form `once (track g)`.
 
+    -- | Attach a scope identifier to a predicate. This can be used to relax the uniqueness
+    -- requirements for predicate names (see 'predicate'). For example, scoping all predicates with
+    -- the name of the containing module means that names must be unique only within that module.
+    -- This is generally only necessary and useful when using base < 4.8.1. After that, callstack
+    -- information is availabe which HSPl uses to automatically identify each predicate uniquely by
+    -- its definition's location in the source code (except for a few edge cases, again, see
+    -- 'predicate').
+    Scope String
     -- | Informs HSPL that a predicate is a theorem which will be inspected after the proof (via
     -- 'queryTheorem'). This attribute behaves exactly as if, every time the predicate is invoked,
     -- the invocation were modified with 'track'.
-    Theorem
+  | Theorem
     -- | Makes a predicate semi-deterministic (that is, succeeds at most once). This attribute
     -- behaves exactly as if, every time the predicate is invoked, the invocation were modified with
     -- 'once'.
@@ -275,29 +331,52 @@ data PredicateAttribute =
 
 -- | Define a predicate. This function behaves exactly like 'predicate', except that it allows the
 -- caller to specify a set of 'PredicateAttribute' objects to modify the behavior of the predicate.
-predicate' :: TermEntry t => [PredicateAttribute] -> String -> Clause t -> Predicate t
+predicate' :: (HasCallStack, TermEntry t) =>
+              [PredicateAttribute] -> String -> Clause t -> Predicate t
 predicate' attrs name cw arg = applyAttrs (sort attrs) $ tell $
-  Ast.PredGoal (Ast.Predicate name arg) (map ($name) $ astClause cw)
-  where applyAttrs [] g = g
-        applyAttrs (Theorem:as) g = applyAttrs as $ track g
-        applyAttrs (SemiDet:as) g = applyAttrs as $ once g
+  Ast.PredGoal (Ast.Predicate (getLoc callStack) Nothing name arg)
+               (astClause (Ast.Predicate (getLoc callStack) Nothing name) cw)
+  where
+    applyAttrs [] g = g
+    applyAttrs (Theorem:as) g = applyAttrs as $ track g
+    applyAttrs (SemiDet:as) g = applyAttrs as $ once g
+    applyAttrs (Scope s:as) g = case astGoal g of
+      Ast.PredGoal p cs ->
+        applyAttrs as $ tell $ Ast.PredGoal (setPredScope s p) (map (setClauseScope s) cs)
+      _ -> applyAttrs as g
+
+    setPredScope :: String -> Ast.Predicate -> Ast.Predicate
+    setPredScope s (Ast.Predicate l _ n a) = Ast.Predicate l (Just s) n a
+    setClauseScope s (Ast.HornClause p g) = Ast.HornClause (setPredScope s p) g
+
+    getLoc stack
+      | not (null stack) = Just $ snd $ last stack
+      | otherwise        = Nothing
+
+-- | Attach this module as a scope to predicates if compiling without callstack information.
+hsplPred :: (HasCallStack, TermEntry t) => String -> Clause t -> Predicate t
+#if MIN_VERSION_base(4,8,1)
+hsplPred = predicate
+#else
+hsplPred = predicate' [Scope "Control.Hspl"]
+#endif
 
 -- | Make a statement about when a 'Predicate' holds for inputs of a particular form. A 'match'
 -- statement succeeds when the input can unify with the argument to 'match'. When attempting to
 -- prove a predicate, HSPL will first find all definitions of the predicate which match the goal,
 -- and then try to prove any subgoals of the 'match' statement (which can be specified using '|-').
 match :: TermData a => a -> Clause (HSPLType a)
-match t = tell [\p -> Ast.HornClause (Ast.predicate p $ toTerm t) Ast.Top]
+match t = tell [\mkPred -> Ast.HornClause (mkPred $ Ast.ETerm $ toTerm t) Ast.Top]
 
 -- | Indicates the beginning of a list of subgoals in a predicate definition. Whenever the 'match'
 -- statement on the left-hand side of '|-' succeeds, the solver attempts to prove all subgoals on
 -- the right-hand side. If it is successful, then the overall predicate succeeds.
 (|-) :: Clause t -> Goal -> Clause t
 p |- gs =
-  let [f] = astClause p
+  let [f] = execClauseWriter p
       goal = astGoal gs
-      addGoal name = let Ast.HornClause prd ogGoal = f name
-                     in assert (ogGoal == Ast.Top) $ Ast.HornClause prd goal
+      addGoal mkPred = let Ast.HornClause prd ogGoal = f mkPred
+                       in assert (ogGoal == Ast.Top) $ Ast.HornClause prd goal
   in tell [addGoal]
 
 -- | Unify a list with all the alternatives of a given template. @findAll template goal list@ works
@@ -351,7 +430,7 @@ track gw = tell $ Ast.Track $ astGoal gw
 -- this is not the opposite of 'variable', because both 'unified' and 'variable' will fail on a
 -- partially unified term (such as @'a' <:> v"xs"@).
 unified :: forall a. TermEntry a => Predicate a
-unified = predicate "unified" $ match(v"x" :: Var a) |-
+unified = hsplPred "unified" $ match(v"x" :: Var a) |-
             tell $ Ast.IsUnified (toTerm (v"x" :: Var a))
 
 -- | Determine whether a term is a variable. The predicate @variable? x@ succeeds if and only if
@@ -359,7 +438,7 @@ unified = predicate "unified" $ match(v"x" :: Var a) |-
 -- 'unified', because both 'unified' and 'variable' will fail on a partially unified term (such as
 -- @'a' <:> v"xs"@).
 variable :: forall a. TermEntry a => Predicate a
-variable = predicate "variable" $ match(v"x" :: Var a) |-
+variable = hsplPred "variable" $ match(v"x" :: Var a) |-
               tell $ Ast.IsVariable (toTerm (v"x" :: Var a))
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
@@ -520,7 +599,7 @@ a |%| b = Ast.Modulus (toTerm a) (toTerm b)
 --  x |+| 1 |==| y
 -- @
 successor :: forall a. (TermEntry a, Num a) => Predicate (a, a)
-successor = predicate "successor" $
+successor = hsplPred "successor" $
   match (v"x", v"y") |-
     v"y" |==| v"x" |+| (1::a)
 
@@ -531,7 +610,7 @@ successor = predicate "successor" $
 --  x |-| 1 |==| y
 -- @
 predecessor :: forall a. (TermEntry a, Num a) => Predicate (a, a)
-predecessor = predicate "predecessor" $
+predecessor = hsplPred "predecessor" $
   match (v"x", v"y") |-
     v"y" |==| v"x" |-| (1::a)
 
@@ -561,8 +640,8 @@ getTheorem :: ProofResult -> Theorem
 getTheorem = tell . Solver.getTheorem
 
 -- | Get the 'Theorem' from each result of a proof.
-getAllTheorems :: [ProofResult] -> [Theorem]
-getAllTheorems = map getTheorem
+getAllTheorems :: Functor f => f ProofResult -> f Theorem
+getAllTheorems = fmap getTheorem
 
 -- | Return the list of all tracked theorems proven in the given 'ProofResult' which unify with the
 -- given target 'Theorem'.
@@ -686,7 +765,7 @@ subterms in an ADT via the '$$' constructor. See 'Control.Hspl.Examples.adts' fo
 -- >>> getAllSolutions $ runHspl $ enum? bool "x"
 -- [enum(False), enum(True)]
 enum :: forall a. (TermEntry a, Bounded a, Enum a) => Predicate a
-enum = predicate "enum" $ forM_ (enumFromTo minBound maxBound :: [a]) match
+enum = hsplPred "enum" $ forM_ (enumFromTo minBound maxBound :: [a]) match
 
 {- $lists
 Lists can also be used as HSPL terms. Lists consisting entirely of constants or of variables can be

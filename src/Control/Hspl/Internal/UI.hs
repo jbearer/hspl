@@ -124,7 +124,7 @@ parensTerm t
 
 -- | Get a user-showable representation of a 'Predicate'.
 formatPredicate :: Predicate -> String
-formatPredicate (Predicate name t) = name ++ "? " ++ parensTerm t
+formatPredicate (Predicate _ _ name t) = name ++ "? " ++ parensTerm t
 
 -- | Get a user-showable representation of a 'Goal'. Any subexpressions are wrapped in parentheses
 -- if necessary so that the output is syntactically and semantically correct. However, the outer
@@ -162,8 +162,8 @@ parensGoal g
 
 -- | Get a user-showable representation of a 'HornClause'.
 formatClause :: HornClause -> String
-formatClause (HornClause (Predicate _ arg) Top) = "match " ++ parensTerm arg
-formatClause (HornClause (Predicate _ arg) goal) =
+formatClause (HornClause (Predicate _ _ _ arg) Top) = "match " ++ parensTerm arg
+formatClause (HornClause (Predicate _ _ _ arg) goal) =
   "match " ++ parensTerm arg ++ " |-" ++ (if needsDo goal then " do" else "") ++ "\n  " ++
     intercalate "\n  " (formatClauseGoal goal)
   where formatClauseGoal (And g1 g2) = formatClauseGoal g1 ++ formatClauseGoal g2

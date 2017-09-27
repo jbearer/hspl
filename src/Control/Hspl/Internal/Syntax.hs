@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE Rank2Types #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -26,6 +27,7 @@ module Control.Hspl.Internal.Syntax (
   -- * Clauses
   , ClauseWriter (..)
   , Clause
+  , execClauseWriter
   , astClause
   -- * Conditionals
   , CondBranch (..)
@@ -63,17 +65,23 @@ astGoal :: GoalWriter a -> Ast.Goal
 astGoal = execWriter . unGW
 
 -- | A monad for collecting the list of 'Ast.HornClause's which will define a 'Ast.Predicate'.
--- This monad creates a list of functions waiting for a predicate name. When applied to a string,
--- they produce clauses whose positive literals have that name.
-newtype ClauseWriter t a = CW { unCW :: Writer [String -> Ast.HornClause] a }
-  deriving (Functor, Applicative, Monad, MonadWriter [String -> Ast.HornClause])
+-- The list built by this monad consists of functions which, when given a predicate constructor,
+-- apply that constructor to an argument and use the resulting predicate to create a 'HornClause'.
+newtype ClauseWriter t a =
+  CW { unCW :: Writer [(Ast.ErasedTerm -> Ast.Predicate) -> Ast.HornClause] a }
+  deriving (Functor, Applicative, Monad, MonadWriter [(Ast.ErasedTerm -> Ast.Predicate) -> Ast.HornClause])
 
 -- | A definition of a predicate.
 type Clause t = ClauseWriter t ()
 
+-- | Extract the clause constructors from 'ClauseWriter'.
+execClauseWriter :: ClauseWriter t a -> [(Ast.ErasedTerm -> Ast.Predicate) -> Ast.HornClause]
+execClauseWriter = execWriter . unCW
+
 -- | Retrieve the internal representation of a 'Ast.HornClause' from a 'Clause'.
-astClause :: ClauseWriter t a -> [String -> Ast.HornClause]
-astClause = execWriter . unCW
+astClause :: (forall e. Ast.TermEntry e => Ast.Term e -> Ast.Predicate) ->
+             ClauseWriter t a -> [Ast.HornClause]
+astClause f = map ($Ast.termMap f) . execClauseWriter
 
 -- | A single branch of a conditional block, consisting of a condition 'Goal' and an action 'Goal'.
 data CondBranch = Branch Goal Goal

@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -15,6 +16,7 @@ import Control.Hspl.Internal.Solver
 import Control.Hspl.Internal.Unification
 import Control.Monad (liftM2)
 import Control.Monad.IO.Class
+import Data.CallStack (srcLocStartLine)
 import Data.Monoid hiding (Sum, Product)
 import Data.Typeable
 
@@ -404,13 +406,24 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
           do queryTheorem (ProofResult Top [patt] mempty) goal `shouldBe` []
              queryTheorem (ProofResult Top [goal] mempty) patt `shouldBe` []
     context "for a predicate goal" $ do
-      it "should match when the names are the same and the arguments unify" $
+      it "should match when the names are the same and the arguments unify" $ do
         PredGoal (predicate "foo" (Var "x" :: Var Char)) [] `shouldMatch`
           PredGoal (predicate "foo" 'a') []
+
+        let loc = Just srcLoc
+        let scope = Just "scope"
+        PredGoal (Predicate loc scope "foo" $ toTerm 'a') [] `shouldMatch`
+          PredGoal (Predicate loc scope "foo" $ toTerm 'a') []
       it "should not match when the names are different" $
         PredGoal (predicate "foo" 'a') [] `shouldNotMatch` PredGoal (predicate "bar" 'a') []
       it "should not match when the arguments don't unify" $
         PredGoal (predicate "foo" 'a') [] `shouldNotMatch` PredGoal (predicate "foo" 'b') []
+      it "should not match when the locations are different" $
+        PredGoal (Predicate (Just srcLoc) Nothing "foo" $ toTerm 'a') [] `shouldNotMatch`
+          PredGoal (Predicate (Just srcLoc { srcLocStartLine = __LINE__ }) Nothing "foo" $ toTerm 'a') []
+      it "should not match when the scopes are differnet" $
+        PredGoal (Predicate Nothing (Just "scope1") "foo" $ toTerm 'a') [] `shouldNotMatch`
+          PredGoal (Predicate Nothing (Just "scope2") "foo" $ toTerm 'a') []
     withParams [CanUnify, Identical, Equal, LessThan] $ \g ->
       context "for a binary term goal" $ do
         it "should match when the arguments unify" $ do

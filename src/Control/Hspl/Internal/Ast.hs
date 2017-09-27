@@ -69,7 +69,6 @@ module Control.Hspl.Internal.Ast (
   , termEntryMap
   -- ** Predicates
   , Predicate (..)
-  , predicate
   , predType
   -- ** Goals
   , Goal (..)
@@ -80,6 +79,7 @@ module Control.Hspl.Internal.Ast (
 
 import Control.Monad
 import Control.Monad.State
+import Data.CallStack
 import Data.Data
 import qualified Data.Map as M
 import Data.Maybe
@@ -729,25 +729,31 @@ termType _ = typeOf (undefined :: a)
 -- In this implementation, all predicates are 1-ary -- they each take a single term. This is
 -- sufficient because the generic nature of 'Term' means that the term could encode a product type
 -- such as a tuple, or (). Thus, 0-ary predicates have the form @Predicate "foo" (Constant ())@ and
--- n-ary predicates look like @Predicate "bar" (Tup ('a') (Tup ...))@.
-data Predicate = forall f. TermEntry f => Predicate String (Term f)
+-- n-ary predicates look like @Predicate loc "bar" (Tup ('a') (Tup ...))@.
+--
+-- We include with the predicate some identifying information, namely the location of the
+-- predicate's definition in the source code (if available) and user-provided scope string (if
+-- availabe). These is used to distinguish between different definitions of predicates with the same
+-- name. We cannot do so by simply looking at the definitions, since the definitions of recursive
+-- predicates are cyclical and traversing them does not terminate. Thus, we require that the
+-- combination (location, scope, name, type) uniquely identify the predicate.
+data Predicate = forall f. TermEntry f => Predicate (Maybe SrcLoc) (Maybe String) String (Term f)
 
 instance Show Predicate where
-  show (Predicate name args) = "Predicate " ++ show name ++ " (" ++ show args ++ ")"
+  show (Predicate loc scope name args) =
+    "Predicate " ++ parens loc ++ " " ++ parens scope ++ " " ++ show name ++ " (" ++ show args ++ ")"
+    where parens Nothing = "Nothing"
+          parens (Just x) = "(Just " ++ show x ++ ")"
 
 instance Eq Predicate where
-  Predicate p t == Predicate p' t' = case cast t' of
-    Just t'' -> p == p' && t == t''
+  Predicate loc scope p t == Predicate loc' scope' p' t' = case cast t' of
+    Just t'' -> loc == loc' && scope == scope' && p == p' && t == t''
     Nothing -> False
-
--- | Smart constructor for building 'Predicate's out of Haskell types.
-predicate :: TermData a => String -> a -> Predicate
-predicate s a = Predicate s (toTerm a)
 
 -- | Determine the HSPL type of a 'Predicate', which is defined to be the type of the 'Term' to
 -- which it is applied.
 predType :: Predicate -> TypeRep
-predType (Predicate _ t) = termType t
+predType (Predicate _ _ _ t) = termType t
 
 -- | A 'Goal' is a proposition which can appear as a negative literal in a 'HornClause'.
 data Goal =
@@ -800,12 +806,6 @@ data Goal =
 deriving instance Show Goal
 
 instance Eq Goal where
-  -- Here we make the assumption that if two predicates have the same name, they have the same
-  -- associated clauses. This is necessary because, for recursive predicates (very common and
-  -- useful) one of the clauses may contain a reference to the same top-level PredGoal, and so
-  -- traversing the clauses to check for equality may not terminate. Note that it is up to the user
-  -- to provide names that are unique to each predicate, or else there will be weird behavior
-  -- wherever we make this assumption.
   (==) (PredGoal p _) (PredGoal p' _) = p == p'
 
   (==) (CanUnify t1 t2) (CanUnify t1' t2') = case cast (t1', t2') of

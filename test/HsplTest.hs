@@ -1,10 +1,14 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module HsplTest where
 
-import Testing
+import Testing hiding (predicate)
+import qualified Testing as Test
 import Control.Hspl
 import qualified Control.Hspl.Internal.Ast as Ast
 import           Control.Hspl.Internal.Ast (Goal (..), Var (..))
@@ -12,8 +16,10 @@ import qualified Control.Hspl.Internal.Solver as Solver
 import Control.Hspl.Internal.Syntax
 
 import Control.Monad.Writer
+import Data.CallStack
 import Data.Data
 import Data.List (permutations)
+import Data.Maybe
 import GHC.Generics
 
 data Arities = A1 Char
@@ -30,68 +36,119 @@ data BoundedEnum = E1 | E2 | E3 | E4
   deriving (Show, Eq, Typeable, Data, Generic, Ord, Bounded, Enum)
 instance Termable BoundedEnum
 
+testHsplPredScope :: Ast.Predicate -> Expectation
+testHsplPredScope (Ast.Predicate loc scope _ _) = do
+#if MIN_VERSION_base(4,8,1)
+  loc `shouldSatisfy` isJust
+  srcLocFile (fromJust loc) `shouldBe` "src/Control/Hspl.hs"
+  srcLocModule (fromJust loc) `shouldBe` "Control.Hspl"
+  scope `shouldSatisfy` isNothing
+#else
+  loc `shouldSatisfy` isNothing
+  scope `shouldBe` Just "Control.Hspl"
+#endif
+
+-- base-4.9.0 changed how the end column of the expression is defined
+#if MIN_VERSION_base(4,9,0)
+#define FOO_END_COL 22
+#else
+#define FOO_END_COL 16
+#endif
 foo :: Predicate Char
 foo = predicate "foo" $ match (v"x")
+#if MIN_VERSION_base(4,8,1)
+fooLoc = Just srcLoc { srcLocStartLine = __LINE__ - 2
+                     , srcLocStartCol = 7
+                     , srcLocEndLine = __LINE__ - 4
+                     , srcLocEndCol = FOO_END_COL
+                     }
+#else
+fooLoc = Nothing
+#endif
+#undef FOO_END_COL
 
-fooDefs = [Ast.HornClause (Ast.predicate "foo" (Var "x" :: Var Char)) Top]
+fooDefs = [Ast.HornClause (Ast.Predicate fooLoc Nothing "foo" $ toTerm (Var "x" :: Var Char)) Top]
 
+correctFoo t = Ast.PredGoal (Ast.Predicate fooLoc Nothing "foo" (toTerm t)) fooDefs
+
+-- base-4.9.0 changed how the end column of the expression is defined
+#if MIN_VERSION_base(4,9,0)
+#define BAR_END_COL 22
+#else
+#define BAR_END_COL 16
+#endif
 bar :: Predicate (Char, Char)
 bar = predicate "bar" $ match (v"x", v"y")
+#if MIN_VERSION_base(4,8,1)
+barLoc = Just srcLoc { srcLocStartLine = __LINE__ - 2
+                     , srcLocStartCol = 7
+                     , srcLocEndLine = __LINE__ - 4
+                     , srcLocEndCol = BAR_END_COL
+                     }
+#else
+barLoc = Nothing
+#endif
+#undef BAR_END_COL
 
-barDefs = [Ast.HornClause (Ast.predicate "bar" (Var "x" :: Var Char, Var "y" :: Var Char)) Top]
+barDefs = [Ast.HornClause (Ast.Predicate barLoc Nothing "bar" $ toTerm (Var "x" :: Var Char, Var "y" :: Var Char)) Top]
 
+correctBar t = Ast.PredGoal (Ast.Predicate barLoc Nothing "bar" (toTerm t)) barDefs
+
+-- base-4.9.0 changed how the end column of the expression is defined
+#if MIN_VERSION_base(4,9,0)
+#define GENERIC_END_COL 30
+#else
+#define GENERIC_END_COL 20
+#endif
 generic :: Ast.TermEntry a => Predicate a
 generic = predicate "generic" $ match (v"x")
+#if MIN_VERSION_base(4,8,1)
+genericLoc = Just srcLoc { srcLocStartLine = __LINE__ - 2
+                         , srcLocStartCol = 11
+                         , srcLocEndLine = __LINE__ - 4
+                         , srcLocEndCol = GENERIC_END_COL
+                         }
+#else
+genericLoc = Nothing
+#endif
+#undef GENERIC_END_COL
 
 genericDefs :: forall a. Ast.TermEntry a => a -> [Ast.HornClause]
-genericDefs _ = [Ast.HornClause (Ast.predicate "generic" (Var "x" :: Var a)) Top]
+genericDefs _ = [Ast.HornClause (Ast.Predicate genericLoc Nothing "generic" $ toTerm (Var "x" :: Var a)) Top]
+
+correctGeneric :: forall a. Ast.TermData a => a -> Ast.Goal
+correctGeneric t = Ast.PredGoal (Ast.Predicate genericLoc Nothing "generic" (toTerm t))
+                                (genericDefs (undefined :: Ast.HSPLType a))
 
 test = describeModule "Control.Hspl" $ do
   describe "predicate application" $ do
-    let exec = astGoal
     it "should convert a Predicate and a TermData to a Goal" $ do
-      exec (foo? 'a') `shouldBe` Ast.PredGoal (Ast.predicate "foo" 'a') fooDefs
-      exec (foo? (Var "x" :: Var Char)) `shouldBe`
-        Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs
-      exec (bar? ('a', Var "x" :: Var Char)) `shouldBe`
-        Ast.PredGoal (Ast.predicate "bar" ('a', Var "x" :: Var Char)) barDefs
+      astGoal (foo? 'a') `shouldBe` correctFoo 'a'
+      astGoal (foo? char "x") `shouldBe` correctFoo (char "x")
+      astGoal (bar? ('a', char "x")) `shouldBe` correctBar ('a', char "x")
     it "should handle generic predicates" $ do
-      exec (generic? 'a') `shouldBe` Ast.PredGoal (Ast.predicate "generic" 'a') (genericDefs 'a')
-      exec (generic? "a") `shouldBe` Ast.PredGoal (Ast.predicate "generic" "a") (genericDefs "a")
-      exec (generic? (1 :: Int)) `shouldBe`
-        Ast.PredGoal (Ast.predicate "generic" (1 :: Int)) (genericDefs (1 :: Int))
+      astGoal (generic? 'a') `shouldBe` correctGeneric 'a'
+      astGoal (generic? "a") `shouldBe` correctGeneric "a"
+      astGoal (generic? (1 :: Int)) `shouldBe` correctGeneric (1::Int)
   describe "pattern matching" $ do
     let name = "dummy"
-    let run w = map ($name) $ astClause w
+    let run = astClause $ Test.predicate name
     it "should build a clause from a pattern and a GoalWriter" $ do
       run (match (Var "x" :: Var Char) |- foo? (Var "x" :: Var Char)) `shouldBe`
-        [Ast.HornClause (Ast.predicate name (Var "x" :: Var Char))
-                        (Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs)]
+        [Ast.HornClause (Test.predicate name (Var "x" :: Var Char)) (correctFoo $ char "x")]
       run (match 'a' |- foo? (Var "x" :: Var Char)) `shouldBe`
-        [Ast.HornClause (Ast.predicate name 'a')
-                        (Ast.PredGoal (Ast.predicate "foo" (Var "x" :: Var Char)) fooDefs)]
+        [Ast.HornClause (Test.predicate name 'a') (correctFoo $ char "x")]
     it "should build unit clauses" $
-      run (match 'a') `shouldBe` [Ast.HornClause (Ast.predicate name 'a') Top]
+      run (match 'a') `shouldBe` [Ast.HornClause (Test.predicate name 'a') Top]
   describe "program execution" $ do
     let human = predicate "human" $ do { match "hypatia"; match "fred" }
-    let humanDefs = [ Ast.HornClause (Ast.predicate "human" "hypatia") Top
-                    , Ast.HornClause (Ast.predicate "human" "fred") Top
-                    ]
     let mortal = predicate "mortal" $ match (string "x") |- human? string "x"
-    let mortalDefs = [Ast.HornClause (Ast.predicate "mortal" (Var "x" :: Var String))
-                                     (Ast.PredGoal (Ast.predicate "human" (Var "x" :: Var String)) humanDefs)]
     it "should obtain all solutions when requested" $
-      runHspl (mortal? v"x") `shouldBe`
-        Solver.runHspl
-          (Ast.PredGoal (Ast.predicate "mortal" (Var "x" :: Var String)) mortalDefs)
+      getAllTheorems (runHspl $ mortal? v"x") `shouldBe` [mortal? "hypatia", mortal? "fred"]
     it "should retrieve only the first solution when requested" $
-      runHspl1 (mortal? v"x") `shouldBe`
-        Just (head $ Solver.runHsplN 1
-          (Ast.PredGoal (Ast.predicate "mortal" (Var "x" :: Var String)) mortalDefs))
+      getAllTheorems (runHspl1 $ mortal? v"x") `shouldBe` Just (mortal? "hypatia")
     it "should retrieve at most the requested number of solutions" $
-      runHsplN 1 (mortal? v"x") `shouldBe`
-        Solver.runHsplN 1
-          (Ast.PredGoal (Ast.predicate "mortal" (Var "x" :: Var String)) mortalDefs)
+      getAllTheorems (runHsplN 1 $ mortal? v"x") `shouldBe` [mortal? "hypatia"]
     it "should handle failure gracefully" $ do
       runHspl (mortal? "bob") `shouldBe` []
       runHspl1 (mortal? "bob") `shouldBe` Nothing
@@ -150,14 +207,40 @@ test = describeModule "Control.Hspl" $ do
         p = do match(char "x") |- true
                match(char "y") |- false
                match 'z'
+
+-- base-4.9.0 changed how the start column of let expressions is defined
+#if MIN_VERSION_base(4,9,0)
+#define PATTRS_START_COL 9
+#else
+#define PATTRS_START_COL 18
+#endif
+    let pAttrs = predicate'
+#if MIN_VERSION_base(4,8,1)
+    let pAttrsLoc = Just srcLoc { srcLocStartLine = __LINE__ - 2
+                                , srcLocStartCol = PATTRS_START_COL
+                                , srcLocEndLine = __LINE__ - 4
+                                , srcLocEndCol = 28
+                                }
+#else
+    let pAttrsLoc = Nothing
+#endif
+#undef PATTRS_START_COL
+
+    it "should allow the creation of scoped predicates" $
+      astGoal (pAttrs [Scope "scope"] "foo" p? char "z") `shouldEqual`
+        Ast.PredGoal (Ast.Predicate pAttrsLoc (Just "scope") "foo" (toTerm $ char "z"))
+                     (astClause (Ast.Predicate pAttrsLoc (Just "scope") "foo") p)
     withParams [(SemiDet, once), (Theorem, track)] $ \(attr, g) ->
       it "should wrap the predicate whenever it is invoked" $
-          (predicate' [attr] "foo" p? char "z") `shouldEqual`
-            g (predicate "foo" p? char "z")
-    withParams (permutations [SemiDet, Theorem]) $ \attrs ->
-      it "should apply in the order: Theorem, SemiDet" $
-        (predicate' attrs "foo" p? char "z") `shouldEqual`
-          once (track $ predicate "foo" p? char "z")
+          astGoal (pAttrs [attr] "foo" p? char "z") `shouldEqual`
+            astGoal (g $ tell $ Ast.PredGoal (Ast.Predicate pAttrsLoc Nothing "foo" (toTerm $ char "z"))
+                                             (astClause (Ast.Predicate pAttrsLoc Nothing "foo") p))
+    withParams (permutations [SemiDet, Theorem, Scope "scope"]) $ \attrs ->
+      it "should apply in the order: Scope, Theorem, SemiDet" $
+        astGoal (pAttrs attrs "foo" p? char "z") `shouldEqual`
+          astGoal (once $ track $ tell $
+            Ast.PredGoal (Ast.Predicate pAttrsLoc (Just "scope") "foo" (toTerm $ char "z"))
+                         (astClause (Ast.Predicate pAttrsLoc (Just "scope") "foo") p))
 
   describe "the cut predicate" $
     it "should create a Cut goal" $
@@ -179,11 +262,15 @@ test = describeModule "Control.Hspl" $ do
       it "should create a nested goal" $
         astGoal (p true) `shouldBe` g (astGoal true)
 
-  describe "The enum predicate" $
+  describe "The enum predicate" $ do
     it "should backtrack over all elements of a bounded enumerable type" $ do
       let us = runHspl $ enum? (v"x" :: Var BoundedEnum)
       length us `shouldBe` 4
       queryVar (head us) (v"x") `shouldBe` Unified E1
+    it "should be tagged with the correct scope" $
+      case (astGoal $ enum? (char "x")) of
+        Ast.PredGoal p cs ->
+          testHsplPredScope p >> forM_ cs (\(Ast.HornClause p _) -> testHsplPredScope p)
 
   describe "list term construction" $ do
     context "via cons" $ do
@@ -283,16 +370,22 @@ test = describeModule "Control.Hspl" $ do
         bagOfN 2 (v"x") (enum? (v"x" :: Var BoundedEnum)) (toTerm [E1, E2])
       queryVar (head results) (v"xs") `shouldBe` Unified [E1, E2]
 
-  describe "the unified predicate" $
+  describe "the unified predicate" $ do
     it "should create an IsUnified goal" $
-      astGoal (unified? int "x") `shouldBe`
-        PredGoal (Ast.predicate "unified" (int "x"))
-                 [Ast.HornClause (Ast.predicate "unified" (int "x")) (IsUnified $ toTerm $ int "x")]
-  describe "the variable predicate" $
+      case astGoal (unified? int "x") of
+        Ast.PredGoal _ [Ast.HornClause _ g] -> g `shouldBe` IsUnified (toTerm $ int "x")
+    it "should be tagged with the correct scope" $
+      case astGoal (unified? int "x") of
+        Ast.PredGoal p cs ->
+          testHsplPredScope p >> forM_ cs (\(Ast.HornClause p _) -> testHsplPredScope p)
+  describe "the variable predicate" $ do
     it "should create an IsVariable goal" $
-      astGoal (variable? int "x") `shouldBe`
-        PredGoal (Ast.predicate "variable" (int "x"))
-                 [Ast.HornClause (Ast.predicate "variable" (int "x")) (IsVariable $ toTerm $ int "x")]
+      case astGoal (variable? int "x") of
+        Ast.PredGoal _ [Ast.HornClause _ g] -> g `shouldBe` IsVariable (toTerm $ int "x")
+    it "should be tagged with the correct scope" $
+      case astGoal (variable? int "x") of
+        Ast.PredGoal p cs ->
+          testHsplPredScope p >> forM_ cs (\(Ast.HornClause p _) -> testHsplPredScope p)
 
   describe "the |=| predicate" $ do
     it "should create a CanUnify goal from TermData" $ do
@@ -421,15 +514,14 @@ test = describeModule "Control.Hspl" $ do
         exec ((1 :: Int) |>=| ((2 :: Int) |+| (3 :: Int)))
 
   describe "the ||| predicate" $ do
-    let exec = astGoal
     it "should create an Or goal from two goals" $
-      exec (foo? 'a' ||| foo? 'b') `shouldBe`
-        Or (PredGoal (Ast.predicate "foo" 'a') fooDefs) (PredGoal (Ast.predicate "foo" 'b') fooDefs)
+      astGoal (foo? 'a' ||| foo? 'b') `shouldBe`
+        Or (astGoal $ foo? 'a') (astGoal $ foo? 'b')
     it "should permit nested expressions" $
-      exec (foo? 'a' ||| do {foo? 'b'; foo? 'c'}) `shouldBe`
-        Or (PredGoal (Ast.predicate "foo" 'a') fooDefs)
-           (And (PredGoal (Ast.predicate "foo" 'b') fooDefs)
-                (PredGoal (Ast.predicate "foo" 'c') fooDefs))
+      astGoal (foo? 'a' ||| do {foo? 'b'; foo? 'c'}) `shouldBe`
+        Or (astGoal $ foo? 'a')
+           (And (astGoal $ foo? 'b')
+                (astGoal $ foo? 'c'))
 
   describe "the true predicate" $
     it "should create a Top goal" $

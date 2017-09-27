@@ -143,7 +143,7 @@ traceFail g = do
   trace $ "(" ++ show d ++ ") Fail: " ++ formatGoal g
 
 traceUnknownPred :: Predicate -> Trace ()
-traceUnknownPred p@(Predicate name arg) = do
+traceUnknownPred p@(Predicate _ _ name arg) = do
   d <- ascend
   trace $ "(" ++ show d ++ ") Error: Unknown predicate \"" ++ name ++ " :: " ++ formatType (predType p) ++ "\""
 

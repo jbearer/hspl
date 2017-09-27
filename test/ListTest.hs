@@ -1,11 +1,16 @@
+{-# LANGUAGE CPP #-}
 module ListTest where
 
 import Testing
 import Control.Hspl
 import qualified Control.Hspl.List as L
 import Control.Hspl.Internal.Ast
+import qualified Control.Hspl.Internal.Ast as Ast
+import Control.Hspl.Internal.Syntax
 
 import Control.Monad
+import Data.CallStack
+import Data.Maybe
 import Data.Monoid
 
 test = describeModule "Control.Hspl.List" $ do
@@ -154,3 +159,26 @@ test = describeModule "Control.Hspl.List" $ do
       length (getAllTheorems $ runHspl $ L.delete? (['b'], 'b', ['b'])) `shouldBe` 0
       length (getAllTheorems $ runHspl $ L.delete? (['a', 'b'], 'b', ['a', 'b'])) `shouldBe` 0
       length (getAllTheorems $ runHspl $ L.delete? (['a', 'b'], 'b', ['a', 'c'])) `shouldBe` 0
+
+  describe "predicate scoping" $ do
+    let runTest :: Ast.Predicate -> Expectation
+        runTest (Predicate loc scope _ _) = do
+#if MIN_VERSION_base(4,8,1)
+          loc `shouldSatisfy` isJust
+          srcLocFile (fromJust loc) `shouldBe` "src/Control/Hspl/List.hs"
+          srcLocModule (fromJust loc) `shouldBe` "Control.Hspl.List"
+          scope `shouldSatisfy` isNothing
+#else
+          loc `shouldSatisfy` isNothing
+          scope `shouldBe` Just "Control.Hspl.List"
+#endif
+
+    withParams [ L.member?('a', __)
+               , L.length?("foo", __)
+               , L.delete?(__, 'a', __)
+               , L.nth?(__, __, 'a')
+               ] $ \p ->
+      it "should indicate the module where the predicate is defined" $
+        case astGoal p of
+          PredGoal p cs -> runTest p >> forM_ cs (\(HornClause p _) -> runTest p)
+          g -> failure $ "Expected PredGoal but got " ++ show g

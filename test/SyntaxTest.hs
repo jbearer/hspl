@@ -25,10 +25,11 @@ test = describeModule "Control.Hspl.Internal.Syntax" $ do
     it "should be the inverse of tell" $
       astGoal (tell Top) `shouldBe` Top
   describe "astClause" $
-    it "should return a list of clause constructors" $
-      map ($"foo") (astClause (tell [ \s -> HornClause (predicate s 'a') Top
-                                    , \s -> HornClause (predicate s 'b') Top
-                                    ])) `shouldBe`
+    it "should return a list of clauses" $
+      astClause (predicate "foo")
+                (tell [ \mkPred -> HornClause (mkPred $ ETerm $ toTerm 'a') Top
+                      , \mkPred -> HornClause (mkPred $ ETerm $ toTerm 'b') Top
+                      ]) `shouldBe`
         [ HornClause (predicate "foo" 'a') Top
         , HornClause (predicate "foo" 'b') Top
         ]

@@ -7,7 +7,7 @@
 module UITest where
 
 import Testing
-import Control.Hspl
+import Control.Hspl hiding (predicate)
 import qualified Control.Hspl as Hspl
 import Control.Hspl.Internal.Ast
 import qualified Control.Hspl.Internal.Ast as Ast
@@ -165,14 +165,14 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
 
   describe "formatPredicate" $ do
     it "should produce a readable representation of a predicate" $
-      formatPredicate (Ast.predicate "foo" 'a') `shouldBe` ("foo? " ++ formatTerm (toTerm 'a'))
+      formatPredicate (predicate "foo" 'a') `shouldBe` ("foo? " ++ formatTerm (toTerm 'a'))
     it "should parenthesize the term where necessary" $
-      formatPredicate (Ast.predicate "foo" ((1 :: Int) |+| (2 :: Int))) `shouldBe`
+      formatPredicate (predicate "foo" ((1 :: Int) |+| (2 :: Int))) `shouldBe`
         ("foo? (" ++ formatTerm ((1 :: Int) |+| (2 :: Int)) ++ ")")
 
   describe "formatGoal" $ do
-    withParams [ PredGoal (Ast.predicate "foo" 'a') []
-               , PredGoal (Ast.predicate "foo" 'a') [HornClause (Ast.predicate "foo" 'a') Top]
+    withParams [ PredGoal (predicate "foo" 'a') []
+               , PredGoal (predicate "foo" 'a') [HornClause (predicate "foo" 'a') Top]
                ] $ \g@(PredGoal p _) ->
       it "should format the predicate of a PredGoal, ignoring the clauses" $
         formatGoal g `shouldBe` formatPredicate p
@@ -209,7 +209,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
             formatGoal (astGoal $ findN 42 x (tell g) xs) `shouldBe`
               ("findN 42 " ++ parensTerm x ++ " " ++ parensGoal g ++ " " ++ parensTerm xs)
   describe "parensGoal" $ do
-    withParams [ PredGoal (Ast.predicate "foo" ()) []
+    withParams [ PredGoal (predicate "foo" ()) []
                , CanUnify (toTerm 'a') (toTerm 'b')
                , Identical (toTerm 'a') (toTerm 'b')
                , Equal (toTerm 'a') (toTerm 'b')
@@ -229,8 +229,8 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
 
   describe "formatClause" $
     it "should show a ClauseWriter" $ do
-      let runTest cw lns = let [f] = astClause cw
-                           in formatClause (f "") `shouldEqual` intercalate "\n" lns
+      let runTest cw lns = let [c] = astClause (predicate "") cw
+                           in formatClause c `shouldEqual` intercalate "\n" lns
       let foo = Hspl.predicate "foo" $ match 'a'
       runTest (match ()) ["match ()"]
       runTest ( match () |-

@@ -34,12 +34,12 @@ import qualified Control.Hspl as Hspl
 
 import Control.Exception (evaluate)
 import Control.Monad.State
+import Data.CallStack
 import Data.Char
 import Data.Data
 import Data.List
 import Data.Maybe
 import Data.Time.Clock
-import Data.CallStack
 import GHC.Generics
 import System.Console.GetOpt
 import System.Directory
@@ -253,7 +253,7 @@ genPrologTerm (IntQuotient t1 t2) = "div(" ++ genPrologTerm t1 ++ "," ++ genProl
 genPrologTerm (Modulus t1 t2) = "mod(" ++ genPrologTerm t1 ++ "," ++ genPrologTerm t2 ++ ")"
 
 genPrologGoal :: Ast.Goal -> String
-genPrologGoal (PredGoal (Predicate name arg) _) = prologAtomCase name ++ "(" ++ expand arg ++ ")"
+genPrologGoal (PredGoal (Predicate _ _ name arg) _) = prologAtomCase name ++ "(" ++ expand arg ++ ")"
   where expand (Tup tup) = joinTup tup
         expand t = genPrologTerm t
 

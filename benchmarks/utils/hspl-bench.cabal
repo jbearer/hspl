@@ -19,9 +19,9 @@ library
                      , hspl
                      , time
                      , mtl
-                     , call-stack
                      , process
                      , directory
                      , filepath
                      , pptable
+                     , call-stack
   exposed-modules:     Bench

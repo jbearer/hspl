@@ -102,8 +102,9 @@ queryTheorem ProofResult {..} target = do
   return $ fromJust mg
   where
     -- Unify a goal with the query goal and return the unified goal, or Nothing
-    matchGoal (PredGoal prd@(Predicate name arg) _) (PredGoal (Predicate name' arg') _)
-      | name == name' = case cast arg' >>= mgu arg of
+    matchGoal (PredGoal prd@(Predicate loc scope name arg) _)
+              (PredGoal (Predicate loc' scope' name' arg') _)
+      | loc == loc' && scope == scope' && name == name' = case cast arg' >>= mgu arg of
           Just u -> Just $ PredGoal (unify u prd) []
           Nothing -> Nothing
       | otherwise = Nothing

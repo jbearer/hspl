@@ -10,6 +10,7 @@
 module AstTest where
 
 import Control.Monad (forM_)
+import Data.CallStack (srcLocStartLine)
 import Data.Data
 import Data.Monoid hiding (Sum, Product)
 import GHC.Generics
@@ -487,12 +488,17 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       predType (predicate "foo" ()) `shouldBe` termType (toTerm ())
       predType (predicate "foo" True) `shouldBe` termType (toTerm True)
       predType (predicate "foo" (True, False)) `shouldBe` termType (toTerm (True, False))
-    context "of the same name and type" $
+    context "of the same name, type, scope, and location" $
       it "should compare according to that type's comparison operator" $ do
-        predicate "foo" True `shouldEqual` Predicate "foo" (toTerm True)
-        predicate "foo" (True, ()) `shouldEqual` Predicate "foo" (toTerm (True, ()))
+        predicate "foo" True `shouldEqual` predicate "foo" (toTerm True)
+        predicate "foo" (True, ()) `shouldEqual` predicate "foo" (toTerm (True, ()))
         predicate "foo" True `shouldNotEqual` predicate "foo" False
         predicate "foo" (True, ()) `shouldNotEqual` predicate "foo" (False, ())
+
+        let loc = Just srcLoc
+        let scope = Just "scope"
+        Predicate loc scope "foo" (toTerm True) `shouldEqual` Predicate loc scope "foo" (toTerm True)
+        Predicate loc scope "foo" (toTerm True) `shouldNotEqual` Predicate loc scope "foo" (toTerm False)
     context "of the same type, but with different names" $
       it "should compare unequal" $ do
         predicate "foo" True `shouldNotEqual` predicate "bar" True
@@ -500,12 +506,24 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
     context "of different types" $
       it "should compare unequal" $
         predicate "foo" True `shouldNotEqual` predicate "foo" (True, False)
+    context "of different locations" $
+      it "should compare unequal" $ do
+        let loc1 = Just srcLoc
+        let loc2 = Just srcLoc { srcLocStartLine = __LINE__ }
+        Predicate loc1 Nothing "foo" (toTerm ()) `shouldNotEqual`
+          Predicate loc2 Nothing "foo" (toTerm ())
+    context "of different scopes" $
+      it "should compare unequal" $
+        Predicate Nothing (Just "scope1") "foo" (toTerm ()) `shouldNotEqual`
+          Predicate Nothing (Just "scope2") "foo" (toTerm ())
   describe "Predicate goals" $ do
     it "should compare based on the predicate" $ do
       PredGoal (predicate "foo" ()) [] `shouldEqual` PredGoal (predicate "foo" ()) []
       PredGoal (predicate "foo" ()) [] `shouldNotEqual` PredGoal (predicate "bar" ()) []
       PredGoal (predicate "foo" True) [] `shouldNotEqual` PredGoal (predicate "foo" ()) []
       PredGoal (predicate "foo" True) [] `shouldNotEqual` PredGoal (predicate "foo" False) []
+      PredGoal (Predicate (Just srcLoc) Nothing "foo" $ toTerm True) [] `shouldNotEqual`
+        PredGoal (Predicate (Just srcLoc { srcLocStartLine = __LINE__ }) Nothing "foo" $ toTerm True) []
     it "should compare successfully even when recursive" $ do
       let g = PredGoal (predicate "foo" 'a') [HornClause (predicate "foo" (Var "x" :: Var Char)) g]
       g `shouldEqual` g
