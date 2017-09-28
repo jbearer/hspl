@@ -156,7 +156,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
       shouldNotParens 'a'
     it "should parenthesize variables" $
       shouldParens (char "x")
-    withParams [nil, toTerm ['a'], toTerm ['a', 'b'], 'a'.:.char \* "xs"] $ \l ->
+    withParams [nil, toTerm ['a'], toTerm ['a', 'b'], 'a'.:.string "xs"] $ \l ->
       it "should not parenthesize lists" $
         shouldNotParens l
     it "should not parenthesize tuples" $ do
@@ -217,8 +217,8 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
                , Not Top
                , And Top Bottom
                , Or Top Bottom
-               , Alternatives Nothing (toTerm $ char "x") Top (toTerm $ char \* "xs")
-               , Alternatives (Just 42) (toTerm $ char "x") Top (toTerm $ char \* "xs")
+               , Alternatives Nothing (toTerm $ char "x") Top (toTerm $ string "xs")
+               , Alternatives (Just 42) (toTerm $ char "x") Top (toTerm $ string "xs")
                , CutFrame Top
                ] $ \g ->
       it "should add parentheses where necessary" $

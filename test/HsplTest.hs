@@ -19,8 +19,10 @@ import Control.Monad.Writer
 import Data.CallStack
 import Data.Data
 import Data.List (permutations)
-import Data.Maybe
+import Data.Maybe (isJust, isNothing, fromJust)
 import GHC.Generics
+
+import Prelude hiding (maybe, either)
 
 data Arities = A1 Char
              | A2 Char Char
@@ -161,12 +163,29 @@ test = describeModule "Control.Hspl" $ do
       integer "x" `shouldBe` (Var "x" :: Var Integer)
       char "x" `shouldBe` (Var "x" :: Var Char)
       string "x" `shouldBe` (Var "x" :: Var String)
+      unit "x" `shouldBe` (Var "x" :: Var ())
+    it "should construct Maybe variables" $ do
+      maybe char "x" `shouldBe` (Var "x" :: Var (Maybe Char))
+      maybe int "x" `shouldBe` (Var "x" :: Var (Maybe Int))
+    it "should construct Either variables" $ do
+      either char bool "x" `shouldBe` (Var "x" :: Var (Either Char Bool))
+      either int double "x" `shouldBe` (Var "x" :: Var (Either Int Double))
     it "should construct variables of list type" $ do
-      bool \* "x" `shouldBe` (Var "x" :: Var [Bool])
-      int \* "x" `shouldBe` (Var "x" :: Var [Int])
-      integer \* "x" `shouldBe` (Var "x" :: Var [Integer])
-      char \* "x" `shouldBe` (Var "x" :: Var String)
-      string \* "x" `shouldBe` (Var "x" :: Var [String])
+      list bool "x" `shouldBe` (Var "x" :: Var [Bool])
+      list int "x" `shouldBe` (Var "x" :: Var [Int])
+      list integer "x" `shouldBe` (Var "x" :: Var [Integer])
+      list char "x" `shouldBe` (Var "x" :: Var String)
+      list string "x" `shouldBe` (Var "x" :: Var [String])
+    it "should construct variables of tuple type" $ do
+      tup (int, char) "x" `shouldBe` (Var "x" :: Var (Int, Char))
+      tup (int, char, maybe bool) "x" `shouldBe` (Var "x" :: Var (Int, Char, Maybe Bool))
+      tup (int, char, maybe bool, unit) "x" `shouldBe` (Var "x" :: Var (Int, Char, Maybe Bool, ()))
+      tup (int, char, maybe bool, unit, double) "x" `shouldBe`
+        (Var "x" :: Var (Int, Char, Maybe Bool, (), Double))
+      tup (int, char, maybe bool, unit, double, integer) "x" `shouldBe`
+        (Var "x" :: Var (Int, Char, Maybe Bool, (), Double, Integer))
+      tup (int, char, maybe bool, unit, double, integer, tup (list string, char)) "x" `shouldBe`
+        (Var "x" :: Var (Int, Char, Maybe Bool, (), Double, Integer, ([String], Char)))
     it "should deduce the type of generic variables" $ do
       auto "x" `shouldBe` (Var "x" :: Var Bool)
       auto "x" `shouldBe` (Var "x" :: Var Int)
@@ -179,10 +198,42 @@ test = describeModule "Control.Hspl" $ do
       v"x" `shouldBe` (Var "x" :: Var Char)
       v"x" `shouldBe` (Var "x" :: Var String)
 
-  describe "anonymous variables" $
+  describe "anonymous variables" $ do
     it "should be constructible with __" $ do
       __ `shouldBe` (Anon :: Var Bool)
       __ `shouldBe` (Anon :: Var Char)
+    context "of a primitive type" $
+      it "should be constructible with the appropriate helper" $ do
+        _bool `shouldBe` (Anon :: Var Bool)
+        _int `shouldBe` (Anon :: Var Int)
+        _integer `shouldBe` (Anon :: Var Integer)
+        _char `shouldBe` (Anon :: Var Char)
+        _string `shouldBe` (Anon :: Var String)
+        _unit `shouldBe` (Anon :: Var ())
+    context "of a list type" $
+      it "should be constructible with _list" $ do
+        _list int `shouldBe` (Anon :: Var [Int])
+        _list (maybe int) `shouldBe` (Anon :: Var [Maybe Int])
+    context "of a tuple type" $
+      it "should be constructible with _tup" $ do
+        _tup (int, char) `shouldBe` (Anon :: Var (Int, Char))
+        _tup (int, char, maybe bool) `shouldBe` (Anon :: Var (Int, Char, Maybe Bool))
+        _tup (int, char, maybe bool, unit) `shouldBe` (Anon :: Var (Int, Char, Maybe Bool, ()))
+        _tup (int, char, maybe bool, unit, double) `shouldBe`
+          (Anon :: Var (Int, Char, Maybe Bool, (), Double))
+        _tup (int, char, maybe bool, unit, double, integer) `shouldBe`
+          (Anon :: Var (Int, Char, Maybe Bool, (), Double, Integer))
+        _tup (int, char, maybe bool, unit, double, integer, tup (list string, char)) `shouldBe`
+          (Anon :: Var (Int, Char, Maybe Bool, (), Double, Integer, ([String], Char)))
+    context "of a Maybe type" $
+      it "should be constructible with _maybe" $ do
+        _maybe char `shouldBe` (Anon :: Var (Maybe Char))
+        _maybe int `shouldBe` (Anon :: Var (Maybe Int))
+    context "of an Either type" $
+      it "should be constructible with _either" $ do
+        _either char bool `shouldBe` (Anon :: Var (Either Char Bool))
+        _either int double `shouldBe` (Anon :: Var (Either Int Double))
+
 
   describe "ADT term construction" $ do
     it "should work with constructors of all arities" $ do
@@ -284,7 +335,7 @@ test = describeModule "Control.Hspl" $ do
       it "should be right associative" $
         char "x" .:. char "y" .:. "foo" `shouldBe` char "x" .:. (char "y" .:. "foo")
       it "should prepend a variable to a list variable" $
-        char "x" .:. char \* "xs" `shouldBe`
+        char "x" .:. string "xs" `shouldBe`
           Ast.List (Ast.VarCons (toTerm (Var "x" :: Var Char)) (Var "xs"))
     context "via concatenation" $ do
       it "should append a list of variables" $
@@ -305,7 +356,7 @@ test = describeModule "Control.Hspl" $ do
         ['a', 'b'].++.v"xs" `shouldBe`
           Ast.List (Ast.Cons (toTerm 'a') (Ast.VarCons
                              (toTerm 'b')
-                             (char \* "xs")))
+                             (string "xs")))
       it "should parse correctly with cons" $
         'a'.:."b".++."c" `shouldBe` toTerm "abc"
     context "via nil" $
@@ -338,7 +389,7 @@ test = describeModule "Control.Hspl" $ do
 
         let us = runHspl $ bagOf (char "x") (char "x" .=. char "y") (v"xs")
         length us `shouldBe` 1
-        case queryVar (head us) (char \* "xs") of
+        case queryVar (head us) (string "xs") of
           Partial t -> t `shouldBeAlphaEquivalentTo` [char "x"]
           st -> failure $ "Expected Partial [x], but got " ++ show st
     it "should fail if the inner goal fails" $
@@ -360,7 +411,7 @@ test = describeModule "Control.Hspl" $ do
 
         let us = runHspl $ bagOfN 42 (char "x") (char "x" .=. char "y") (v"xs")
         length us `shouldBe` 1
-        case queryVar (head us) (char \* "xs") of
+        case queryVar (head us) (string "xs") of
           Partial t -> t `shouldBeAlphaEquivalentTo` [char "x"]
           st -> failure $ "Expected Partial [x], but got " ++ show st
     it "should fail if the inner goal fails" $

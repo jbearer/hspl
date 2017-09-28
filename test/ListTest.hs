@@ -30,18 +30,18 @@ test = describeModule "Control.Hspl.List" $ do
       length us `shouldBe` 1
       queryVar (head us) (int "L") `shouldBe` Unified (3 :: Int)
     it "should generate lists of increasing length" $ do
-      let us = runHsplN 3 $ L.length? (char \* "xs", int "L")
+      let us = runHsplN 3 $ L.length? (string "xs", int "L")
       length us `shouldBe` 3
 
-      queryVar (head us) (char \* "xs") `shouldBe` Unified []
+      queryVar (head us) (string "xs") `shouldBe` Unified []
       queryVar (head us) (int "L") `shouldBe` Unified 0
 
-      case queryVar (us !! 1) (char \* "xs") of
+      case queryVar (us !! 1) (string "xs") of
         Partial t -> t `shouldBeAlphaEquivalentTo` [Fresh 0 :: Var Char]
         st -> fail $ "Expected [_0], but found " ++ show st
       queryVar (us !! 1) (int "L") `shouldBe` Unified 1
 
-      case queryVar (us !! 2) (char \* "xs") of
+      case queryVar (us !! 2) (string "xs") of
         Partial t -> t `shouldBeAlphaEquivalentTo` [Fresh 0 :: Var Char, Fresh 1 :: Var Char]
         st -> fail $ "Expected [_0, _1], but found " ++ show st
       queryVar (us !! 2) (int "L") `shouldBe` Unified 2
@@ -49,15 +49,15 @@ test = describeModule "Control.Hspl.List" $ do
       let us = runHsplN 3 $ L.length? ('a' .:. v"xs", int "L")
       length us `shouldBe` 3
 
-      queryVar (head us) (char \* "xs") `shouldBe` Unified []
+      queryVar (head us) (string "xs") `shouldBe` Unified []
       queryVar (head us) (int "L") `shouldBe` Unified 1
 
-      case queryVar (us !! 1) (char \* "xs") of
+      case queryVar (us !! 1) (string "xs") of
         Partial t -> t `shouldBeAlphaEquivalentTo` [Fresh 0 :: Var Char]
         st -> fail $ "Expected [_0], but found " ++ show st
       queryVar (us !! 1) (int "L") `shouldBe` Unified 2
 
-      case queryVar (us !! 2) (char \* "xs") of
+      case queryVar (us !! 2) (string "xs") of
         Partial t -> t `shouldBeAlphaEquivalentTo` [Fresh 0 :: Var Char, Fresh 1 :: Var Char]
         st -> fail $ "Expected [_0, _1], but found " ++ show st
       queryVar (us !! 2) (int "L") `shouldBe` Unified 3
@@ -79,7 +79,7 @@ test = describeModule "Control.Hspl.List" $ do
       queryVar (us !! 1) (char "x") `shouldBe` Unified 'b'
       queryVar (us !! 2) (char "x") `shouldBe` Unified 'c'
     it "should generate lists with the given element" $ do
-      let us = runHsplN 3 $ L.member? ('a', char \* "xs")
+      let us = runHsplN 3 $ L.member? ('a', string "xs")
       length us `shouldBe` 3
       forM_ [0..length us - 1] $ \n ->
         case queryVar (us !! n) (string "xs") of

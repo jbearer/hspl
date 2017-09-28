@@ -89,15 +89,32 @@ module Control.Hspl (
   , v
   -- *** Typed constructors
   -- $typedVars
+  , VarDecl
+  , TupleVar
   , bool
   , int
   , integer
   , char
   , double
   , string
-  , (\*)
+  , unit
+  , list
+  , tup
+  , maybe
+  , either
   -- *** Anonymous variablse
   , __
+  , _bool
+  , _int
+  , _integer
+  , _char
+  , _double
+  , _string
+  , _unit
+  , _list
+  , _tup
+  , _maybe
+  , _either
   -- ** Numbers
   -- | HSPL provides special semantics for numeric types. Arithmetic expressions can be created
   -- using the following operators and evaluated using 'is'.
@@ -123,7 +140,6 @@ module Control.Hspl (
 import Control.Exception (assert)
 import Control.Monad.Writer
 import Data.CallStack
-import Data.Data
 import Data.List (sort)
 
 import qualified Control.Hspl.Internal.Ast as Ast
@@ -144,6 +160,8 @@ import           Control.Hspl.Internal.Solver ( ProofResult
 import           Control.Hspl.Internal.Syntax
 import           Control.Hspl.Internal.Unification (UnificationStatus (..))
 
+import Prelude hiding (maybe, either)
+
 -- Operator precedences
 #define PREC 9
 
@@ -153,8 +171,6 @@ infixl PREC .*.
 infixl PREC ./.
 infixl PREC .\.
 infixl PREC .%.
-
-infixr PREC \*
 
 #undef PREC
 #define PREC 8
@@ -676,7 +692,7 @@ example. These convenience functions are provided for some primitive types. It i
 add your own, as in
 
 @
-  myType :: String -> Var MyType
+  myType :: VarDecl MyType
   myType = v
 @
 
@@ -686,48 +702,137 @@ the 'v' constructor, but the type annotation restricts the types that can be con
 annotations.
 -}
 
+-- | A type-constrained variable constructor.
+type VarDecl a = String -> Var a
+
+-- | Mapping from tuples of 'VarDecl' to tuples.
+type family TupleVar a where
+  TupleVar (VarDecl a1, VarDecl a2) = (a1, a2)
+  TupleVar (VarDecl a1, VarDecl a2, VarDecl a3) = (a1, a2, a3)
+  TupleVar (VarDecl a1, VarDecl a2, VarDecl a3, VarDecl a4) = (a1, a2, a3, a4)
+  TupleVar (VarDecl a1, VarDecl a2, VarDecl a3, VarDecl a4, VarDecl a5) = (a1, a2, a3, a4, a5)
+  TupleVar (VarDecl a1, VarDecl a2, VarDecl a3, VarDecl a4, VarDecl a5, VarDecl a6) = (a1, a2, a3, a4, a5, a6)
+  TupleVar (VarDecl a1, VarDecl a2, VarDecl a3, VarDecl a4, VarDecl a5, VarDecl a6, VarDecl a7) = (a1, a2, a3, a4, a5, a6, a7)
+
 -- | Construct a 'String' variable.
-string :: String -> Var String
-string = Var
+string :: VarDecl String
+string = v
+
+-- | Construct a '()' variable.
+unit :: VarDecl ()
+unit = v
 
 -- | Construct an 'Int' variable.
-int :: String -> Var Int
-int = Var
+int :: VarDecl Int
+int = v
 
 -- | Construct an 'Integer' variable.
-integer :: String -> Var Integer
-integer = Var
+integer :: VarDecl Integer
+integer = v
 
 -- | Construct a 'Bool' variable.
-bool :: String -> Var Bool
-bool = Var
+bool :: VarDecl Bool
+bool = v
 
 -- | Construct a 'Char' variable.
-char :: String -> Var Char
-char = Var
+char :: VarDecl Char
+char = v
 
--- | Contruct a 'Double' variable
-double :: String -> Var Double
-double = Var
+-- | Contruct a 'Double' variable.
+double :: VarDecl Double
+double = v
+
+-- | Construct a 'Maybe' variable. @maybe char "x"@ is a variable @x@ which represents a value of
+-- type @Maybe Char@.
+maybe :: VarDecl a -> VarDecl (Maybe a)
+maybe = const v
+
+-- | Construct an 'Either' variable. @either int char "x"@ is a variable @x@ which represents a
+-- value of type @Either Int Char@.
+either :: VarDecl l -> VarDecl r -> VarDecl (Either l r)
+either _ _ = v
 
 -- | Construct a variable which represents a list of terms.
 --
--- >>> char \* "x"
--- x :: [Char]
-(\*) :: Typeable a => (String -> Var a) -> String -> Var [a]
-(\*) _ = Var
+-- >>> list int "x"
+-- x :: [Int]
+list :: VarDecl a -> VarDecl [a]
+list = const v
+
+-- | Construct a variable which represents a tuple of terms.
+--
+-- >>> tup (int, int) "point"
+-- point :: (Int, Int)
+tup :: t -> VarDecl (TupleVar t)
+tup = const v
 
 -- | Construct a variable and let the Haskell compiler try to deduce its type.
-auto :: String -> Var a
+auto :: VarDecl a
 auto = Var
 
 -- | Terser, but less readable, synonym for 'auto'.
-v :: String -> Var a
+v :: VarDecl a
 v = auto
 
 -- | Anonymous variable. '__' unifies with any term, creating no bindings.
 __ :: Var a
 __ = Ast.Anon
+
+-- | An anonymous variable of type 'Bool'.
+_bool :: Var Bool
+_bool = __
+
+-- | An anonymous variable of type 'Int'.
+_int :: Var Int
+_int = __
+
+-- | An anonymous variable of type 'Integer'.
+_integer :: Var Integer
+_integer = __
+
+-- | An anonymous variable of type 'Char'.
+_char :: Var Char
+_char = __
+
+-- | An anonymous variable of type 'Double'.
+_double :: Var Double
+_double = __
+
+-- | An anonymous variable of type 'String'.
+_string :: Var String
+_string = __
+
+-- | An anonymous variable of type '()'.
+_unit :: Var ()
+_unit = __
+
+-- | @_list x@ is an anonymous variable of type @[X]@. For example,
+--
+-- >>> _list string
+-- __ :: String
+_list :: VarDecl a -> Var [a]
+_list = const __
+
+-- | @_tup t@ is an anonymous variable representing a tuple of type @t@. For example,
+--
+-- >>> _tup (int, char)
+-- __ :: (Int, Char)
+_tup :: t -> Var (TupleVar t)
+_tup = const __
+
+-- | @_maybe x@ is an anonymous variable of type @Maybe X@. For example,
+--
+-- >>> _maybe int
+-- __ :: Maybe Int
+_maybe :: VarDecl a -> Var (Maybe a)
+_maybe = const __
+
+-- | @_either x y@ is an anonymous variable of type @Either X Y@. For example,
+--
+-- >>> _either int string
+-- __ :: Either Int String
+_either :: VarDecl l -> VarDecl r -> Var (Either l r)
+_either _ _ = __
 
 {- $adts
 Algebraic data types can be used as normal HSPL terms as long as they are instances of 'Termable'.
