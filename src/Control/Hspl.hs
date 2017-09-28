@@ -49,21 +49,21 @@ module Control.Hspl (
   , cutFrame
   , track
   -- *** Unification, identity, equality, and inequality
-  , (|=|)
-  , (|\=|)
+  , (.=.)
+  , (./=.)
   , unified
   , variable
   , is
   , isnt
-  , (|==|)
-  , (|\==|)
-  , (|<|)
-  , (|<=|)
-  , (|>|)
-  , (|>=|)
+  , (.==.)
+  , (./==.)
+  , (.<.)
+  , (.<=.)
+  , (.>.)
+  , (.>=.)
   -- *** Logical connectives
   , lnot
-  , (|||)
+  , (.|.)
   , true
   , false
   , forAll
@@ -101,18 +101,18 @@ module Control.Hspl (
   -- ** Numbers
   -- | HSPL provides special semantics for numeric types. Arithmetic expressions can be created
   -- using the following operators and evaluated using 'is'.
-  , (|+|)
-  , (|-|)
-  , (|*|)
-  , (|/|)
-  , (|\|)
-  , (|%|)
+  , (.+.)
+  , (.-.)
+  , (.*.)
+  , (./.)
+  , (.\.)
+  , (.%.)
   , successor
   , predecessor
   -- ** Lists
   -- $lists
-  , (<:>)
-  , (<++>)
+  , (.:.)
+  , (.++.)
   , nil
   -- ** ADTs
   -- $adts
@@ -149,19 +149,25 @@ import           Control.Hspl.Internal.Unification (UnificationStatus (..))
 
 infix PREC ?
 
-infixl PREC |*|
-infixl PREC |/|
-infixl PREC |\|
-infixl PREC |%|
+infixl PREC .*.
+infixl PREC ./.
+infixl PREC .\.
+infixl PREC .%.
 
 infixr PREC \*
-infixr PREC <:>
 
 #undef PREC
 #define PREC 8
 
-infixl PREC |+|
-infixl PREC |-|
+infixl PREC .+.
+infixl PREC .-.
+
+infixr PREC .++. -- Has a higher precedence than .:. so that expressions like 'a'.:."b".++."c" are valid
+
+#undef PREC
+#define PREC 7
+
+infixr PREC .:.
 
 #undef PREC
 #define PREC 4
@@ -173,14 +179,14 @@ infixr PREC $$
 
 infix PREC `is`
 infix PREC `isnt`
-infix PREC |=|
-infix PREC |\=|
-infix PREC |==|
-infix PREC |\==|
-infix PREC |<|
-infix PREC |<=|
-infix PREC |>|
-infix PREC |>=|
+infix PREC .=.
+infix PREC ./=.
+infix PREC .==.
+infix PREC ./==.
+infix PREC .<.
+infix PREC .<=.
+infix PREC .>.
+infix PREC .>=.
 
 #undef PREC
 #define PREC 2
@@ -190,7 +196,7 @@ infix PREC ->>
 #undef PREC
 #define PREC 1
 
-infixl PREC |||
+infixl PREC .|.
 
 #undef PREC
 #define PREC 0
@@ -216,7 +222,7 @@ type Predicate a = Term a -> Goal
 --  odd = predicate "odd" $ do
 --    match(1 :: Int)
 --    match(int "x") |- do
---      int "y" `is` int "x" |-| (2 :: Int)
+--      int "y" `is` int "x" .-. (2 :: Int)
 --      odd? int "y"
 -- @
 --
@@ -233,8 +239,8 @@ type Predicate a = Term a -> Goal
 --  elem :: forall a. TermEntry a => Predicate (a, [a])
 --  elem = predicate "elem" $ do
 --    let va x = v"x" :: Var a
---    match (va "x", va "x" <:> v "xs")
---    match (va "y", va "x" <:> v"xs") |- elem? (v"y", v"xs")
+--    match (va "x", va "x" .:. v "xs")
+--    match (va "y", va "x" .:. v"xs") |- elem? (v"y", v"xs")
 -- @
 --
 -- Note that the generic type must be an instance of 'TermEntry'.
@@ -253,7 +259,7 @@ type Predicate a = Term a -> Goal
 --  bagOf x g xs = bagOfPred? xs
 --    where bagOfPred :: Predicate (HSPLType b)
 --          bagOfPred = predicate "bagOf" $
---            match(v"x" \<:> v"xs") |- findAll x g (v"x" \<:> v"xs")
+--            match(v"x" \.:. v"xs") |- findAll x g (v"x" \.:. v"xs")
 -- @
 --
 -- Here, the parameter @xs@ is passed as an argument to the predicate @bagOfPred@, while the
@@ -267,7 +273,7 @@ type Predicate a = Term a -> Goal
 -- follows:
 --
 -- @
---  bagOf x g xs = findAll x g xs >> x |=| \__ \<:> \__
+--  bagOf x g xs = findAll x g xs >> x .=. \__ \.:. \__
 -- @
 --
 -- The second case in which the source code location is not enough to uniquely identify a predicate
@@ -399,11 +405,11 @@ findN n x g xs = tell $ Ast.Alternatives (Just n) (toTerm x) (astGoal g) (toTerm
 
 -- | Like 'findAll', but fails if the inner goal fails.
 bagOf :: (TermData a, TermData b, HSPLType b ~ [HSPLType a]) => a -> Goal -> b -> Goal
-bagOf x g xs = findAll x g xs >> xs |=| __ <:> __
+bagOf x g xs = findAll x g xs >> xs .=. __ .:. __
 
 -- | @bagOfN n@ is like 'bagOf', but collects at most @n@ results.
 bagOfN :: (TermData a, TermData b, HSPLType b ~ [HSPLType a]) => Int -> a -> Goal -> b -> Goal
-bagOfN n x g xs = findN n x g xs >> xs |=| __ <:> __
+bagOfN n x g xs = findN n x g xs >> xs .=. __ .:. __
 
 -- | Convert a possibly non-deterministic goal into a semi-deterministic goal. If a goal @g@
 -- succeeds at all, then the goal @once g@ succeeds exactly once, and the result is the first
@@ -428,7 +434,7 @@ track gw = tell $ Ast.Track $ astGoal gw
 -- | Determine whether a term is fully unified. The predicate @unified? x@ succeeds if and only if
 -- @x@ is bound to a constant (a term containing no variables) at the time of evaluation. Note that
 -- this is not the opposite of 'variable', because both 'unified' and 'variable' will fail on a
--- partially unified term (such as @'a' <:> v"xs"@).
+-- partially unified term (such as @'a' .:. v"xs"@).
 unified :: forall a. TermEntry a => Predicate a
 unified = hsplPred "unified" $ match(v"x" :: Var a) |-
             tell $ Ast.IsUnified (toTerm (v"x" :: Var a))
@@ -436,19 +442,19 @@ unified = hsplPred "unified" $ match(v"x" :: Var a) |-
 -- | Determine whether a term is a variable. The predicate @variable? x@ succeeds if and only if
 -- @x@ is bound to a variable at the time of evaluation. Note that this is not the opposite of
 -- 'unified', because both 'unified' and 'variable' will fail on a partially unified term (such as
--- @'a' <:> v"xs"@).
+-- @'a' .:. v"xs"@).
 variable :: forall a. TermEntry a => Predicate a
 variable = hsplPred "variable" $ match(v"x" :: Var a) |-
               tell $ Ast.IsVariable (toTerm (v"x" :: Var a))
 
 -- | Unify two terms. The predicate succeeds if and only if unification succeeds.
-(|=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
-t1 |=| t2 = tell $ Ast.CanUnify (toTerm t1) (toTerm t2)
+(.=.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
+t1.=.t2 = tell $ Ast.CanUnify (toTerm t1) (toTerm t2)
 
--- | Negation of '|=|'. The predicate @t1 |\\=| t2@ succeeds if and only if @t1 |=| t2@ fails. No
+-- | Negation of '.=.'. The predicate @t1./=.t2@ succeeds if and only if @t1.=.t2@ fails. No
 -- new bindings are created.
-(|\=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
-t1 |\=| t2 = lnot $ t1 |=| t2
+(./=.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
+t1 ./=. t2 = lnot $ t1 .=. t2
 
 -- | Test if two terms are unified. This predicate succeeds if and only if the two terms are
 -- identical under the current unifier. No new bindings are created.
@@ -470,14 +476,14 @@ isnt t1 t2 = lnot $ t1 `is` t2
 --
 -- @
 --  cond $ do
---    x |=| 0 ->> ifZero? x
---    x |>| 0 ->> ifPositive? x
+--    x .=. 0 ->> ifZero? x
+--    x .>. 0 ->> ifPositive? x
 --    true    ->> ifNegative? x
 -- @
 --
 -- Note that 'cond' introduces a new cut frame.
 cond :: CondBody -> Goal
-cond body = cutFrame $ foldr (|||) false $ map branchGoal $ execCond body
+cond body = cutFrame $ foldr (.|.) false $ map branchGoal $ execCond body
   where branchGoal (Branch c action) = c >> cut >> action
 
 -- | Define a branch of a conditional block (see 'cond'). The left-hand side is the condition goal;
@@ -492,11 +498,11 @@ lnot p =
   let g = astGoal p
   in tell $ Ast.Not g
 
--- | Logical disjunction. @p ||| q@ is a predicate which is true if either @p@ is true or @q@ is
--- true. @|||@ will backtrack over alternatives, so if both @p@ and @q@ are true, it will produce
+-- | Logical disjunction. @p .|. q@ is a predicate which is true if either @p@ is true or @q@ is
+-- true. @.|.@ will backtrack over alternatives, so if both @p@ and @q@ are true, it will produce
 -- multiple solutions.
-(|||) :: Goal -> Goal -> Goal
-gw1 ||| gw2 =
+(.|.) :: Goal -> Goal -> Goal
+gw1 .|. gw2 =
   let g1 = astGoal gw1
       g2 = astGoal gw2
   in tell $ Ast.Or g1 g2
@@ -520,23 +526,23 @@ forAll :: Goal -> Goal -> Goal
 forAll c action = lnot (c >> lnot action)
 
 -- | Simplify a term and test for equality. The right-hand side is evaluated, and the resulting
--- constant is then unified with the left-hand side. Note that '|==|' will cause a run-time error if
+-- constant is then unified with the left-hand side. Note that '.==.' will cause a run-time error if
 -- the right-hand side expression contains unbound variables.
-(|==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
-a |==| b = tell $ Ast.Equal (toTerm a) (toTerm b)
+(.==.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
+a .==. b = tell $ Ast.Equal (toTerm a) (toTerm b)
 
--- | Negation of '|==|'. The predicate @t1 |\\==| t2@ succeeds if and only if @t1 |==| t2@ fails. No
--- new bindings are created. Note that in order to prove @t1 |\\==| t2@, the system will attempt to
--- prove @t1 |==| t2@ and then negate the result. This means that @t1 |\\==| t2@ will still result
+-- | Negation of '.==.'. The predicate @t1./==.t2@ succeeds if and only if @t1.==.t2@ fails. No
+-- new bindings are created. Note that in order to prove @t1./==.t2@, the system will attempt to
+-- prove @t1.==.t2@ and then negate the result. This means that @t1./==.t2@ will still result
 -- in a runtime error if @t2@ has uninstantiated variables.
-(|\==|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
-a |\==| b = lnot $ a |==| b
+(./==.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b) => a -> b -> Goal
+a ./==. b = lnot $ a .==. b
 
 -- | Simplify terms and test for inequality. Both terms are evaluated and the resulting constants
 -- are compared using '<'. No new bindings are created. Note that a runtime error will be raised if
 -- /either/ term contains uninstantiated variables.
-(|<|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
-t1 |<| t2 = tell $ Ast.LessThan (toTerm t1) (toTerm t2)
+(.<.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
+t1 .<. t2 = tell $ Ast.LessThan (toTerm t1) (toTerm t2)
 
 -- | Simplify terms and test for equality or inequality. The right-hand term is evaluated first. It
 -- is then unified with the left-hand side. If unification succeeds, the predicate succeeds and the
@@ -545,74 +551,74 @@ t1 |<| t2 = tell $ Ast.LessThan (toTerm t1) (toTerm t2)
 -- right-hand side. However, if unification fails, then the left-hand side /will/ be evaluated in
 -- order to perform the inequality check, at which point a runtime error will be raised if the left-
 -- hand side contains uninstantiated variables.
-(|<=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
-t1 |<=| t2 = t1 |==| t2 ||| (t1 |\==| t2 >> t1 |<| t2)
+(.<=.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
+t1 .<=. t2 = t1 .==. t2 .|. (t1 ./==. t2 >> t1 .<. t2)
 
--- | Simplify terms and test for inequality. @t1 |>| t2@ is equivalent to @t2 |<| t1@. See '|<|' for
+-- | Simplify terms and test for inequality. @t1 .>. t2@ is equivalent to @t2 .<. t1@. See '.<.' for
 -- details.
-(|>|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
-t1 |>| t2 = t2 |<| t1
+(.>.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
+t1 .>. t2 = t2 .<. t1
 
--- | Similar to '|<=|'; however, @t1 |>=| t2@ is /not/ equivalent to @t2 |<=| t1@. The difference is
--- in the order of evaluation. Like '|<=|', '|>=|' evaluates its right-hand argument first and then
+-- | Similar to '.<=.'; however, @t1 .>=. t2@ is /not/ equivalent to @t2 .<=. t1@. The difference is
+-- in the order of evaluation. Like '.<=.', '.>=.' evaluates its right-hand argument first and then
 -- short-circuits if the result unifies with the left-hand side. The left-hand side is only
 -- evaluated if unification fails.
-(|>=|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
-t1 |>=| t2 = t1 |==| t2 ||| (t1 |\==| t2 >> t1 |>| t2)
+(.>=.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
+t1 .>=. t2 = t1 .==. t2 .|. (t1 ./==. t2 >> t1 .>. t2)
 
 -- | Addition. Create a term representing the sum of two terms.
-(|+|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
+(.+.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
-a |+| b = Ast.Sum (toTerm a) (toTerm b)
+a .+. b = Ast.Sum (toTerm a) (toTerm b)
 
 -- | Subtraction. Create a term representing the difference of two terms.
-(|-|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
+(.-.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
-a |-| b = Ast.Difference (toTerm a) (toTerm b)
+a .-. b = Ast.Difference (toTerm a) (toTerm b)
 
 -- | Multiplication. Create a term representing the product of two terms.
-(|*|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
+(.*.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
-a |*| b = Ast.Product (toTerm a) (toTerm b)
+a.*.b = Ast.Product (toTerm a) (toTerm b)
 
 -- | Division. Create a term representing the quotient of two terms. Both operands must be of
 -- 'Fractional' type.
-(|/|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Fractional (HSPLType a)) =>
+(./.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Fractional (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
-a |/| b = Ast.Quotient (toTerm a) (toTerm b)
+a ./. b = Ast.Quotient (toTerm a) (toTerm b)
 
 -- | Integer divison. Create a term representing the the quotient of two terms, truncated towards 0.
 -- Both operands must be of 'Integral' type.
-(|\|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Integral (HSPLType a)) =>
+(.\.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Integral (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
-a |\| b = Ast.IntQuotient (toTerm a) (toTerm b)
+a .\. b = Ast.IntQuotient (toTerm a) (toTerm b)
 
 -- | Modular arithmetic. Create a term representing the remainer when dividing the first term by the
 -- second. Both operands must be of 'Integral' type.
-(|%|) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Integral (HSPLType a)) =>
+(.%.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Integral (HSPLType a)) =>
          a -> b -> Term (HSPLType a)
-a |%| b = Ast.Modulus (toTerm a) (toTerm b)
+a .%. b = Ast.Modulus (toTerm a) (toTerm b)
 
 -- | @successor? (x, y)@ succeeds if @y@ is the successor of @x@. In other words, if
 --
 -- @
---  x |+| 1 |==| y
+--  x .+. 1 .==. y
 -- @
 successor :: forall a. (TermEntry a, Num a) => Predicate (a, a)
 successor = hsplPred "successor" $
   match (v"x", v"y") |-
-    v"y" |==| v"x" |+| (1::a)
+    v"y" .==. v"x" .+. (1::a)
 
 -- | Opposite of 'successor'. @predecessor? (x, y)@ succeeds if @y@ is the predecessor of @x@. In
 -- other words, if
 --
 -- @
---  x |-| 1 |==| y
+--  x .-. 1 .==. y
 -- @
 predecessor :: forall a. (TermEntry a, Num a) => Predicate (a, a)
 predecessor = hsplPred "predecessor" $
   match (v"x", v"y") |-
-    v"y" |==| v"x" |-| (1::a)
+    v"y" .==. v"x" .-. (1::a)
 
 -- | Query an HSPL program for a given goal. The 'ProofResult's returned can be inspected using
 -- functions like `getAllSolutions`, `searchProof`, etc.
@@ -725,7 +731,7 @@ __ = Ast.Anon
 
 {- $adts
 Algebraic data types can be used as normal HSPL terms as long as they are instances of 'Termable'.
-For example, @auto "x" |=| Just 'a'@ is valid HSPL. It is also possible to embed variables as
+For example, @auto "x" .=. Just 'a'@ is valid HSPL. It is also possible to embed variables as
 subterms in an ADT via the '$$' constructor. See 'Control.Hspl.Examples.adts' for an example.
 -}
 
@@ -770,7 +776,7 @@ enum = hsplPred "enum" $ forM_ (enumFromTo minBound maxBound :: [a]) match
 {- $lists
 Lists can also be used as HSPL terms. Lists consisting entirely of constants or of variables can be
 created directly from the corresponding Haskell lists. Non-homogeneous lists (lists containing a
-combination of constants and variabes) can be created with the '<:>' and '<++>' combinators. These
+combination of constants and variabes) can be created with the '.:.' and '.++.' combinators. These
 lists can then be pattern matched against other lists, unifying the variables in each list against
 matching elements in the other list. See 'Control.Hspl.Examples.lists' for an example.
 
@@ -782,26 +788,26 @@ some higher-level predicates for working with lists (such as 'Control.Hspl.List.
 -- | Prepend an element to a list of terms. This may be necessary (and ':' insufficient) when the
 -- list is inhomogeneous, in that it contains some constant terms and some variables. For example,
 --
--- >>> char "x" <:> "foo"
+-- >>> char "x" .:. "foo"
 -- x :: Char, 'f', 'o', 'o'
 --
--- >>> 'a' <:> auto "x"
+-- >>> 'a' .:. auto "x"
 -- 'a', x :: [Char]
-(<:>) :: (TermData a, TermData as, [HSPLType a] ~ HSPLType as) => a -> as -> Term (HSPLType as)
-t <:> ts = Ast.List $ case Ast.getListTerm $ toTerm ts of
+(.:.) :: (TermData a, TermData as, [HSPLType a] ~ HSPLType as) => a -> as -> Term (HSPLType as)
+t .:. ts = Ast.List $ case Ast.getListTerm $ toTerm ts of
   Left x -> Ast.VarCons (toTerm t) x
   Right xs -> Ast.Cons (toTerm t) xs
 
 -- | Append a list of terms to another list. This may be necessary (and '++' insufficient) when one
 -- list contains term constants and another contains variables. For example,
 --
--- >>> [char "x", char "y"] <++> "foo"
+-- >>> [char "x", char "y"] .++. "foo"
 -- x :: Char, y :: Char, 'f', 'o', 'o'
 --
--- >>> [v"x", v"y"] <++> v"zs"
-(<++>) :: (TermData a, TermData b, [HSPLType a] ~ HSPLType b) => [a] -> b -> Term [HSPLType a]
-[] <++> ts = toTerm ts
-(t:ts) <++> ts' = t <:> (ts <++> ts')
+-- >>> [v"x", v"y"] .++. v"zs"
+(.++.) :: (TermData a, TermData b, [HSPLType a] ~ HSPLType b) => [a] -> b -> Term [HSPLType a]
+[] .++. ts = toTerm ts
+(t:ts) .++. ts' = t .:. (ts .++. ts')
 
 -- | A term representing an empty list. Note that for most lists which do not contain variables, the
 -- list itself can be used as a term, e.g. @member? (char "c", ['a', 'b', 'c'])@. However, for empty

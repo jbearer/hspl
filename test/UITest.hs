@@ -42,12 +42,12 @@ instance Integral IntFrac where
 type BinOps a = [(a -> a -> Term (HSPLType a), String)]
 
 binOps :: (TermData a, Num (HSPLType a), Fractional (HSPLType a), Integral (HSPLType a)) => BinOps a
-binOps = [ ((|+|), "|+|")
-         , ((|-|), "|-|")
-         , ((|*|), "|*|")
-         , ((|/|), "|/|")
-         , ((|\|), "|\\|")
-         , ((|%|), "|%|")
+binOps = [ ((.+.), ".+.")
+         , ((.-.), ".-.")
+         , ((.*.), ".*.")
+         , ((./.), "./.")
+         , ((.\.), ".\\.")
+         , ((.%.), ".%.")
          ]
 
 test :: TestSuite
@@ -105,8 +105,8 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
       format [True] `shouldBe` "[True]"
       format [True, False] `shouldBe` "[True, False]"
       format [[True, False], [False, True]] `shouldBe` "[[True, False], [False, True]]"
-      format (['a'] <++> [v"x"]) `shouldBe` "['a', x :: Char]"
-      format ('a' <:> v"xs") `shouldBe` "['a'] <++> (xs :: [Char])"
+      format (['a'] .++. [v"x"]) `shouldBe` "['a', x :: Char]"
+      format ('a' .:. v"xs") `shouldBe` "['a'].++.(xs :: [Char])"
 
     it "should produce a somewhat readable representation of a tuple" $ do
       format (True, False) `shouldBe` "(True, False)"
@@ -121,13 +121,13 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
 
     it "should produce a somewhat readable representation of a binary operation" $
       forM_ binOps (\(op, sop) ->
-        format (IntFrac 1.0 `op` IntFrac 2.0) `shouldBe` ("1.0 " ++ sop ++ " 2.0")
+        format (IntFrac 1.0 `op` IntFrac 2.0) `shouldBe` ("1.0" ++ sop ++ "2.0")
         )
 
     it "should parenthesize subterms where necessary" $ do
-      let subTerm = (1 :: IntFrac) |+| (2 :: IntFrac)
-      let subTermNoParens = "1.0 |+| 2.0"
-      let subTermParens = "(1.0 |+| 2.0)"
+      let subTerm = (1 :: IntFrac) .+. (2 :: IntFrac)
+      let subTermNoParens = "1.0.+.2.0"
+      let subTermParens = "(1.0.+.2.0)"
 
       -- List and tuple elements should not be parenthesized
       format [subTerm] `shouldBe` "[" ++ subTermNoParens ++ "]"
@@ -139,7 +139,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
 
       -- Binary operands are always parenthesized
       forM_ binOps (\(op, sop) ->
-        format (subTerm `op` subTerm) `shouldBe` (subTermParens ++ " " ++ sop ++ " " ++ subTermParens)
+        format (subTerm `op` subTerm) `shouldBe` (subTermParens ++ sop ++ subTermParens)
         )
   describe "parensTerm" $ do
     let shouldParens t = parensTerm (toTerm t) `shouldEqual` ("(" ++ formatTerm (toTerm t) ++ ")")
@@ -156,7 +156,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
       shouldNotParens 'a'
     it "should parenthesize variables" $
       shouldParens (char "x")
-    withParams [nil, toTerm ['a'], toTerm ['a', 'b'], 'a' <:> char \* "xs"] $ \l ->
+    withParams [nil, toTerm ['a'], toTerm ['a', 'b'], 'a'.:.char \* "xs"] $ \l ->
       it "should not parenthesize lists" $
         shouldNotParens l
     it "should not parenthesize tuples" $ do
@@ -167,8 +167,8 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
     it "should produce a readable representation of a predicate" $
       formatPredicate (predicate "foo" 'a') `shouldBe` ("foo? " ++ formatTerm (toTerm 'a'))
     it "should parenthesize the term where necessary" $
-      formatPredicate (predicate "foo" ((1 :: Int) |+| (2 :: Int))) `shouldBe`
-        ("foo? (" ++ formatTerm ((1 :: Int) |+| (2 :: Int)) ++ ")")
+      formatPredicate (predicate "foo" ((1 :: Int).+.(2 :: Int))) `shouldBe`
+        ("foo? (" ++ formatTerm ((1 :: Int).+.(2 :: Int)) ++ ")")
 
   describe "formatGoal" $ do
     withParams [ PredGoal (predicate "foo" 'a') []
@@ -177,25 +177,25 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
       it "should format the predicate of a PredGoal, ignoring the clauses" $
         formatGoal g `shouldBe` formatPredicate p
     withParams [(IsVariable, "isVariable"), (IsUnified, "isUnified")] $ \(constr, s) ->
-      withParams [toTerm (1 :: Int), (1 :: Int) |+| (2 :: Int)] $ \t ->
+      withParams [toTerm (1 :: Int), (1 :: Int).+.(2 :: Int)] $ \t ->
         it "should format a unary term goal" $
           formatGoal (constr t) `shouldBe` s ++ " " ++ parensTerm t
-    withParams [((|=|), "|=|"), (is, "`is`"), ((|==|), "|==|"), ((|<|), "|<|")] $ \(op, sop) ->
-      withParams [toTerm (1 :: Int), (1 :: Int) |+| (2 :: Int)] $ \t ->
+    withParams [((.=.), ".=."), (is, " `is` "), ((.==.), ".==."), ((.<.), ".<.")] $ \(op, sop) ->
+      withParams [toTerm (1 :: Int), (1 :: Int) .+. (2 :: Int)] $ \t ->
         it "should format a binary term goal" $
           formatGoal (astGoal (t `op` t)) `shouldEqual`
-            (parensTerm t ++ " " ++ sop ++ " " ++ parensTerm t)
+            (parensTerm t ++ sop ++ parensTerm t)
     withParams [(lnot, "lnot"), (cutFrame, "cutFrame"), (track, "track")] $ \(op, sop) ->
       withParams (map tell [Top, Not Top]) $ \gw ->
         it "should format a unary subgoal" $
           formatGoal (astGoal $ op gw) `shouldBe`
             (sop ++ " " ++ parensGoal (astGoal gw))
-    withParams [((>>), ">>"), ((|||), "|||")] $ \(op, sop) ->
+    withParams [((>>), " >> "), ((.|.), ".|.")] $ \(op, sop) ->
       withParams (map tell [Top, Not Top]) $ \gw ->
         it "should format binary subgoals" $ do
           let g = astGoal gw
           formatGoal (astGoal (gw `op` gw)) `shouldBe`
-            (parensGoal g ++ " " ++ sop ++ " " ++ parensGoal g)
+            (parensGoal g ++ sop ++ parensGoal g)
     withParams [(Top, "true"), (Bottom, "false"), (Cut, "cut")] $ \(g, sg) ->
       it "should format unitary goals" $
         formatGoal g `shouldBe` sg

@@ -89,11 +89,11 @@ formatTerm term@(List list)
         formatList Nil = "[]"
         formatList l = case joinList l of
           (prefix, Nothing) -> "[" ++ prefix ++ "]"
-          (prefix, Just rest) -> "[" ++ prefix ++ "] <++> " ++ rest
+          (prefix, Just rest) -> "[" ++ prefix ++ "].++." ++ rest
 
         -- Turn a list term into a comma-separated string. Return a tuple to handle partial lists.
         -- If the tail of the list is a variable, the second part of the tuple will be a string
-        -- which must be appended to the list with <++>. Otherwise, it will be Nothing.
+        -- which must be appended to the list with .++.. Otherwise, it will be Nothing.
         joinList :: ListTerm a -> (String, Maybe String)
         joinList Nil = ("", Nothing)
         joinList (Cons t Nil) = (formatTerm t, Nothing)
@@ -102,12 +102,12 @@ formatTerm term@(List list)
           in (formatTerm t ++ ", " ++ prefix, rest)
         joinList (VarCons t x) = (formatTerm t, Just $ parensVariable x)
 
-formatTerm (Sum t1 t2) = parensTerm t1 ++ " |+| " ++ parensTerm t2
-formatTerm (Difference t1 t2) = parensTerm t1 ++ " |-| " ++ parensTerm t2
-formatTerm (Product t1 t2) = parensTerm t1 ++ " |*| " ++ parensTerm t2
-formatTerm (Quotient t1 t2) = parensTerm t1 ++ " |/| " ++ parensTerm t2
-formatTerm (IntQuotient t1 t2) = parensTerm t1 ++ " |\\| " ++ parensTerm t2
-formatTerm (Modulus t1 t2) = parensTerm t1 ++ " |%| " ++ parensTerm t2
+formatTerm (Sum t1 t2) = parensTerm t1 ++ ".+." ++ parensTerm t2
+formatTerm (Difference t1 t2) = parensTerm t1 ++ ".-." ++ parensTerm t2
+formatTerm (Product t1 t2) = parensTerm t1 ++ ".*." ++ parensTerm t2
+formatTerm (Quotient t1 t2) = parensTerm t1 ++ "./." ++ parensTerm t2
+formatTerm (IntQuotient t1 t2) = parensTerm t1 ++ ".\\." ++ parensTerm t2
+formatTerm (Modulus t1 t2) = parensTerm t1 ++ ".%." ++ parensTerm t2
 
 -- | Similar to 'formatTerm', but wraps the output in parentheses if it is not a single token.
 parensTerm :: TermEntry a => Term a -> String
@@ -132,15 +132,15 @@ formatPredicate (Predicate _ _ name t) = name ++ "? " ++ parensTerm t
 -- use 'parensGoal'.
 formatGoal :: Goal -> String
 formatGoal (PredGoal p _) = formatPredicate p
-formatGoal (CanUnify t1 t2) = parensTerm t1 ++ " |=| " ++ parensTerm t2
+formatGoal (CanUnify t1 t2) = parensTerm t1 ++ ".=." ++ parensTerm t2
 formatGoal (Identical t1 t2) = parensTerm t1 ++ " `is` " ++ parensTerm t2
-formatGoal (Equal t1 t2) = parensTerm t1 ++ " |==| " ++ parensTerm t2
-formatGoal (LessThan t1 t2) = parensTerm t1 ++ " |<| " ++ parensTerm t2
+formatGoal (Equal t1 t2) = parensTerm t1 ++ ".==." ++ parensTerm t2
+formatGoal (LessThan t1 t2) = parensTerm t1 ++ ".<." ++ parensTerm t2
 formatGoal (IsUnified t) = "isUnified " ++ parensTerm t
 formatGoal (IsVariable t) = "isVariable " ++ parensTerm t
 formatGoal (Not g) = "lnot " ++ parensGoal g
 formatGoal (And g1 g2) = parensGoal g1 ++ " >> " ++ parensGoal g2
-formatGoal (Or g1 g2) = parensGoal g1 ++ " ||| " ++ parensGoal g2
+formatGoal (Or g1 g2) = parensGoal g1 ++ ".|." ++ parensGoal g2
 formatGoal Top = "true"
 formatGoal Bottom = "false"
 formatGoal (Alternatives n x g xs) =

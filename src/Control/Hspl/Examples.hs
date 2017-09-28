@@ -73,7 +73,7 @@ instance Termable Widget
 -- | Succeeds only for the 'Widget' @Wuzzle "foo"@.
 goodWidget :: Predicate Widget
 goodWidget = predicate "goodWidget" $
-  match (Wuzzle $$ string "x") |- v"x" |=| "foo"
+  match (Wuzzle $$ string "x") |- v"x" .=. "foo"
 
 -- $lists
 -- A simple example illustrating the use of lists in HSPL.
@@ -88,9 +88,9 @@ goodWidget = predicate "goodWidget" $
 -- each distinct element of the list.
 distinct :: forall a. TermEntry a => Predicate (a, [a])
 distinct = predicate "distinct" $ do
-  match (v"x", v"x" <:> v"xs")
-  match (v"y", v"x" <:> v"xs") |- do
-    (v"y" :: Var a) |\=| (v"x" :: Var a)
+  match (v"x", v"x" .:. v"xs")
+  match (v"y", v"x" .:. v"xs") |- do
+    (v"y" :: Var a) ./=. (v"x" :: Var a)
     distinct? (v"y" :: Var a, v"xs" :: Var [a])
 
 -- | Compute the Cartesian product of two lists.
@@ -101,7 +101,7 @@ cross = predicate "cross" $
     L.member? (v"y" :: Var b, v"ys")
 
 -- $equals
--- Example illustrating the difference between 'is' and '|=|'.
+-- Example illustrating the difference between 'is' and '.=.'.
 --
 -- >>> getAllSolutions $ runHspl $ isFoo? string "x"
 -- []
@@ -121,7 +121,7 @@ isFoo = predicate "isFoo" $
 -- | Succeeds if the argument can be unified with the string @"foo"@, and does so.
 couldBeFoo :: Predicate String
 couldBeFoo = predicate "couldBeFoo" $
-  match (v"x") |- v"x" |=| "foo"
+  match (v"x") |- v"x" .=. "foo"
 
 -- $odds
 -- Example of a program with infinitely many solutions.
@@ -135,4 +135,4 @@ odds = predicate "odds" $ do
   match(1 :: Int)
   match(v"x") |- do
     odds? v"y"
-    v"x" |==| v"y" |+| (2 :: Int)
+    v"x" .==. v"y" .+. (2 :: Int)

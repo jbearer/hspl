@@ -46,7 +46,7 @@ d = predicate "d" $ do
 
   match (Power $$ (v"u", v"n"), v"x",
          Product $$ (v"du", Product $$ (Const $$ v"n", Power $$ (v"u", v"n1")))) |- do
-    v"n1" |==| v"n" |-| (1 :: Int)
+    v"n1".==.v"n".-.(1 :: Int)
     cut
     d? (v"u", v"x", v"du")
 
@@ -61,7 +61,7 @@ d = predicate "d" $ do
   match (Var $$ v"x", v"x", Const 1) |- cut
   match (Var $$ v"x", v"y", Const 0) |- do
     cut
-    string "x" |\=| v"y"
+    string "x"./=.v"y"
 
   match(Const $$ __, __, Const 0)
 

@@ -252,10 +252,10 @@ test = describeModule "Control.Hspl" $ do
     it "should succeed when the inner goal succeeds" $
       getAllTheorems (runHspl $ once true) `shouldBe` [once true]
     it "should succeed at most once" $
-      getAllTheorems (runHspl $ once $ true ||| true) `shouldBe` [once $ true ||| true]
+      getAllTheorems (runHspl $ once $ true .|. true) `shouldBe` [once $ true .|. true]
     it "should not affect backtracking outside of its scope" $
-      getAllTheorems (runHspl $ once (true ||| true) ||| true) `shouldBe`
-        replicate 2 (once (true ||| true) ||| true)
+      getAllTheorems (runHspl $ once (true .|. true) .|. true) `shouldBe`
+        replicate 2 (once (true .|. true) .|. true)
 
   withParams [(lnot, Not), (cutFrame, CutFrame), (track, Track)] $ \(p, g) ->
     describe "goal-modifying predicates" $
@@ -275,37 +275,39 @@ test = describeModule "Control.Hspl" $ do
   describe "list term construction" $ do
     context "via cons" $ do
       it "should prepend a value to a list variable" $
-        'a' <:> Var "x" `shouldBe` Ast.List (Ast.VarCons (toTerm 'a') (Var "x"))
+        'a' .:. Var "x" `shouldBe` Ast.List (Ast.VarCons (toTerm 'a') (Var "x"))
       it "should prepend a variable to a list" $
-        char "x" <:> "foo" `shouldBe` Ast.List (Ast.Cons (toTerm $ Var "x") (Ast.Cons
+        char "x" .:. "foo" `shouldBe` Ast.List (Ast.Cons (toTerm $ Var "x") (Ast.Cons
                                                          (toTerm 'f') (Ast.Cons
                                                          (toTerm 'o') (Ast.Cons
                                                          (toTerm 'o') Ast.Nil))))
       it "should be right associative" $
-        char "x" <:> char "y" <:> "foo" `shouldBe` char "x" <:> (char "y" <:> "foo")
+        char "x" .:. char "y" .:. "foo" `shouldBe` char "x" .:. (char "y" .:. "foo")
       it "should prepend a variable to a list variable" $
-        char "x" <:> char \* "xs" `shouldBe`
+        char "x" .:. char \* "xs" `shouldBe`
           Ast.List (Ast.VarCons (toTerm (Var "x" :: Var Char)) (Var "xs"))
     context "via concatenation" $ do
       it "should append a list of variables" $
-        "ab" <++> [char "x", char "y"] `shouldBe`
+        "ab".++.[char "x", char "y"] `shouldBe`
           Ast.List (Ast.Cons (toTerm 'a') (Ast.Cons
                              (toTerm 'b') (Ast.Cons
                              (toTerm $ Var "x") (Ast.Cons
                              (toTerm $ Var "y")
                              Ast.Nil))))
       it "should prepend a list of variables" $
-        [char "x", char "y"] <++> "ab" `shouldBe`
+        [char "x", char "y"].++."ab" `shouldBe`
           Ast.List (Ast.Cons (toTerm $ Var "x") (Ast.Cons
                    (toTerm $ Var "y") (Ast.Cons
                    (toTerm 'a') (Ast.Cons
                    (toTerm 'b')
                    Ast.Nil))))
       it "should prepend a list to a variable" $
-        ['a', 'b'] <++> v"xs" `shouldBe`
+        ['a', 'b'].++.v"xs" `shouldBe`
           Ast.List (Ast.Cons (toTerm 'a') (Ast.VarCons
                              (toTerm 'b')
                              (char \* "xs")))
+      it "should parse correctly with cons" $
+        'a'.:."b".++."c" `shouldBe` toTerm "abc"
     context "via nil" $
       it "should create an empty list of any type" $ do
         nil `shouldBe` toTerm ([] :: [Int])
@@ -313,11 +315,11 @@ test = describeModule "Control.Hspl" $ do
 
   describe "findAll" $
     it "should generate an Alternatives Nothing goal" $
-      astGoal (findAll (char "x") (v"x" |=| 'a') (v"xs")) `shouldBe`
+      astGoal (findAll (char "x") (v"x" .=. 'a') (v"xs")) `shouldBe`
         Alternatives Nothing (toTerm $ char "x") (CanUnify (toTerm $ Var "x") (toTerm 'a')) (toTerm $ v"xs")
   describe "findN" $
     it "should generate an Alternatives Just goal" $
-      astGoal (findN 5 (char "x") (v"x" |=| 'a') (v"xs")) `shouldBe`
+      astGoal (findN 5 (char "x") (v"x" .=. 'a') (v"xs")) `shouldBe`
         Alternatives (Just 5) (toTerm $ char "x") (CanUnify (toTerm $ Var "x") (toTerm 'a')) (toTerm $ v"xs")
   describe "bagOf" $ do
     it "should bind a list to all alternatives of a variable" $ do
@@ -327,14 +329,14 @@ test = describeModule "Control.Hspl" $ do
       queryVar (head  us) (v"xs") `shouldBe` Unified l
     it "should handle ununified solutions" $ do
         let us = runHspl $ bagOf (Var "x" :: Var (Maybe Char))
-                                 ((Var "x" :: Var (Maybe Char)) |=| Just $$ char "y")
+                                 ((Var "x" :: Var (Maybe Char)) .=. Just $$ char "y")
                                  (v"xs")
         length us `shouldBe` 1
         case queryVar (head us) (Var "xs" :: Var [Maybe Char]) of
           Partial t -> t `shouldBeAlphaEquivalentTo` [Just $$ char "y"]
           st -> failure $ "Expected Partial (Just $$ y), but got " ++ show st
 
-        let us = runHspl $ bagOf (char "x") (char "x" |=| char "y") (v"xs")
+        let us = runHspl $ bagOf (char "x") (char "x" .=. char "y") (v"xs")
         length us `shouldBe` 1
         case queryVar (head us) (char \* "xs") of
           Partial t -> t `shouldBeAlphaEquivalentTo` [char "x"]
@@ -349,14 +351,14 @@ test = describeModule "Control.Hspl" $ do
       queryVar (head  us) (v"xs") `shouldBe` Unified l
     it "should handle ununified solutions" $ do
         let us = runHspl $ bagOfN 42 (Var "x" :: Var (Maybe Char))
-                                     ((Var "x" :: Var (Maybe Char)) |=| Just $$ char "y")
+                                     ((Var "x" :: Var (Maybe Char)) .=. Just $$ char "y")
                                      (v"xs")
         length us `shouldBe` 1
         case queryVar (head us) (Var "xs" :: Var [Maybe Char]) of
           Partial t -> t `shouldBeAlphaEquivalentTo` [Just $$ char "y"]
           st -> failure $ "Expected Partial (Just $$ y), but got " ++ show st
 
-        let us = runHspl $ bagOfN 42 (char "x") (char "x" |=| char "y") (v"xs")
+        let us = runHspl $ bagOfN 42 (char "x") (char "x" .=. char "y") (v"xs")
         length us `shouldBe` 1
         case queryVar (head us) (char \* "xs") of
           Partial t -> t `shouldBeAlphaEquivalentTo` [char "x"]
@@ -387,34 +389,34 @@ test = describeModule "Control.Hspl" $ do
         Ast.PredGoal p cs ->
           testHsplPredScope p >> forM_ cs (\(Ast.HornClause p _) -> testHsplPredScope p)
 
-  describe "the |=| predicate" $ do
+  describe "the .=. predicate" $ do
     it "should create a CanUnify goal from TermData" $ do
-      astGoal ('a' |=| 'b') `shouldBe` CanUnify (toTerm 'a') (toTerm 'b')
-      astGoal ('a' |=| char "x") `shouldBe` CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))
-      astGoal (char "x" |=| 'a') `shouldBe` CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a')
-      astGoal (char "x" |=| char "y") `shouldBe`
+      astGoal ('a' .=. 'b') `shouldBe` CanUnify (toTerm 'a') (toTerm 'b')
+      astGoal ('a' .=. char "x") `shouldBe` CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))
+      astGoal (char "x" .=. 'a') `shouldBe` CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a')
+      astGoal (char "x" .=. char "y") `shouldBe`
         CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))
     it "should have lower precedence than binary term constructors" $ do
-      astGoal ("foo" |=| 'f' <:> "oo") `shouldBe` CanUnify (toTerm "foo") (toTerm "foo")
-      astGoal ("foo" |=| "f" <++> "oo") `shouldBe` CanUnify (toTerm "foo") (toTerm "foo")
-      astGoal ((3::Int) |=| (1::Int) |+| (2::Int)) `shouldBe`
-        CanUnify (toTerm (3::Int)) ((1::Int) |+| (2::Int))
-      astGoal ((3::Int) |=| (1::Int) |*| (2::Int)) `shouldBe`
-        CanUnify (toTerm (3::Int)) ((1::Int) |*| (2::Int))
-  describe "the |\\=| predicate" $ do
+      astGoal ("foo" .=. 'f' .:. "oo") `shouldBe` CanUnify (toTerm "foo") (toTerm "foo")
+      astGoal ("foo" .=. "f".++."oo") `shouldBe` CanUnify (toTerm "foo") (toTerm "foo")
+      astGoal ((3::Int) .=. (1::Int) .+. (2::Int)) `shouldBe`
+        CanUnify (toTerm (3::Int)) ((1::Int) .+. (2::Int))
+      astGoal ((3::Int) .=. (1::Int) .*. (2::Int)) `shouldBe`
+        CanUnify (toTerm (3::Int)) ((1::Int) .*. (2::Int))
+  describe "the ./=. predicate" $ do
     it "should create a (Not . CanUnify) goal from TermData" $ do
-      astGoal ('a' |\=| 'b') `shouldBe` Not (CanUnify (toTerm 'a') (toTerm 'b'))
-      astGoal ('a' |\=| char "x") `shouldBe` Not (CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char)))
-      astGoal (char "x" |\=| 'a') `shouldBe` Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
-      astGoal (char "x" |\=| char "y") `shouldBe`
+      astGoal ('a' ./=. 'b') `shouldBe` Not (CanUnify (toTerm 'a') (toTerm 'b'))
+      astGoal ('a' ./=. char "x") `shouldBe` Not (CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char)))
+      astGoal (char "x" ./=. 'a') `shouldBe` Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
+      astGoal (char "x" ./=. char "y") `shouldBe`
         Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
     it "should have lower precedence than binary term constructors" $ do
-      astGoal ("foo" |\=| 'f' <:> "oo") `shouldBe` Not (CanUnify (toTerm "foo") (toTerm "foo"))
-      astGoal ("foo" |\=| "f" <++> "oo") `shouldBe` Not (CanUnify (toTerm "foo") (toTerm "foo"))
-      astGoal ((3::Int) |\=| (1::Int) |+| (2::Int)) `shouldBe`
-        Not (CanUnify (toTerm (3::Int)) ((1::Int) |+| (2::Int)))
-      astGoal ((3::Int) |\=| (1::Int) |*| (2::Int)) `shouldBe`
-        Not (CanUnify (toTerm (3::Int)) ((1::Int) |*| (2::Int)))
+      astGoal ("foo" ./=. 'f' .:. "oo") `shouldBe` Not (CanUnify (toTerm "foo") (toTerm "foo"))
+      astGoal ("foo" ./=. "f".++."oo") `shouldBe` Not (CanUnify (toTerm "foo") (toTerm "foo"))
+      astGoal ((3::Int) ./=. (1::Int) .+. (2::Int)) `shouldBe`
+        Not (CanUnify (toTerm (3::Int)) ((1::Int) .+. (2::Int)))
+      astGoal ((3::Int) ./=. (1::Int) .*. (2::Int)) `shouldBe`
+        Not (CanUnify (toTerm (3::Int)) ((1::Int) .*. (2::Int)))
 
   describe "the `is` predicate" $ do
     it "should create an Identical goal from TermData" $ do
@@ -424,12 +426,12 @@ test = describeModule "Control.Hspl" $ do
       astGoal (char "x" `is` char "y") `shouldBe`
         Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))
     it "should have lower precedence than binary term constructors" $ do
-      astGoal ("foo" `is` 'f' <:> "oo") `shouldBe` Identical (toTerm "foo") (toTerm "foo")
-      astGoal ("foo" `is` "f" <++> "oo") `shouldBe` Identical (toTerm "foo") (toTerm "foo")
-      astGoal ((3::Int) `is` (1::Int) |+| (2::Int)) `shouldBe`
-        Identical (toTerm (3::Int)) ((1::Int) |+| (2::Int))
-      astGoal ((3::Int) `is` (1::Int) |*| (2::Int)) `shouldBe`
-        Identical (toTerm (3::Int)) ((1::Int) |*| (2::Int))
+      astGoal ("foo" `is` 'f' .:. "oo") `shouldBe` Identical (toTerm "foo") (toTerm "foo")
+      astGoal ("foo" `is` "f".++."oo") `shouldBe` Identical (toTerm "foo") (toTerm "foo")
+      astGoal ((3::Int) `is` (1::Int) .+. (2::Int)) `shouldBe`
+        Identical (toTerm (3::Int)) ((1::Int) .+. (2::Int))
+      astGoal ((3::Int) `is` (1::Int) .*. (2::Int)) `shouldBe`
+        Identical (toTerm (3::Int)) ((1::Int) .*. (2::Int))
   describe "the `isnt` predicate" $ do
     it "should create a (Not . Identical) goal from TermData" $ do
       astGoal ('a' `isnt` 'b') `shouldBe` Not (Identical (toTerm 'a') (toTerm 'b'))
@@ -438,87 +440,87 @@ test = describeModule "Control.Hspl" $ do
       astGoal (char "x" `isnt` char "y") `shouldBe`
         Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
     it "should have lower precedence than binary term constructors" $ do
-      astGoal ("foo" `isnt` 'f' <:> "oo") `shouldBe` Not (Identical (toTerm "foo") (toTerm "foo"))
-      astGoal ("foo" `isnt` "f" <++> "oo") `shouldBe` Not (Identical (toTerm "foo") (toTerm "foo"))
-      astGoal ((3::Int) `isnt` (1::Int) |+| (2::Int)) `shouldBe`
-        Not (Identical (toTerm (3::Int)) ((1::Int) |+| (2::Int)))
-      astGoal ((3::Int) `isnt` (1::Int) |*| (2::Int)) `shouldBe`
-        Not (Identical (toTerm (3::Int)) ((1::Int) |*| (2::Int)))
+      astGoal ("foo" `isnt` 'f' .:. "oo") `shouldBe` Not (Identical (toTerm "foo") (toTerm "foo"))
+      astGoal ("foo" `isnt` "f".++."oo") `shouldBe` Not (Identical (toTerm "foo") (toTerm "foo"))
+      astGoal ((3::Int) `isnt` (1::Int) .+. (2::Int)) `shouldBe`
+        Not (Identical (toTerm (3::Int)) ((1::Int) .+. (2::Int)))
+      astGoal ((3::Int) `isnt` (1::Int) .*. (2::Int)) `shouldBe`
+        Not (Identical (toTerm (3::Int)) ((1::Int) .*. (2::Int)))
 
-  describe "the |==| predicate" $ do
+  describe "the .==. predicate" $ do
     let exec = astGoal
     it "should create an Equal goal from two terms" $ do
-      exec ((3 :: Int) |==| (3 :: Int)) `shouldBe` Equal (toTerm (3 :: Int)) (toTerm (3 :: Int))
-      exec (int "x" |==| (3 :: Int)) `shouldBe` Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int))
+      exec ((3 :: Int) .==. (3 :: Int)) `shouldBe` Equal (toTerm (3 :: Int)) (toTerm (3 :: Int))
+      exec (int "x" .==. (3 :: Int)) `shouldBe` Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int))
     it "should have lower precedence than arithmetic operators" $
-      exec (int "x" |==| (3 :: Int) |+| (2 :: Int)) `shouldBe`
+      exec (int "x" .==. (3 :: Int) .+. (2 :: Int)) `shouldBe`
         Equal (toTerm (Var "x" :: Var Int)) (Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int)))
-  describe "the |\\==| predicate" $ do
+  describe "the ./==. predicate" $ do
     let exec = astGoal
     it "should create a (Not . Equal) goal from two terms" $ do
-      exec ((3 :: Int) |\==| (3 :: Int)) `shouldBe`
+      exec ((3 :: Int) ./==. (3 :: Int)) `shouldBe`
         Not (Equal (toTerm (3 :: Int)) (toTerm (3 :: Int)))
-      exec (int "x" |\==| (3 :: Int)) `shouldBe`
+      exec (int "x" ./==. (3 :: Int)) `shouldBe`
         Not (Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int)))
     it "should have lower precedence than arithmetic operators" $
-      exec (int "x" |\==| (3 :: Int) |+| (2 :: Int)) `shouldBe`
+      exec (int "x" ./==. (3 :: Int) .+. (2 :: Int)) `shouldBe`
         Not (Equal (toTerm (Var "x" :: Var Int)) (Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int))))
 
-  describe "the |<| predicate" $ do
+  describe "the .<. predicate" $ do
     let exec = astGoal
     it "should create a LessThan goal from two terms" $
-      exec ('a' |<| 'b') `shouldBe` LessThan (toTerm 'a') (toTerm 'b')
+      exec ('a' .<. 'b') `shouldBe` LessThan (toTerm 'a') (toTerm 'b')
     it "should have lower precedence than arithmetic operators" $
-      exec ((1 :: Int) |<| (2 :: Int) |+| (3 :: Int)) `shouldBe`
+      exec ((1 :: Int) .<. (2 :: Int) .+. (3 :: Int)) `shouldBe`
         LessThan (toTerm (1 :: Int)) (Ast.Sum (toTerm (2 :: Int)) (toTerm (3 :: Int)))
-  describe "the |>| predicate" $ do
+  describe "the .>. predicate" $ do
     let exec = astGoal
     it "should reorder the terms to create a LessThan goal" $
-      exec ('b' |>| 'a') `shouldBe` LessThan (toTerm 'a') (toTerm 'b')
+      exec ('b' .>. 'a') `shouldBe` LessThan (toTerm 'a') (toTerm 'b')
     it "should have lower precedence than arithmetic operators" $
-      exec ((1 :: Int) |>| (2 :: Int) |+| (3 :: Int)) `shouldBe`
+      exec ((1 :: Int) .>. (2 :: Int) .+. (3 :: Int)) `shouldBe`
         LessThan (Ast.Sum (toTerm (2 :: Int)) (toTerm (3 :: Int))) (toTerm (1 :: Int))
-  describe "the |<=| predicate" $ do
+  describe "the .<=. predicate" $ do
     let exec = astGoal
     it "should succeed if the terms are equal" $ do
-      let sols = runHspl $ 'a' |<=| 'a'
+      let sols = runHspl $ 'a' .<=. 'a'
       length sols `shouldBe` 1
-      getTheorem (head sols) `shouldBe` ('a' |<=| 'a')
+      getTheorem (head sols) `shouldBe` ('a' .<=. 'a')
     it "should succeed if the left-hand side is less than the right-hand side" $ do
-      let sols = runHspl $ 'a' |<=| 'b'
+      let sols = runHspl $ 'a' .<=. 'b'
       length sols `shouldBe` 1
-      getTheorem (head sols) `shouldBe` ('a' |<=| 'b')
+      getTheorem (head sols) `shouldBe` ('a' .<=. 'b')
     it "should unify variables on the left-hand side if possible" $ do
-      let sols = runHspl $ char "x" |<=| 'a'
+      let sols = runHspl $ char "x" .<=. 'a'
       length sols `shouldBe` 1
       queryVar (head sols) (char "x") `shouldBe` Unified 'a'
     it "should have lower precedence than arithmetic operators" $
-      exec ((1 :: Int) |<=| (2 :: Int) |+| (3 :: Int)) `shouldBe`
-        exec ((1 :: Int) |<=| ((2 :: Int) |+| (3 :: Int)))
-  describe "the |>=| predicate" $ do
+      exec ((1 :: Int) .<=. (2 :: Int) .+. (3 :: Int)) `shouldBe`
+        exec ((1 :: Int) .<=. ((2 :: Int) .+. (3 :: Int)))
+  describe "the .>=. predicate" $ do
     let exec = astGoal
     it "should succeed if the terms are equal" $ do
-      let sols = runHspl $ 'a' |>=| 'a'
+      let sols = runHspl $ 'a' .>=. 'a'
       length sols `shouldBe` 1
-      getTheorem (head sols) `shouldBe` ('a' |>=| 'a')
+      getTheorem (head sols) `shouldBe` ('a' .>=. 'a')
     it "should succeed if the left-hand side is greater than the right-hand side" $ do
-      let sols = runHspl $ 'b' |>=| 'a'
+      let sols = runHspl $ 'b' .>=. 'a'
       length sols `shouldBe` 1
-      getTheorem (head sols) `shouldBe` ('b' |>=| 'a')
+      getTheorem (head sols) `shouldBe` ('b' .>=. 'a')
     it "should unify variables on the left-hand side if possible" $ do
-      let sols = runHspl $ char "x" |>=| 'a'
+      let sols = runHspl $ char "x" .>=. 'a'
       length sols `shouldBe` 1
       queryVar (head sols) (char "x") `shouldBe` Unified 'a'
     it "should have lower precedence than arithmetic operators" $
-      exec ((1 :: Int) |>=| (2 :: Int) |+| (3 :: Int)) `shouldBe`
-        exec ((1 :: Int) |>=| ((2 :: Int) |+| (3 :: Int)))
+      exec ((1 :: Int) .>=. (2 :: Int) .+. (3 :: Int)) `shouldBe`
+        exec ((1 :: Int) .>=. ((2 :: Int) .+. (3 :: Int)))
 
-  describe "the ||| predicate" $ do
+  describe "the .|. predicate" $ do
     it "should create an Or goal from two goals" $
-      astGoal (foo? 'a' ||| foo? 'b') `shouldBe`
+      astGoal (foo? 'a' .|. foo? 'b') `shouldBe`
         Or (astGoal $ foo? 'a') (astGoal $ foo? 'b')
     it "should permit nested expressions" $
-      astGoal (foo? 'a' ||| do {foo? 'b'; foo? 'c'}) `shouldBe`
+      astGoal (foo? 'a' .|. do {foo? 'b'; foo? 'c'}) `shouldBe`
         Or (astGoal $ foo? 'a')
            (And (astGoal $ foo? 'b')
                 (astGoal $ foo? 'c'))
@@ -536,85 +538,85 @@ test = describeModule "Control.Hspl" $ do
       testSuccess false false
     it "should succeed when the condition succeeds and the action always succeeds" $ do
       testSuccess true true
-      testSuccess (int "x" |=| (3::Int) ||| int "x" |=| (2::Int) |+| (1::Int)) ((3::Int) |==| v"x")
+      testSuccess (int "x" .=. (3::Int) .|. int "x" .=. (2::Int) .+. (1::Int)) ((3::Int) .==. v"x")
     it "should fail when any of the actions fail" $
-      runHspl (forAll (enum? (v"x" :: Var BoundedEnum)) (v"x" |=| E1)) `shouldBe` []
+      runHspl (forAll (enum? (v"x" :: Var BoundedEnum)) (v"x" .=. E1)) `shouldBe` []
     it "should not bind any variables" $ do
-      let results = runHspl $ forAll (v"x" |=| 'a') true
+      let results = runHspl $ forAll (v"x" .=. 'a') true
       length results `shouldBe` 1
       queryVar (head results) (char "x") `shouldBe` Ununified
 
-      let results = runHspl $ forAll true (v"x" |=| 'a')
+      let results = runHspl $ forAll true (v"x" .=. 'a')
       length results `shouldBe` 1
       queryVar (head results) (char "x") `shouldBe` Ununified
 
   describe "arithmetic operators" $ do
     it "should create a sum of terms" $ do
-      ((3 :: Int) |+| (2 :: Int)) `shouldBe`
+      ((3 :: Int) .+. (2 :: Int)) `shouldBe`
         Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int))
-      (int "x" |+| (2 :: Int)) `shouldBe`
+      (int "x" .+. (2 :: Int)) `shouldBe`
         Ast.Sum (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int))
     it "should create a difference of terms" $ do
-      ((3 :: Int) |-| (2 :: Int)) `shouldBe`
+      ((3 :: Int) .-. (2 :: Int)) `shouldBe`
         Ast.Difference (toTerm (3 :: Int)) (toTerm (2 :: Int))
-      (int "x" |-| (2 :: Int)) `shouldBe`
+      (int "x" .-. (2 :: Int)) `shouldBe`
         Ast.Difference (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int))
     it "should create a product of terms" $ do
-      ((3 :: Int) |*| (2 :: Int)) `shouldBe`
+      ((3 :: Int) .*. (2 :: Int)) `shouldBe`
         Ast.Product (toTerm (3 :: Int)) (toTerm (2 :: Int))
-      (int "x" |*| (2 :: Int)) `shouldBe`
+      (int "x" .*. (2 :: Int)) `shouldBe`
         Ast.Product (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int))
     it "should create a quotient of fractionals" $ do
-      ((3 :: Double) |/| (2 :: Double)) `shouldBe`
+      ((3 :: Double) ./. (2 :: Double)) `shouldBe`
         Ast.Quotient (toTerm (3 :: Double)) (toTerm (2 :: Double))
-      (double "x" |/| (2 :: Double)) `shouldBe`
+      (double "x" ./. (2 :: Double)) `shouldBe`
         Ast.Quotient (toTerm (Var "x" :: Var Double)) (toTerm (2 :: Double))
     it "should create a quotient of integrals" $ do
-      ((3 :: Int) |\| (2 :: Int)) `shouldBe`
+      ((3 :: Int) .\. (2 :: Int)) `shouldBe`
         Ast.IntQuotient (toTerm (3 :: Int)) (toTerm (2 :: Int))
-      (int "x" |\| (2 :: Int)) `shouldBe`
+      (int "x" .\. (2 :: Int)) `shouldBe`
         Ast.IntQuotient (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int))
     it "should create a modular expression" $ do
-      ((3 :: Int) |%| (2 :: Int)) `shouldBe`
+      ((3 :: Int) .%. (2 :: Int)) `shouldBe`
         Ast.Modulus (toTerm (3 :: Int)) (toTerm (2 :: Int))
-      (int "x" |%| (2 :: Int)) `shouldBe`
+      (int "x" .%. (2 :: Int)) `shouldBe`
         Ast.Modulus (toTerm (Var "x" :: Var Int)) (toTerm (2 :: Int))
     it "should be left-associative" $ do
-      (int "x" |+| int "y" |-| int "z") `shouldBe`
+      (int "x" .+. int "y" .-. int "z") `shouldBe`
         Ast.Difference (Ast.Sum (toTerm (Var "x" :: Var Int))
                                 (toTerm (Var "y" :: Var Int)))
                        (toTerm (Var "z" :: Var Int))
-      (int "x" |*| int "y" |\| int "z") `shouldBe`
+      (int "x" .*. int "y" .\. int "z") `shouldBe`
         Ast.IntQuotient (Ast.Product (toTerm (Var "x" :: Var Int))
                                      (toTerm (Var "y" :: Var Int)))
                         (toTerm (Var "z" :: Var Int))
-      (double "x" |*| double "y" |/| double "z") `shouldBe`
+      (double "x" .*. double "y" ./. double "z") `shouldBe`
         Ast.Quotient (Ast.Product (toTerm (Var "x" :: Var Double))
                                   (toTerm (Var "y" :: Var Double)))
                      (toTerm (Var "z" :: Var Double))
-      (int "x" |%| int "y" |%| int "z") `shouldBe`
+      (int "x" .%. int "y" .%. int "z") `shouldBe`
         Ast.Modulus (Ast.Modulus (toTerm (Var "x" :: Var Int))
                                  (toTerm (Var "y" :: Var Int)))
                     (toTerm (Var "z" :: Var Int))
     it "should give multiplication and division higher precedence than addition and subtraction" $ do
-      (int "x" |+| int "y" |*| int "z") `shouldBe`
+      (int "x" .+. int "y" .*. int "z") `shouldBe`
         Ast.Sum (toTerm (Var "x" :: Var Int))
                 (Ast.Product (toTerm (Var "y" :: Var Int))
                              (toTerm (Var "z" :: Var Int)))
-      (int "x" |-| int "y" |\| int "z") `shouldBe`
+      (int "x" .-. int "y" .\. int "z") `shouldBe`
         Ast.Difference (toTerm (Var "x" :: Var Int))
                        (Ast.IntQuotient (toTerm (Var "y" :: Var Int))
                                         (toTerm (Var "z" :: Var Int)))
-      (double "x" |+| double "y" |/| double "z") `shouldBe`
+      (double "x" .+. double "y" ./. double "z") `shouldBe`
         Ast.Sum (toTerm (Var "x" :: Var Double))
                 (Ast.Quotient (toTerm(Var "y" :: Var Double))
                               (toTerm(Var "z" :: Var Double)))
     it "should give modulus the same precedence as multiplication" $ do
-      (int "x" |*| int "y" |%| int "z") `shouldBe`
+      (int "x" .*. int "y" .%. int "z") `shouldBe`
         Ast.Modulus (Ast.Product (toTerm (Var "x" :: Var Int))
                                  (toTerm (Var "y" :: Var Int)))
                     (toTerm (Var "z" :: Var Int))
-      (int "x" |%| int "y" |*| int "z") `shouldBe`
+      (int "x" .%. int "y" .*. int "z") `shouldBe`
         Ast.Product (Ast.Modulus (toTerm (Var "x" :: Var Int))
                                  (toTerm (Var "y" :: Var Int)))
                     (toTerm (Var "z" :: Var Int))
@@ -623,24 +625,24 @@ test = describeModule "Control.Hspl" $ do
     it "should fail if no condition succeeds" $
       runHspl (cond $ do { false ->> true; false ->> true }) `shouldBe` []
     it "should execute the action for the first condition that succeeds" $ do
-      let g = cond $ do { true ->> v"x" |=| 'a'; true ->> v"x" |=| 'b'}
+      let g = cond $ do { true ->> v"x" .=. 'a'; true ->> v"x" .=. 'b'}
       let results = runHspl g
-      getAllTheorems results `shouldBe` [cond $ do { true ->> 'a' |=| 'a'; true ->> 'a' |=| 'b'}]
+      getAllTheorems results `shouldBe` [cond $ do { true ->> 'a' .=. 'a'; true ->> 'a' .=. 'b'}]
       queryVar (head results) (char "x") `shouldBe` Unified 'a'
 
-      let g = cond $ do { false ->> v"x" |=| 'a'; true ->> v"x" |=| 'b'}
+      let g = cond $ do { false ->> v"x" .=. 'a'; true ->> v"x" .=. 'b'}
       let results = runHspl g
-      getAllTheorems results `shouldBe` [cond $ do { false ->> 'b' |=| 'a'; true ->> 'b' |=| 'b'}]
+      getAllTheorems results `shouldBe` [cond $ do { false ->> 'b' .=. 'a'; true ->> 'b' .=. 'b'}]
       queryVar (head results) (char "x") `shouldBe` Unified 'b'
     it "should make bindings in the condition" $ do
-      let g = cond $ v"x" |=| 'a' ->> v"y" |=| Just $$ char"x"
+      let g = cond $ v"x" .=. 'a' ->> v"y" .=. Just $$ char"x"
       let results = runHspl g
-      getAllTheorems results `shouldBe` [cond $ 'a' |=| 'a' ->> Just 'a' |=| Just 'a']
+      getAllTheorems results `shouldBe` [cond $ 'a' .=. 'a' ->> Just 'a' .=. Just 'a']
       queryVar (head results) (char "x") `shouldBe` Unified 'a'
       queryVar (head results) (auto "y") `shouldBe` Unified (Just 'a')
     it "should parse branches correctly" $ do
-      let g = cond $ v"x" |==| (0::Int) |+| (1::Int) ->> v"y" |==| v"x" |+| (2::Int)
+      let g = cond $ v"x" .==. (0::Int) .+. (1::Int) ->> v"y" .==. v"x" .+. (2::Int)
       let results = runHspl g
-      getAllTheorems results `shouldBe` [cond $ (1::Int) |==| (1::Int) ->> (3::Int) |==| (3::Int)]
+      getAllTheorems results `shouldBe` [cond $ (1::Int) .==. (1::Int) ->> (3::Int) .==. (3::Int)]
       queryVar (head results) (int "x") `shouldBe` Unified 1
       queryVar (head results) (int "y") `shouldBe` Unified 3

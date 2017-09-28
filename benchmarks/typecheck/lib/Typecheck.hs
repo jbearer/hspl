@@ -51,7 +51,7 @@ wellTypedWithEnv = predicate "wellTyped" $ do
 
   match (v"env", Lambda $$ (v"x", v"expr"), FuncType $$ (v"arg", v"result")) |- do
     cut
-    wellTypedWithEnv? ((v"x", v"arg") <:> v"env", v"expr", v"result")
+    wellTypedWithEnv? ((v"x", v"arg") .:. v"env", v"expr", v"result")
 
   match (v"env", App $$ (v"f", v"x"), v"type") |- do
     cut
@@ -61,7 +61,7 @@ wellTypedWithEnv = predicate "wellTyped" $ do
   match (v"env", Let $$ (v"x", v"letExpr", v"inExpr"), v"type") |- do
     cut
     wellTypedWithEnv? (v"env", v"letExpr", v"letType")
-    wellTypedWithEnv? ((v"x", v"letType") <:> v"env", v"inExpr", v"type")
+    wellTypedWithEnv? ((v"x", v"letType") .:. v"env", v"inExpr", v"type")
 
   match (v"env", If $$ (v"cond", v"ifTrue", v"ifFalse"), v"type") |- do
     cut
@@ -82,11 +82,11 @@ wellTypedWithEnv = predicate "wellTyped" $ do
       once (L.member? (v"op", [Plus, Minus, Times, Divide])) ->> do
         wellTypedWithEnv? (v"env", v"l", IntType)
         wellTypedWithEnv? (v"env", v"r", IntType)
-        v"type" |=| IntType
+        v"type".=.IntType
       once (L.member? (v"op", [And, Or])) ->> do
         wellTypedWithEnv? (v"env", v"l", BoolType)
         wellTypedWithEnv? (v"env", v"r", BoolType)
-        v"type" |=| BoolType
+        v"type".=.BoolType
 
 wellTyped :: Predicate (Expr, Type)
 wellTyped = predicate "wellTyped" $

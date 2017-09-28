@@ -46,7 +46,7 @@ test = describeModule "Control.Hspl.List" $ do
         st -> fail $ "Expected [_0, _1], but found " ++ show st
       queryVar (us !! 2) (int "L") `shouldBe` Unified 2
     it "should generate lists of increasing length from a partial list" $ do
-      let us = runHsplN 3 $ L.length? ('a' <:> v"xs", int "L")
+      let us = runHsplN 3 $ L.length? ('a' .:. v"xs", int "L")
       length us `shouldBe` 3
 
       queryVar (head us) (char \* "xs") `shouldBe` Unified []
@@ -84,15 +84,15 @@ test = describeModule "Control.Hspl.List" $ do
       forM_ [0..length us - 1] $ \n ->
         case queryVar (us !! n) (string "xs") of
           Partial t -> t `shouldBeAlphaEquivalentTo`
-            (([toTerm $ Fresh i | i <- [0..n-1]] ++ [toTerm 'a']) <++> Fresh n)
+            (([toTerm $ Fresh i | i <- [0..n-1]] ++ [toTerm 'a']) .++. Fresh n)
           st -> failure $ "Expected Partial but got " ++ show st
     it "should generate partial list tails with the given element" $ do
-      let us = runHsplN 3 $ L.member? ('b', 'a' <:> v"xs")
+      let us = runHsplN 3 $ L.member? ('b', 'a' .:. v"xs")
       length us `shouldBe` 3
       forM_ [0..length us - 1] $ \n ->
         case queryVar (us !! n) (string "xs") of
           Partial t -> t `shouldBeAlphaEquivalentTo`
-            (([toTerm $ Fresh i | i <- [0..n-1]] ++ [toTerm 'b']) <++> Fresh n)
+            (([toTerm $ Fresh i | i <- [0..n-1]] ++ [toTerm 'b']) .++. Fresh n)
           st -> failure $ "Expected Partial but got " ++ show st
 
   describe "the nth predicate" $ do
@@ -140,7 +140,7 @@ test = describeModule "Control.Hspl.List" $ do
         queryVar u (int "n") `shouldBe` Unified n
         case queryVar u (string "l") of
           Partial l -> l `shouldBeAlphaEquivalentTo`
-            ((map (toTerm.Fresh) [0..n-1] ++ [toTerm 'a']) <++> Fresh n)
+            ((map (toTerm.Fresh) [0..n-1] ++ [toTerm 'a']) .++. Fresh n)
           st -> failure $ "Expected Partial but got " ++ show st
 
   describe "the delete predicate" $ do
@@ -155,7 +155,7 @@ test = describeModule "Control.Hspl.List" $ do
       length (getAllTheorems $ runHspl $ L.delete? (['b'], 'b', nil)) `shouldBe` 1
       length (getAllTheorems $ runHspl $ L.delete? (['a', 'b'], 'b', ['a'])) `shouldBe` 1
     it "should fail when given a list that does not unify with the deleted list" $ do
-      length (getAllTheorems $ runHspl $ L.delete? (nil, 'b', v"x" <:> v"xs")) `shouldBe` 0
+      length (getAllTheorems $ runHspl $ L.delete? (nil, 'b', v"x" .:. v"xs")) `shouldBe` 0
       length (getAllTheorems $ runHspl $ L.delete? (['b'], 'b', ['b'])) `shouldBe` 0
       length (getAllTheorems $ runHspl $ L.delete? (['a', 'b'], 'b', ['a', 'b'])) `shouldBe` 0
       length (getAllTheorems $ runHspl $ L.delete? (['a', 'b'], 'b', ['a', 'c'])) `shouldBe` 0
