@@ -190,7 +190,7 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
         it "should format a unary subgoal" $
           formatGoal (astGoal $ op gw) `shouldBe`
             (sop ++ " " ++ parensGoal (astGoal gw))
-    withParams [((>>), " >> "), ((.|.), ".|.")] $ \(op, sop) ->
+    withParams [((>>), ".&."), ((.|.), ".|.")] $ \(op, sop) ->
       withParams (map tell [Top, Not Top]) $ \gw ->
         it "should format binary subgoals" $ do
           let g = astGoal gw

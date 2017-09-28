@@ -575,6 +575,12 @@ test = describeModule "Control.Hspl" $ do
         Or (astGoal $ foo? 'a')
            (And (astGoal $ foo? 'b')
                 (astGoal $ foo? 'c'))
+  describe "the .&. predicate" $ do
+    it "should create an And goal from two goals" $
+      astGoal (true.&.false) `shouldBe` And Top Bottom
+    it "should parse correctly with .|." $ do
+      true.&.false.|.cut `shouldBe` (true.&.false).|.cut
+      (true.&.false.|.cut) `shouldNotBe` (true.&.(false.|.cut))
 
   describe "the true predicate" $
     it "should create a Top goal" $

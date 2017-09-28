@@ -63,6 +63,7 @@ module Control.Hspl (
   , (.>=.)
   -- *** Logical connectives
   , lnot
+  , (.&.)
   , (.|.)
   , true
   , false
@@ -186,12 +187,12 @@ infixr PREC .++. -- Has a higher precedence than .:. so that expressions like 'a
 infixr PREC .:.
 
 #undef PREC
-#define PREC 4
+#define PREC 6
 
 infixr PREC $$
 
 #undef PREC
-#define PREC 3
+#define PREC 5
 
 infix PREC `is`
 infix PREC `isnt`
@@ -205,12 +206,17 @@ infix PREC .>.
 infix PREC .>=.
 
 #undef PREC
-#define PREC 2
+#define PREC 4
 
 infix PREC ->>
 
 #undef PREC
-#define PREC 1
+#define PREC 3
+
+infixl PREC .&.
+
+#undef PREC
+#define PREC 2
 
 infixl PREC .|.
 
@@ -289,7 +295,7 @@ type Predicate a = Term a -> Goal
 -- follows:
 --
 -- @
---  bagOf x g xs = findAll x g xs >> x .=. \__ \.:. \__
+--  bagOf x g xs = findAll x g xs .&. x .=. \__ \.:. \__
 -- @
 --
 -- The second case in which the source code location is not enough to uniquely identify a predicate
@@ -421,17 +427,17 @@ findN n x g xs = tell $ Ast.Alternatives (Just n) (toTerm x) (astGoal g) (toTerm
 
 -- | Like 'findAll', but fails if the inner goal fails.
 bagOf :: (TermData a, TermData b, HSPLType b ~ [HSPLType a]) => a -> Goal -> b -> Goal
-bagOf x g xs = findAll x g xs >> xs .=. __ .:. __
+bagOf x g xs = findAll x g xs .&. xs .=. __ .:. __
 
 -- | @bagOfN n@ is like 'bagOf', but collects at most @n@ results.
 bagOfN :: (TermData a, TermData b, HSPLType b ~ [HSPLType a]) => Int -> a -> Goal -> b -> Goal
-bagOfN n x g xs = findN n x g xs >> xs .=. __ .:. __
+bagOfN n x g xs = findN n x g xs .&. xs .=. __ .:. __
 
 -- | Convert a possibly non-deterministic goal into a semi-deterministic goal. If a goal @g@
 -- succeeds at all, then the goal @once g@ succeeds exactly once, and the result is the first
 -- solution of @g@. If @g@ fails, then @once g@ also fails.
 once :: Goal -> Goal
-once gw = cutFrame (gw >> cut)
+once gw = cutFrame (gw .&. cut)
 
 -- | Discard all choicepoints created since entering the current predicate.
 cut :: Goal
@@ -500,7 +506,7 @@ isnt t1 t2 = lnot $ t1 `is` t2
 -- Note that 'cond' introduces a new cut frame.
 cond :: CondBody -> Goal
 cond body = cutFrame $ foldr (.|.) false $ map branchGoal $ execCond body
-  where branchGoal (Branch c action) = c >> cut >> action
+  where branchGoal (Branch c action) = c .&. cut .&. action
 
 -- | Define a branch of a conditional block (see 'cond'). The left-hand side is the condition goal;
 -- the right-hand side is the goal to be executed if the condition succeeds.
@@ -514,7 +520,7 @@ lnot p =
   let g = astGoal p
   in tell $ Ast.Not g
 
--- | Logical disjunction. @p .|. q@ is a predicate which is true if either @p@ is true or @q@ is
+-- | Logical disjunction. @p.|.q@ is a predicate which is true if either @p@ is true or @q@ is
 -- true. @.|.@ will backtrack over alternatives, so if both @p@ and @q@ are true, it will produce
 -- multiple solutions.
 (.|.) :: Goal -> Goal -> Goal
@@ -522,6 +528,12 @@ gw1 .|. gw2 =
   let g1 = astGoal gw1
       g2 = astGoal gw2
   in tell $ Ast.Or g1 g2
+
+-- | Logical conjunction.  @p.&.q@ is a predicate which is true only if both @p@ is true, and then
+-- @q@ is true. Note the "and then": variable bindings made while proving @p@ will apply when
+-- proving @q@.
+(.&.) :: Goal -> Goal -> Goal
+(.&.) = (>>)
 
 -- | A predicate which always succeeds.
 true :: Goal
@@ -535,11 +547,11 @@ false = tell Ast.Bottom
 -- follows. In other words, there are no variable bindings such that @cond@ succeeds and @action@
 -- fails, or
 --
--- prop> forall cond action = lnot (cond >> lnot action)
+-- prop> forall cond action = lnot (cond .&. lnot action)
 --
 -- This negative formulation of the predicate implies that no new variable bindings are created.
 forAll :: Goal -> Goal -> Goal
-forAll c action = lnot (c >> lnot action)
+forAll c action = lnot (c .&. lnot action)
 
 -- | Simplify a term and test for equality. The right-hand side is evaluated, and the resulting
 -- constant is then unified with the left-hand side. Note that '.==.' will cause a run-time error if
@@ -568,7 +580,7 @@ t1 .<. t2 = tell $ Ast.LessThan (toTerm t1) (toTerm t2)
 -- order to perform the inequality check, at which point a runtime error will be raised if the left-
 -- hand side contains uninstantiated variables.
 (.<=.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
-t1 .<=. t2 = t1 .==. t2 .|. (t1 ./==. t2 >> t1 .<. t2)
+t1 .<=. t2 = t1 .==. t2 .|. (t1 ./==. t2 .&. t1 .<. t2)
 
 -- | Simplify terms and test for inequality. @t1 .>. t2@ is equivalent to @t2 .<. t1@. See '.<.' for
 -- details.
@@ -580,7 +592,7 @@ t1 .>. t2 = t2 .<. t1
 -- short-circuits if the result unifies with the left-hand side. The left-hand side is only
 -- evaluated if unification fails.
 (.>=.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Ord (HSPLType a)) => a -> b -> Goal
-t1 .>=. t2 = t1 .==. t2 .|. (t1 ./==. t2 >> t1 .>. t2)
+t1 .>=. t2 = t1 .==. t2 .|. (t1 ./==. t2 .&. t1 .>. t2)
 
 -- | Addition. Create a term representing the sum of two terms.
 (.+.) :: (TermData a, TermData b, HSPLType a ~ HSPLType b, Num (HSPLType a)) =>

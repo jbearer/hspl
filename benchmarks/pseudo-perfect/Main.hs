@@ -6,7 +6,7 @@ import Control.Hspl
 import Control.Monad
 import Data.Maybe
 
-goal = findAll (int "c") (perfect? v"c") (v"xs") >> v"xs" .=. expected
+goal = findAll (int "c") (perfect? v"c") (v"xs") .&. v"xs" .=. expected
 
 main = compareTo (takeDirectory __FILE__ </> "lib" </> "pseudo-perfect.pl") $ do
   proofs <- bench "pseudoPerfect" goal
