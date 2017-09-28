@@ -36,7 +36,7 @@ import Prelude hiding (length)
 import Control.Hspl
 import Data.CallStack
 
-listPred :: (TermEntry t, HasCallStack) => String -> Clause t -> Predicate t
+listPred :: (TermEntry t, HasCallStack) => String -> PredicateBody t -> Predicate t
 #if MIN_VERSION_base(4,8,1)
 listPred = predicate
 #else

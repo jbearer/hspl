@@ -26,7 +26,7 @@ module Control.Hspl.Internal.Syntax (
   , astGoal
   -- * Clauses
   , ClauseWriter (..)
-  , Clause
+  , PredicateBody
   , execClauseWriter
   , astClause
   -- * Conditionals
@@ -71,8 +71,8 @@ newtype ClauseWriter t a =
   CW { unCW :: Writer [(Ast.ErasedTerm -> Ast.Predicate) -> Ast.HornClause] a }
   deriving (Functor, Applicative, Monad, MonadWriter [(Ast.ErasedTerm -> Ast.Predicate) -> Ast.HornClause])
 
--- | A definition of a predicate.
-type Clause t = ClauseWriter t ()
+-- | A definition of a predicate of type @t@.
+type PredicateBody t = ClauseWriter t ()
 
 -- | Extract the clause constructors from 'ClauseWriter'.
 execClauseWriter :: ClauseWriter t a -> [(Ast.ErasedTerm -> Ast.Predicate) -> Ast.HornClause]

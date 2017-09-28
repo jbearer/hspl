@@ -22,7 +22,7 @@ module Control.Hspl (
   , Term
   , Goal
   , Theorem
-  , Clause
+  , PredicateBody
   , Predicate
   , Termable (..)
   , TermData
@@ -314,7 +314,7 @@ type Predicate a = Term a -> Goal
 --
 -- @
 --  import Data.CallStack
---  hsplPredicate :: (HasCallStack, TermEntry t) => String -> Clause t -> Predicate t
+--  hsplPredicate :: (HasCallStack, TermEntry t) => String -> PredicateBody t -> Predicate t
 --  hsplPredicate = predicate' [Scope \"Control.Hspl"]
 -- @
 --
@@ -329,7 +329,7 @@ type Predicate a = Term a -> Goal
 -- @
 --  foo = predicate' [Scope \"MyModule"] "foo"
 -- @
-predicate :: (HasCallStack, TermEntry t) => String -> Clause t -> Predicate t
+predicate :: (HasCallStack, TermEntry t) => String -> PredicateBody t -> Predicate t
 predicate = predicate' []
 
 -- | Optional attributes which can be applied to the declaration of a predicate (via 'predicate'')
@@ -360,7 +360,7 @@ data PredicateAttribute =
 -- | Define a predicate. This function behaves exactly like 'predicate', except that it allows the
 -- caller to specify a set of 'PredicateAttribute' objects to modify the behavior of the predicate.
 predicate' :: (HasCallStack, TermEntry t) =>
-              [PredicateAttribute] -> String -> Clause t -> Predicate t
+              [PredicateAttribute] -> String -> PredicateBody t -> Predicate t
 predicate' attrs name cw arg = applyAttrs (sort attrs) $ tell $
   Ast.PredGoal (Ast.Predicate (getLoc callStack) Nothing name arg)
                (astClause (Ast.Predicate (getLoc callStack) Nothing name) cw)
@@ -382,7 +382,7 @@ predicate' attrs name cw arg = applyAttrs (sort attrs) $ tell $
       | otherwise        = Nothing
 
 -- | Attach this module as a scope to predicates if compiling without callstack information.
-hsplPred :: (HasCallStack, TermEntry t) => String -> Clause t -> Predicate t
+hsplPred :: (HasCallStack, TermEntry t) => String -> PredicateBody t -> Predicate t
 #if MIN_VERSION_base(4,8,1)
 hsplPred = predicate
 #else
@@ -393,13 +393,13 @@ hsplPred = predicate' [Scope "Control.Hspl"]
 -- statement succeeds when the input can unify with the argument to 'match'. When attempting to
 -- prove a predicate, HSPL will first find all definitions of the predicate which match the goal,
 -- and then try to prove any subgoals of the 'match' statement (which can be specified using '|-').
-match :: TermData a => a -> Clause (HSPLType a)
+match :: TermData a => a -> PredicateBody (HSPLType a)
 match t = tell [\mkPred -> Ast.HornClause (mkPred $ Ast.ETerm $ toTerm t) Ast.Top]
 
 -- | Indicates the beginning of a list of subgoals in a predicate definition. Whenever the 'match'
 -- statement on the left-hand side of '|-' succeeds, the solver attempts to prove all subgoals on
 -- the right-hand side. If it is successful, then the overall predicate succeeds.
-(|-) :: Clause t -> Goal -> Clause t
+(|-) :: PredicateBody t -> Goal -> PredicateBody t
 p |- gs =
   let [f] = execClauseWriter p
       goal = astGoal gs
