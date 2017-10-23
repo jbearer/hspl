@@ -68,7 +68,12 @@ before_install:
 - unset CC
 
 # We need prolog to run the benchmarks
-- if [ `uname` = "Darwin" ]; then brew install swi-prolog; fi
+- |
+  if [ `uname` = "Darwin" ]
+  then
+    brew update
+    brew install swi-prolog
+  fi
 
 # Download and unpack the stack executable
 - export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/$CABALVER/bin:$HOME/.local/bin:/opt/alex/$ALEXVER/bin:/opt/happy/$HAPPYVER/bin:$HOME/.cabal/bin:$PATH
