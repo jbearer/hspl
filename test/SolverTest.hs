@@ -181,13 +181,6 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       runTest $ List $ VarCons (toTerm 'a') (Var "xs")
       runTest ('a', Var "x" :: Var Char)
       runTest $ Sum (toTerm (0 :: Int)) (toTerm $ Var "x")
-  describe "proveNot" $ do
-    let runTest g = observeResults $ proveNot g
-    it "should fail if the inner goal succeeds" $
-      runTest (PredGoal (predicate "foo" ('a', 'b')) [simpleBinary]) `shouldBe` []
-    it "should succeed if the inner goal fails" $
-      getAllTheorems (runTest $ PredGoal (predicate "foo" ('b', 'a')) [simpleBinary]) `shouldBe`
-        [Not $ PredGoal (predicate "foo" ('b', 'a')) [simpleBinary]]
   describe "proveAnd" $ do
     let runTest g1 g2 = observeResults $ proveAnd g1 g2
     it "should succeed when both subgoals succeed" $ do
@@ -266,6 +259,84 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
   describe "proveBottom" $
     it "should always fail" $
       observeResults proveBottom `shouldBe` []
+  describe "proveOnce" $ do
+    let runTest = observeResults . proveOnce
+    it "should succeed once if the inner goal succeeds at all" $ do
+      getAllTheorems (runTest Top) `shouldBe` [Once Top]
+      getAllTheorems (runTest $ Or Top Top) `shouldBe` [Once $ Or Top Top]
+    it "should fail if the inner goal fails" $
+      getAllTheorems (runTest Bottom) `shouldBe` []
+    it "should preserve unifications made by the inner goal" $ do
+      let rs = runTest $ Once $ Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                   (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+      length rs `shouldBe` 1
+      queryVar (head rs) (Var "x") `shouldBe` Unified 'a'
+    it "should not affect backtracking outside of its scope" $
+      getAllTheorems (observeResults $ prove $ Or (Once (Or Top Top)) Top) `shouldBe`
+        replicate 2 (Or (Once (Or Top Top)) Top)
+  describe "proveIf" $ do
+    let runTest c t f = observeResults $ proveIf c t f
+    context "when the condition succeeds" $ do
+      it "should succeed if the true branch succeeds" $
+        getAllTheorems (runTest Top Top Bottom) `shouldBe` [If Top Top Bottom]
+      it "should fail if the true branch fails" $
+        getAllTheorems (runTest Top Bottom Top) `shouldBe` []
+      it "should preserve unifications for the true branch" $
+        getAllTheorems (runTest (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                (CanUnify (toTerm $ Var "y") (adt Just (Var "x" :: Var Char)))
+                                Bottom) `shouldBe`
+          [If (CanUnify (toTerm 'a') (toTerm 'a'))
+              (CanUnify (toTerm $ Just 'a') (toTerm $ Just 'a'))
+              Bottom]
+      it "should backtrack over all solutions for the condition" $
+        getAllTheorems (runTest (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                    (CanUnify (toTerm $ Var "x") (toTerm 'b')))
+                                (CanUnify (toTerm $ Var "y") (adt Just (Var "x" :: Var Char)))
+                                Bottom) `shouldBe`
+          [ If (Or (CanUnify (toTerm 'a') (toTerm 'a'))
+                   (CanUnify (toTerm 'a') (toTerm 'b')))
+               (CanUnify (toTerm $ Just 'a') (toTerm $ Just 'a'))
+               Bottom
+          , If (Or (CanUnify (toTerm 'b') (toTerm 'a'))
+                   (CanUnify (toTerm 'b') (toTerm 'b')))
+               (CanUnify (toTerm $ Just 'b') (toTerm $ Just 'b'))
+               Bottom
+          ]
+      it "should backtrack over all solutions for the true branch" $
+        getAllTheorems (runTest (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                (Or (CanUnify (toTerm $ Var "y") (toTerm (Var "x" :: Var Char, 'z')))
+                                    (CanUnify (toTerm $ Var "y") (toTerm ('z', Var "x" :: Var Char))))
+                                Bottom) `shouldBe`
+          [ If (CanUnify (toTerm 'a') (toTerm 'a'))
+               (Or (CanUnify (toTerm ('a', 'z')) (toTerm ('a', 'z')))
+                   (CanUnify (toTerm ('a', 'z')) (toTerm ('z', 'a'))))
+               Bottom
+          , If (CanUnify (toTerm 'a') (toTerm 'a'))
+               (Or (CanUnify (toTerm ('z', 'a')) (toTerm ('a', 'z')))
+                   (CanUnify (toTerm ('z', 'a')) (toTerm ('z', 'a'))))
+               Bottom
+          ]
+      it "should not execute the false branch" $ do
+        let rs = observeResults $ prove $ Or (If Top Top Cut)
+                                             (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+        length rs `shouldBe` 2
+        queryVar (rs !! 1) (Var "x") `shouldBe` Unified 'a'
+    context "when the condition fails" $ do
+      it "should succeed if the false branch succeeds" $
+        getAllTheorems (runTest Bottom Bottom Top) `shouldBe` [If Bottom Bottom Top]
+      it "should fail if the false branch fails" $
+        getAllTheorems (runTest Bottom Top Bottom) `shouldBe` []
+      it "should backtrack over all solutions to the false branch" $ do
+        let rs = runTest Bottom Bottom (Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                                           (CanUnify (toTerm $ Var "x") (toTerm 'b')))
+        length rs `shouldBe` 2
+        queryVar (rs !! 0) (Var "x") `shouldBe` Unified 'a'
+        queryVar (rs !! 1) (Var "x") `shouldBe` Unified 'b'
+      it "should not execute the true branch" $ do
+        let rs = observeResults $ prove $ Or (If Bottom Cut Top)
+                                             (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+        length rs `shouldBe` 2
+        queryVar (rs !! 1) (Var "x") `shouldBe` Unified 'a'
   describe "proveCut" $ do
     let runTest g = observeResults $ prove g
     it "should discard choicepoints created since the last predicate" $
@@ -429,7 +500,7 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         it "should match when the arguments unify" $ do
           g (toTerm (Var "l" :: Var Char)) (toTerm $ Var "r") `shouldMatch` g (toTerm 'a') (toTerm 'b')
           g (toTerm 'a') (toTerm 'b') `shouldMatch` g (toTerm 'a') (toTerm 'b')
-        it "should not match when the arguemtns don't unify" $ do
+        it "should not match when the arguments don't unify" $ do
           g (toTerm 'a') (toTerm 'b') `shouldNotMatch` g (toTerm 'a') (toTerm 'a')
           g (toTerm 'a') (toTerm 'b') `shouldNotMatch` g (toTerm 'b') (toTerm 'b')
     withParams [IsUnified, IsVariable] $ \g ->
@@ -439,6 +510,12 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
           g (toTerm 'a') `shouldMatch` g (toTerm 'a')
         it "should not match when the arguemtns don't unify" $
           g (toTerm 'a') `shouldNotMatch` g (toTerm 'b')
+    withParams [CutFrame, Track, Once] $ \g ->
+      context "for unary subgoals" $ do
+        it "should match when the arguments match" $
+          g Top `shouldMatch` g Top
+        it "should not match when the arguments don't match" $
+          g Top `shouldNotMatch` g Bottom
     withParams [And, Or] $ \g ->
       context "for binary subgoals" $ do
         it "should match when the arguments match" $
@@ -446,12 +523,14 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
         it "should not match when the arguments don't match" $ do
           g Top Bottom `shouldNotMatch` g Top Top
           g Top Bottom `shouldNotMatch` g Bottom Bottom
-    withParams [Not, CutFrame, Track] $ \g ->
-      context "for unary subgoals" $ do
+    withParams [If] $ \g ->
+      context "for ternary subgoals" $ do
         it "should match when the arguments match" $
-          g Top `shouldMatch` g Top
-        it "should not match when the arguments don't match" $
-          g Top `shouldNotMatch` g Bottom
+          g Top Bottom Cut `shouldMatch` g Top Bottom Cut
+        it "should not match when the arguments don't match" $ do
+          g Top Bottom Cut `shouldNotMatch` g Bottom Bottom Cut
+          g Top Bottom Cut `shouldNotMatch` g Top Top Cut
+          g Top Bottom Cut `shouldNotMatch` g Top Bottom Top
     withParams [Top, Bottom, Cut] $ \g ->
       context "for a unitary goal" $
         it "should match" $

@@ -52,12 +52,13 @@ module Control.Hspl.Internal.Solver (
   , proveLessThan
   , proveIsUnified
   , proveIsVariable
-  , proveNot
   , proveAnd
   , proveOrLeft
   , proveOrRight
   , proveTop
   , proveBottom
+  , proveOnce
+  , proveIf
   , proveAlternatives
   , proveCut
   , proveCutFrame
@@ -115,7 +116,6 @@ queryTheorem ProofResult {..} target = do
       matchBinary LessThan (toTerm t1, toTerm t2) (toTerm t1', toTerm t2')
     matchGoal g@(IsUnified t) (IsUnified t') = cast t' >>= mgu t >>= \u -> return $ unify u g
     matchGoal g@(IsVariable t) (IsVariable t') = cast t' >>= mgu t >>= \u -> return $ unify u g
-    matchGoal (Not g) (Not g') = fmap Not $ matchGoal g g'
     matchGoal (And g1 g2) (And g1' g2') = do g1'' <- matchGoal g1 g1'
                                              g2'' <- matchGoal g2 g2'
                                              return $ And g1'' g2''
@@ -124,6 +124,8 @@ queryTheorem ProofResult {..} target = do
                                            return $ Or g1'' g2''
     matchGoal Top Top = Just Top
     matchGoal Bottom Bottom = Just Bottom
+    matchGoal (Once g) (Once g') = Once `fmap` matchGoal g g'
+    matchGoal (If c t f) (If c' t' f') = liftM3 If (matchGoal c c') (matchGoal t t') (matchGoal f f')
     matchGoal (Alternatives n x g xs) (Alternatives n' x' g' xs')
       | n /= n' = Nothing
       | otherwise =
@@ -305,11 +307,6 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   -- | Attempt to prove that a 'Term' is an uninstantiated variable. No new unfications are created.
   -- The zero-overhead version is 'proveIsVariable'.
   tryIsVariable :: TermEntry a => Term a -> m Theorem
-  -- | Attempt to prove the negation of a goal. No new unifications are created. The resulting
-  -- computation should either fail with 'mzero' (if the negated goal succeeds at least once) or
-  -- produce a trivial proof of the negation of the goal. The zero-overhead version is
-  -- 'proveNot'.
-  tryNot :: Goal -> m Theorem
   -- | Attempt to prove the conjunction of two goals. The resulting computation should succeed,
   -- emitting a 'ProvedAnd' result with subproofs for each subgoal, if and only if both subgoals
   -- succeed. Further, it is important that unifications made while proving the left-hand side are
@@ -319,7 +316,7 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   -- fail with 'mzero', or emit a 'ProvedLeft' proof for each time the left subgoal succeeds. The
   -- zero-overhead version is 'proveOrLeft'.
   tryOrLeft :: Goal -> Goal -> m Theorem
-  -- | Attempt to prove the second subgoal in a disjunction. The resulting computaiton should have
+  -- | Attempt to prove the second subgoal in a disjunction. The resulting computation should have
   -- the same semantics as 'tryOr', modulo effects in the underlying monad and the fact that it
   -- emits 'provedRight' proofs rather than 'provedLeft' proofs. The zero-overhead version is
   -- 'proveOrRight'.
@@ -330,6 +327,24 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   -- | Attempt to prove 'Bottom'. This computation should always fail with 'mzero', perhaps after
   -- performing effects in the monad. The zero-overhead version is 'proveBottom'.
   tryBottom :: m Theorem
+  -- | Attempt to prove a 'Once' goal.The resulting computation should succeed exactly once if the
+  -- argument succeeds at all, and should have the same semantics as proving the first result of the
+  -- argument would have. If the argument fails, the 'Once' goal should also fail. The zero-overhead
+  -- version is 'proveOnce'.
+  tryOnce :: Goal -> m Theorem
+  -- | Attempt to prove an 'If' goal. The semantics of @If c t f@ should satisfy the following
+  -- properties:
+  --
+  -- If @c@ succeeds at all, the computation should satisfy
+  --
+  -- prop> tryIf c t f = tryAnd c t
+  --
+  -- If @c@ fails, the computation should satisfy
+  --
+  -- prop> tryIf c t f = tryOr c f
+  --
+  -- The zero-overhead version is 'proveIf'.
+  tryIf :: Goal -> Goal -> Goal -> m Theorem
   -- | Attempt to prove an 'Alternatives' goal. In addition to any effects performed in the monad,
   -- this computation should have the following semantics:
   --
@@ -376,12 +391,13 @@ instance (SplittableState s, Monad m) => MonadSolver (SolverT s m) where
   tryLessThan = proveLessThan
   tryIsUnified = proveIsUnified
   tryIsVariable = proveIsVariable
-  tryNot = proveNot
   tryAnd = proveAnd
   tryOrLeft = proveOrLeft
   tryOrRight = proveOrRight
   tryTop = proveTop
   tryBottom = proveBottom
+  tryOnce = proveOnce
+  tryIf = proveIf
   tryAlternatives = proveAlternatives
   tryCut = proveCut
   tryCutFrame = proveCutFrame
@@ -442,10 +458,6 @@ proveIsVariable :: (TermEntry a, MonadSolver m) => Term a -> m Theorem
 proveIsVariable t@(Variable _) = return $ IsVariable t
 proveIsVariable _ = mzero
 
--- | Zero-overhead version of 'tryNot'.
-proveNot :: MonadSolver m => Goal -> m Theorem
-proveNot g = lnot (prove g) >> return (Not g)
-
 -- | Zero-overhead version of 'tryAnd'.
 proveAnd :: MonadSolver m => Goal -> Goal -> m Theorem
 proveAnd g1 g2 = liftM2 And (prove g1) (prove =<< munify g2)
@@ -465,6 +477,15 @@ proveTop = return Top
 -- | Zero-overhead version of 'tryBottom'.
 proveBottom :: MonadSolver m => m Theorem
 proveBottom = mzero
+
+-- | Zero-overhead version of 'tryOnce'.
+proveOnce :: MonadSolver m => Goal -> m Theorem
+proveOnce = liftM Once . once . prove
+
+-- | Zero-overhead version of 'tryIf'.
+proveIf :: MonadSolver m => Goal -> Goal -> Goal -> m Theorem
+proveIf c t f = ifte (prove c) (\cthm -> prove t >>= \tthm -> return $ If cthm tthm f)
+                               (prove f >>= \fthm -> return $ If c t fthm)
 
 -- | Zero-overhead version of 'tryAlternatives'.
 proveAlternatives :: (MonadSolver m, TermEntry a) =>
@@ -521,11 +542,12 @@ prove g = case g of
   LessThan t1 t2 -> tryLessThan t1 t2
   IsUnified t -> tryIsUnified t
   IsVariable t -> tryIsVariable t
-  Not g' -> tryNot g'
   And g1 g2 -> tryAnd g1 g2
   Or g1 g2 -> tryOrLeft g1 g2 `mplus` tryOrRight g1 g2
   Top -> tryTop
   Bottom -> tryBottom
+  Once g' -> tryOnce g'
+  If c t f -> tryIf c t f
   Alternatives n x g' xs -> tryAlternatives n x g' xs
   Cut -> tryCut
   CutFrame g' -> tryCutFrame g'

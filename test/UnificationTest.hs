@@ -362,11 +362,11 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           rename (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
             constr (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
     context "of unary outer goals" $
-      withParams [Not, CutFrame, Track] $ \constr ->
+      withParams [CutFrame, Track, Once] $ \constr ->
         it "should rename variables in the inner goal" $
           rename (constr $ PredGoal (predicate "foo" (Var "x" :: Var Bool)) []) `shouldBe`
             constr (PredGoal (predicate "foo" (Fresh 0 :: Var Bool)) [])
-    context "of binary logic goals" $
+    context "of binary outer goals" $
       withParams [And, Or] $ \constr -> do
         it "should rename variables in each goal" $
           rename (constr (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
@@ -378,6 +378,22 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
                      (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
             constr (PredGoal (predicate "foo" (Fresh 0 :: Var Char)) [])
                (PredGoal (predicate "bar" (Fresh 0 :: Var Char)) [])
+    context "of ternary outer goals" $
+      withParams [If] $ \constr -> do
+        it "should rename variables in each goal" $
+          rename (constr (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                         (CanUnify (toTerm $ Var "y") (toTerm 'b'))
+                         (CanUnify (toTerm $ Var "z") (toTerm 'c'))) `shouldBe`
+            constr (CanUnify (toTerm $ Fresh 0) (toTerm 'a'))
+                   (CanUnify (toTerm $ Fresh 1) (toTerm 'b'))
+                   (CanUnify (toTerm $ Fresh 2) (toTerm 'c'))
+        it "should rename variables in each goal the same" $
+          rename (constr (CanUnify (toTerm $ Var "x") (toTerm 'a'))
+                         (CanUnify (toTerm $ Var "x") (toTerm 'b'))
+                         (CanUnify (toTerm $ Var "x") (toTerm 'c'))) `shouldBe`
+            constr (CanUnify (toTerm $ Fresh 0) (toTerm 'a'))
+                   (CanUnify (toTerm $ Fresh 0) (toTerm 'b'))
+                   (CanUnify (toTerm $ Fresh 0) (toTerm 'c'))
     context "of unitary goals" $
       withParams [Top, Bottom, Cut] $ \constr ->
         it "should be a noop" $
@@ -517,18 +533,28 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           unify u (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
             constr (toTerm 'a') (toTerm (Var "y" :: Var Char))
     context "to a unary outer goal" $
-      withParams [Not, CutFrame, Track] $ \constr ->
+      withParams [CutFrame, Track, Once] $ \constr ->
         it "should unify the inner goal" $
           unify (toTerm 'a' // Var "x")
                     (constr $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []) `shouldBe`
             constr (PredGoal (predicate "foo" 'a') [])
-    context "to a binary logic goal" $
+    context "to a binary outer goal" $
       withParams [And, Or] $ \constr ->
         it "should unify both inner goals" $
           unify (toTerm 'a' // Var "x")
                     (constr (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
                             (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])) `shouldBe`
             constr (PredGoal (predicate "foo" 'a') []) (PredGoal (predicate "bar" 'a') [])
+    context "to a ternary outer goal" $
+      withParams [If] $ \constr ->
+        it "should unify all inner goals" $
+          unify (toTerm 'a' // Var "x")
+                (constr (PredGoal (predicate "foo" (Var "x" :: Var Char)) [])
+                        (PredGoal (predicate "bar" (Var "x" :: Var Char)) [])
+                        (CanUnify (toTerm $ Var "x") (toTerm 'a'))) `shouldBe`
+            constr (PredGoal (predicate "foo" 'a') [])
+                   (PredGoal (predicate "bar" 'a') [])
+                   (CanUnify (toTerm 'a') (toTerm 'a'))
     context "to a unitary goal" $
       withParams [Top, Bottom, Cut] $ \constr ->
         it "should be a noop" $

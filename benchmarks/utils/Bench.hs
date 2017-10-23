@@ -265,11 +265,13 @@ genPrologGoal (LessThan t1 t2) = "(" ++ genPrologTerm t1 ++ ") < (" ++ genProlog
 genPrologGoal (IsUnified t) = error "No Prolog analog for IsUnified"
 genPrologGoal (IsVariable t) = "var(" ++ genPrologTerm t ++ ")"
 
-genPrologGoal (Not g) = "\\+(" ++ genPrologGoal g ++ ")"
 genPrologGoal (And g1 g2) = "(" ++ genPrologGoal g1 ++ "," ++ genPrologGoal g2 ++ ")"
 genPrologGoal (Or g1 g2) = "(" ++ genPrologGoal g1 ++ ";" ++ genPrologGoal g2 ++ ")"
 genPrologGoal Top = "true"
 genPrologGoal Bottom = "false"
+genPrologGoal (Once g) = "once(" ++ genPrologGoal g ++ ")"
+genPrologGoal (If c t f) =
+  "(" ++ genPrologGoal c ++ "*->" ++ genPrologGoal t ++ ";" ++ genPrologGoal f ++ ")"
 
 genPrologGoal (Alternatives n x g xs)
   | isJust n = error "No Prolog analog for Alternatives.Just"

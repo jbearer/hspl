@@ -778,11 +778,9 @@ data Goal =
             -- @isJust (fromTerm t) == True@).
           | forall t. TermEntry t => IsUnified (Term t)
             -- | A goal which succeeds if the given term is a variable. Note that this does not mean
-            -- the term /contains/ a variable, that would be redundant with @Not (IsUnified t)@.
+            -- the term /contains/ a variable; that would be redundant with @lnot (IsUnified t)@.
             -- Rather, for 'IsVariable' to succeed, the term must /be/ a variable.
           | forall t. TermEntry t => IsVariable (Term t)
-            -- | A goal which succeeds only if the inner 'Goal' fails.
-          | Not Goal
             -- | A goal which succeeds if and only if both subgoals succeed.
           | And Goal Goal
             -- | A goal which succeeds if either subgoal succeeds.
@@ -791,6 +789,11 @@ data Goal =
           | Top
             -- | A goal which always fails.
           | Bottom
+            -- | A goal which succeeds at most once.
+          | Once Goal
+            -- | For each time the first goal succeeds, conjoin it with the second goal. If the
+            -- first goal fails, disjoin it with the third goal.
+          | If Goal Goal Goal
             -- | Similar to Prolog's @findall/3@. @Alternatives template goal bag@ is a goal which
             -- succeeds if @bag@ unifies with the alternatives of @template@ in @goal@.
           | forall t. TermEntry t => Alternatives (Maybe Int) (Term t) Goal (Term [t])
@@ -822,11 +825,12 @@ instance Eq Goal where
     Nothing -> False
   (==) (IsUnified t) (IsUnified t') = maybe False (==t) $ cast t'
   (==) (IsVariable t) (IsVariable t') = maybe False (==t) $ cast t'
-  (==) (Not g) (Not g') = g == g'
   (==) (And g1 g2) (And g1' g2') = g1 == g1' && g2 == g2'
   (==) (Or g1 g2) (Or g1' g2') = g1 == g1' && g2 == g2'
   (==) Top Top = True
   (==) Bottom Bottom = True
+  (==) (Once g) (Once g') = g == g'
+  (==) (If c t f) (If c' t' f') = c == c' && t == t' && f == f'
   (==) (Alternatives n1 x g xs) (Alternatives n2 x' g' xs') = matchN n1 n2 && case cast (x', xs') of
     Just t' -> (x, xs) == t' && g == g'
     Nothing -> False

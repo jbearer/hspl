@@ -92,6 +92,15 @@ _In `Control.Hspl.Internal.Ast`_:
 1. Add the constructor to the `data Goal` definition.
 2. Add a case to the `Eq` instance for `Goal` and update the associated unit tests.
 
+_In `Control.Hspl.Internal.UI`_
+
+1. Add a case to `formatGoal` which converts the new goal into a string consistent with the new
+   syntax, and add a test case.
+2. If the new syntax consists of a single token, add a `needsParens <NewGoal> = False` clause to
+   `parensGoal`.
+3. In the `parensGoal` test case, add an example of the new goal to either the list of goals which
+   need parentheses, or the list of those which don't, as appropriate.
+
 _In `Control.Hspl.Internal.Unification`_:
 
 1. Add a case to the `Unifiable` instance for `Goal` and update the associated test.
@@ -116,15 +125,6 @@ _In `Control.Hspl`_:
 1. Define a predicate or a new syntactic primitive which users can use to create goals of the new
    type. Add tests that either check that the correct goal is created, or run a program that uses
    the new predicate and check the results, as appropriate.
-
-_In `Control.Hspl.Internal.UI`_
-
-1. Add a case to `formatGoal` which converts the new goal into a string consistent with the new
-   syntax, and add a test case.
-2. If the new syntax consists of a single token, add a `needsParens <NewGoal> = False` clause to
-   `parensGoal`.
-3. In the `parensGoal` test case, add an example of the new goal to either the list of goals which
-   need parentheses, or the list of those which don't, as appropriate.
 
 _In `Bench` in package `hspl-bench`:_
 

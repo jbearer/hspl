@@ -14,6 +14,7 @@ import qualified Control.Hspl.Internal.Ast as Ast
 import           Control.Hspl.Internal.Ast (Goal (..), Var (..))
 import qualified Control.Hspl.Internal.Solver as Solver
 import Control.Hspl.Internal.Syntax
+import qualified Control.Hspl.Internal.Syntax as Syntax
 
 import Control.Monad.Writer
 import Data.CallStack
@@ -297,21 +298,16 @@ test = describeModule "Control.Hspl" $ do
     it "should create a Cut goal" $
       astGoal cut `shouldBe` Cut
 
-  describe "the once predicate" $ do
-    it "should fail when the inner goal fails" $
-      runHspl (once false) `shouldBe` []
-    it "should succeed when the inner goal succeeds" $
-      getAllTheorems (runHspl $ once true) `shouldBe` [once true]
-    it "should succeed at most once" $
-      getAllTheorems (runHspl $ once $ true .|. true) `shouldBe` [once $ true .|. true]
-    it "should not affect backtracking outside of its scope" $
-      getAllTheorems (runHspl $ once (true .|. true) .|. true) `shouldBe`
-        replicate 2 (once (true .|. true) .|. true)
-
-  withParams [(lnot, Not), (cutFrame, CutFrame), (track, Track)] $ \(p, g) ->
+  withParams [(cutFrame, CutFrame), (track, Track), (once, Once)] $ \(p, g) ->
     describe "goal-modifying predicates" $
       it "should create a nested goal" $
         astGoal (p true) `shouldBe` g (astGoal true)
+
+  describe "the lnot predicate" $ do
+    it "should fail if the inner goal succeeds" $
+      getAllTheorems (runHspl $ lnot true) `shouldBe` []
+    it "should succeed if the inner goal fails" $
+      getAllTheorems (runHspl $ lnot false) `shouldBe` [lnot false]
 
   describe "The enum predicate" $ do
     it "should backtrack over all elements of a bounded enumerable type" $ do
@@ -440,82 +436,45 @@ test = describeModule "Control.Hspl" $ do
         Ast.PredGoal p cs ->
           testHsplPredScope p >> forM_ cs (\(Ast.HornClause p _) -> testHsplPredScope p)
 
-  describe "the .=. predicate" $ do
-    it "should create a CanUnify goal from TermData" $ do
-      astGoal ('a' .=. 'b') `shouldBe` CanUnify (toTerm 'a') (toTerm 'b')
-      astGoal ('a' .=. char "x") `shouldBe` CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char))
-      astGoal (char "x" .=. 'a') `shouldBe` CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a')
-      astGoal (char "x" .=. char "y") `shouldBe`
-        CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))
-    it "should have lower precedence than binary term constructors" $ do
-      astGoal ("foo" .=. 'f' .:. "oo") `shouldBe` CanUnify (toTerm "foo") (toTerm "foo")
-      astGoal ("foo" .=. "f".++."oo") `shouldBe` CanUnify (toTerm "foo") (toTerm "foo")
-      astGoal ((3::Int) .=. (1::Int) .+. (2::Int)) `shouldBe`
-        CanUnify (toTerm (3::Int)) ((1::Int) .+. (2::Int))
-      astGoal ((3::Int) .=. (1::Int) .*. (2::Int)) `shouldBe`
-        CanUnify (toTerm (3::Int)) ((1::Int) .*. (2::Int))
-  describe "the ./=. predicate" $ do
-    it "should create a (Not . CanUnify) goal from TermData" $ do
-      astGoal ('a' ./=. 'b') `shouldBe` Not (CanUnify (toTerm 'a') (toTerm 'b'))
-      astGoal ('a' ./=. char "x") `shouldBe` Not (CanUnify (toTerm 'a') (toTerm (Var "x" :: Var Char)))
-      astGoal (char "x" ./=. 'a') `shouldBe` Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
-      astGoal (char "x" ./=. char "y") `shouldBe`
-        Not (CanUnify (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
-    it "should have lower precedence than binary term constructors" $ do
-      astGoal ("foo" ./=. 'f' .:. "oo") `shouldBe` Not (CanUnify (toTerm "foo") (toTerm "foo"))
-      astGoal ("foo" ./=. "f".++."oo") `shouldBe` Not (CanUnify (toTerm "foo") (toTerm "foo"))
-      astGoal ((3::Int) ./=. (1::Int) .+. (2::Int)) `shouldBe`
-        Not (CanUnify (toTerm (3::Int)) ((1::Int) .+. (2::Int)))
-      astGoal ((3::Int) ./=. (1::Int) .*. (2::Int)) `shouldBe`
-        Not (CanUnify (toTerm (3::Int)) ((1::Int) .*. (2::Int)))
+-- Ugly macro so that the precedence tests work
+#define TEST_TR(OP, NOP, GOAL) ( \
+    describe ("term relations") $ ( \
+      it "should create an appropriate AST goal from TermData" $ do { \
+        astGoal ('a' OP 'b') `shouldBe` GOAL (toTerm 'a') (toTerm 'b'); \
+        astGoal ('a' OP char "x") `shouldBe` GOAL (toTerm 'a') (toTerm (Var "x" :: Var Char)); \
+        astGoal (char "x" OP 'a') `shouldBe` GOAL (toTerm (Var "x" :: Var Char)) (toTerm 'a'); \
+        astGoal (char "x" OP char "y") `shouldBe` \
+          GOAL (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)); \
+      }) >> ( \
+      it "should have lower precedence than binary term constructors" $ do { \
+        astGoal ("foo" OP 'f' .:. "oo") `shouldBe` GOAL (toTerm "foo") (toTerm "foo"); \
+        astGoal ("foo" OP "f".++."oo") `shouldBe` GOAL (toTerm "foo") (toTerm "foo"); \
+        astGoal ((3::Int) OP (1::Int) .+. (2::Int)) `shouldBe` \
+          GOAL (toTerm (3::Int)) ((1::Int) .+. (2::Int)); \
+        astGoal ((3::Int) OP (1::Int) .*. (2::Int)) `shouldBe` \
+          GOAL (toTerm (3::Int)) ((1::Int) .*. (2::Int)); \
+      }) \
+    ) >> ( \
+    describe "negated term relations" $ ( \
+      it "should negate the corresponding relation" $ do {\
+        ('a' NOP 'b') `shouldBe` lnot ('a' OP 'b'); \
+        ('a' NOP char "x") `shouldBe` lnot ('a' OP v"x"); \
+        (char "x" NOP 'a') `shouldBe` lnot (v"x" OP 'a'); \
+        (char "x" NOP char "y") `shouldBe` lnot (char "x" OP char "y"); \
+      }) >> ( \
+      it "should have lower precedence than binary term constructors" $ do {\
+        ("foo" NOP 'f' .:. "oo") `shouldBe` lnot ("foo" OP "foo"); \
+        ("foo" NOP "f".++."oo") `shouldBe` lnot ("foo" OP "foo"); \
+        ((3::Int) NOP (1::Int) .+. (2::Int)) `shouldBe` \
+          lnot ((3::Int) OP (1::Int) .+. (2::Int)); \
+        ((3::Int) NOP (1::Int) .*. (2::Int)) `shouldBe` \
+          lnot ((3::Int) OP (1::Int) .*. (2::Int)); \
+      }) \
+    )
 
-  describe "the `is` predicate" $ do
-    it "should create an Identical goal from TermData" $ do
-      astGoal ('a' `is` 'b') `shouldBe` Identical (toTerm 'a') (toTerm 'b')
-      astGoal ('a' `is` char "x") `shouldBe` Identical (toTerm 'a') (toTerm (Var "x" :: Var Char))
-      astGoal (char "x" `is` 'a') `shouldBe` Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a')
-      astGoal (char "x" `is` char "y") `shouldBe`
-        Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))
-    it "should have lower precedence than binary term constructors" $ do
-      astGoal ("foo" `is` 'f' .:. "oo") `shouldBe` Identical (toTerm "foo") (toTerm "foo")
-      astGoal ("foo" `is` "f".++."oo") `shouldBe` Identical (toTerm "foo") (toTerm "foo")
-      astGoal ((3::Int) `is` (1::Int) .+. (2::Int)) `shouldBe`
-        Identical (toTerm (3::Int)) ((1::Int) .+. (2::Int))
-      astGoal ((3::Int) `is` (1::Int) .*. (2::Int)) `shouldBe`
-        Identical (toTerm (3::Int)) ((1::Int) .*. (2::Int))
-  describe "the `isnt` predicate" $ do
-    it "should create a (Not . Identical) goal from TermData" $ do
-      astGoal ('a' `isnt` 'b') `shouldBe` Not (Identical (toTerm 'a') (toTerm 'b'))
-      astGoal ('a' `isnt` char "x") `shouldBe` Not (Identical (toTerm 'a') (toTerm (Var "x" :: Var Char)))
-      astGoal (char "x" `isnt` 'a') `shouldBe` Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm 'a'))
-      astGoal (char "x" `isnt` char "y") `shouldBe`
-        Not (Identical (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)))
-    it "should have lower precedence than binary term constructors" $ do
-      astGoal ("foo" `isnt` 'f' .:. "oo") `shouldBe` Not (Identical (toTerm "foo") (toTerm "foo"))
-      astGoal ("foo" `isnt` "f".++."oo") `shouldBe` Not (Identical (toTerm "foo") (toTerm "foo"))
-      astGoal ((3::Int) `isnt` (1::Int) .+. (2::Int)) `shouldBe`
-        Not (Identical (toTerm (3::Int)) ((1::Int) .+. (2::Int)))
-      astGoal ((3::Int) `isnt` (1::Int) .*. (2::Int)) `shouldBe`
-        Not (Identical (toTerm (3::Int)) ((1::Int) .*. (2::Int)))
-
-  describe "the .==. predicate" $ do
-    let exec = astGoal
-    it "should create an Equal goal from two terms" $ do
-      exec ((3 :: Int) .==. (3 :: Int)) `shouldBe` Equal (toTerm (3 :: Int)) (toTerm (3 :: Int))
-      exec (int "x" .==. (3 :: Int)) `shouldBe` Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int))
-    it "should have lower precedence than arithmetic operators" $
-      exec (int "x" .==. (3 :: Int) .+. (2 :: Int)) `shouldBe`
-        Equal (toTerm (Var "x" :: Var Int)) (Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int)))
-  describe "the ./==. predicate" $ do
-    let exec = astGoal
-    it "should create a (Not . Equal) goal from two terms" $ do
-      exec ((3 :: Int) ./==. (3 :: Int)) `shouldBe`
-        Not (Equal (toTerm (3 :: Int)) (toTerm (3 :: Int)))
-      exec (int "x" ./==. (3 :: Int)) `shouldBe`
-        Not (Equal (toTerm (Var "x" :: Var Int)) (toTerm (3 :: Int)))
-    it "should have lower precedence than arithmetic operators" $
-      exec (int "x" ./==. (3 :: Int) .+. (2 :: Int)) `shouldBe`
-        Not (Equal (toTerm (Var "x" :: Var Int)) (Ast.Sum (toTerm (3 :: Int)) (toTerm (2 :: Int))))
+  TEST_TR(.=., ./=., CanUnify)
+  TEST_TR(`is`, `isnt`, Identical)
+  TEST_TR(.==., ./==., Equal)
 
   describe "the .<. predicate" $ do
     let exec = astGoal
@@ -581,6 +540,29 @@ test = describeModule "Control.Hspl" $ do
     it "should parse correctly with .|." $ do
       true.&.false.|.cut `shouldBe` (true.&.false).|.cut
       (true.&.false.|.cut) `shouldNotBe` (true.&.(false.|.cut))
+  describe "the .||. predicate" $ do
+    context "when the first goal succeeds" $ do
+      it "should succeed once for each result" $ do
+        let rs = runHspl $ (v"x".=.'a' .|. v"x".=.'b') .||. v"x".=.'c'
+        length rs `shouldBe` 2
+        queryVar (head rs) (v"x") `shouldBe` Unified 'a'
+        queryVar (rs !! 1) (v"x") `shouldBe` Unified 'b'
+      it "should not execute the second goal" $ do
+        let rs = runHspl $ (true.||.cut).|.v"x".=.'a'
+        length rs `shouldBe` 2
+        queryVar (rs!!1) (v"x") `shouldBe` Unified 'a'
+    context "when the first goal fails" $ do
+      it "should succeed when the second goal succeeds" $ do
+        let rs = runHspl $ false.||.(v"x".=.'a'.|.v"x".=.'b')
+        length rs `shouldBe` 2
+        queryVar (head rs) (v"x") `shouldBe` Unified 'a'
+        queryVar (rs !! 1) (v"x") `shouldBe` Unified 'b'
+      it "should fail when the second goal fails" $
+        runHspl (false.||.false) `shouldBe` []
+
+  describe "the ifel predicate" $
+    it "should create an If goal" $
+      astGoal (ifel true false cut) `shouldBe` If Top Bottom Cut
 
   describe "the true predicate" $
     it "should create a Top goal" $

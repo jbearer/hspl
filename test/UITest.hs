@@ -185,22 +185,28 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
         it "should format a binary term goal" $
           formatGoal (astGoal (t `op` t)) `shouldEqual`
             (parensTerm t ++ sop ++ parensTerm t)
-    withParams [(lnot, "lnot"), (cutFrame, "cutFrame"), (track, "track")] $ \(op, sop) ->
-      withParams (map tell [Top, Not Top]) $ \gw ->
+    withParams [(cutFrame, "cutFrame"), (track, "track"), (once, "once")] $ \(op, sop) ->
+      withParams (map tell [Top, Once Top]) $ \gw ->
         it "should format a unary subgoal" $
           formatGoal (astGoal $ op gw) `shouldBe`
             (sop ++ " " ++ parensGoal (astGoal gw))
     withParams [((>>), ".&."), ((.|.), ".|.")] $ \(op, sop) ->
-      withParams (map tell [Top, Not Top]) $ \gw ->
+      withParams (map tell [Top, Once Top]) $ \gw ->
         it "should format binary subgoals" $ do
           let g = astGoal gw
           formatGoal (astGoal (gw `op` gw)) `shouldBe`
             (parensGoal g ++ sop ++ parensGoal g)
+    withParams [(ifel, "ifel")] $ \(op, sop) ->
+      withParams (map tell [Top, Once Top]) $ \gw ->
+        it "should format ternary subgoals" $ do
+          let g = astGoal gw
+          formatGoal (astGoal (op gw gw gw)) `shouldBe`
+            (sop ++ " " ++ parensGoal g ++ " " ++ parensGoal g ++ " " ++ parensGoal g)
     withParams [(Top, "true"), (Bottom, "false"), (Cut, "cut")] $ \(g, sg) ->
       it "should format unitary goals" $
         formatGoal g `shouldBe` sg
     withParams [toTerm $ v"x", Just $$ char "x"] $ \x ->
-      withParams [Top, Not Top] $ \g ->
+      withParams [Top, Once Top] $ \g ->
         withParams [toTerm $ v"xs", nil] $ \xs -> do
           it "should format an Alternatives Nothing as if it were a call to findAll" $
             formatGoal (astGoal $ findAll x (tell g) xs) `shouldBe`
@@ -214,9 +220,10 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
                , Identical (toTerm 'a') (toTerm 'b')
                , Equal (toTerm 'a') (toTerm 'b')
                , LessThan (toTerm 'a') (toTerm 'b')
-               , Not Top
                , And Top Bottom
                , Or Top Bottom
+               , Once Top
+               , If Top Bottom Cut
                , Alternatives Nothing (toTerm $ char "x") Top (toTerm $ string "xs")
                , Alternatives (Just 42) (toTerm $ char "x") Top (toTerm $ string "xs")
                , CutFrame Top

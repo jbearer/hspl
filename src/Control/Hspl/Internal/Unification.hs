@@ -284,11 +284,12 @@ instance Unifiable Goal where
   unify u (LessThan t1 t2) = LessThan (unify u t1) (unify u t2)
   unify u (IsUnified t) = IsUnified $ unify u t
   unify u (IsVariable t) = IsVariable $ unify u t
-  unify u (Not g) = Not $ unify u g
   unify u (And g1 g2) = And (unify u g1) (unify u g2)
   unify u (Or g1 g2) = Or (unify u g1) (unify u g2)
   unify _ Top = Top
   unify _ Bottom = Bottom
+  unify u (Once g) = Once $ unify u g
+  unify u (If c t f) = If (unify u c) (unify u t) (unify u f)
   unify u (Alternatives n x g xs) = Alternatives n (unify u x) (unify u g) (unify u xs)
   unify _ Cut = Cut
   unify u (CutFrame g) = CutFrame $ unify u g
@@ -420,11 +421,12 @@ renameGoal (Equal t1 t2) = liftM2 Equal (renameTerm t1) (renameTerm t2)
 renameGoal (LessThan t1 t2) = liftM2 LessThan (renameTerm t1) (renameTerm t2)
 renameGoal (IsUnified t) = IsUnified `liftM` renameTerm t
 renameGoal (IsVariable t) = IsVariable `liftM` renameTerm t
-renameGoal (Not g) = liftM Not $ renameGoal g
 renameGoal (And g1 g2) = liftM2 And (renameGoal g1) (renameGoal g2)
 renameGoal (Or g1 g2) = liftM2 Or (renameGoal g1) (renameGoal g2)
 renameGoal Top = return Top
 renameGoal Bottom = return Bottom
+renameGoal (Once g) = Once `liftM` renameGoal g
+renameGoal (If c t f) = liftM3 If (renameGoal c) (renameGoal t) (renameGoal f)
 renameGoal (Alternatives n x g xs) =
   liftM3 (Alternatives n) (renameTerm x) (renameGoal g) (renameTerm xs)
 renameGoal Cut = return Cut

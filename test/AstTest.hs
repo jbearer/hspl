@@ -565,13 +565,13 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
           char (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
             bool (toTerm (Var "x" :: Var Bool)) (toTerm (Var "y" :: Var Bool))
   describe "unary outer goals" $
-    withParams [Not, CutFrame, Track] $ \constr ->
+    withParams [CutFrame, Track, Once] $ \constr ->
       it "should compare according to the inner goal" $ do
         constr (PredGoal (predicate "foo" ()) []) `shouldEqual`
           constr (PredGoal (predicate "foo" ()) [])
         constr (PredGoal (predicate "foo" ()) []) `shouldNotEqual`
           constr (PredGoal (predicate "bar" ()) [])
-  describe "binary logic goals" $
+  describe "binary outer goals" $
     withParams [And, Or] $ \constr ->
       it "should compare according to the subgoals" $ do
         constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldEqual`
@@ -580,6 +580,13 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
           constr (PredGoal (predicate "foo'" ()) []) (PredGoal (predicate "bar" ()) [])
         constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
           constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar'" ()) [])
+  describe "ternary outer goals" $
+    withParams [If] $ \constr ->
+      it "should compare according to the subgoals" $ do
+        constr Top Bottom Cut `shouldEqual` constr Top Bottom Cut
+        constr Top Bottom Cut `shouldNotEqual` constr Bottom Bottom Cut
+        constr Top Bottom Cut `shouldNotEqual` constr Top Top Cut
+        constr Top Bottom Cut `shouldNotEqual` constr Top Bottom Top
   describe "unitary goals" $ do
     let ugoals = [Top, Bottom, Cut]
     withParams ugoals $ \constr -> do

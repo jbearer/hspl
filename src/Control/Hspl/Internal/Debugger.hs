@@ -264,13 +264,14 @@ instance Monad m => MonadSolver (DebugSolverT m) where
   tryLessThan lhs rhs = goalFrame (LessThan lhs rhs) (call $ proveLessThan lhs rhs)
   tryIsUnified t = goalFrame (IsUnified t) (call $ proveIsUnified t)
   tryIsVariable t = goalFrame (IsVariable t) (call $ proveIsVariable t)
-  tryNot g = goalFrame (Not g) (call $ proveNot g)
   tryAnd = proveAnd -- No 'call' here, we don't trace the 'And' itself. To the user, proving a
                     -- conjunction just looks like proving each subgoal in sequence.
   tryOrLeft g1 g2 = goalFrame (Or g1 g2) (call $ proveOrLeft g1 g2)
   tryOrRight g1 g2 = goalFrame (Or g1 g2) (callWith Redo $ proveOrRight g1 g2)
   tryTop = goalFrame Top (call proveTop)
   tryBottom = goalFrame Bottom (call proveBottom)
+  tryOnce g = goalFrame (Once g) (call $ proveOnce g)
+  tryIf c t f = goalFrame (If c t f) (call $ proveIf c t f)
   tryAlternatives n x g xs = goalFrame (Alternatives n x g xs) (call $ proveAlternatives n x g xs)
   tryCut = goalFrame Cut (call proveCut)
   tryCutFrame g = goalFrame (CutFrame g) (call $ proveCutFrame g)

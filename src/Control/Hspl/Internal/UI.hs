@@ -138,11 +138,12 @@ formatGoal (Equal t1 t2) = parensTerm t1 ++ ".==." ++ parensTerm t2
 formatGoal (LessThan t1 t2) = parensTerm t1 ++ ".<." ++ parensTerm t2
 formatGoal (IsUnified t) = "isUnified " ++ parensTerm t
 formatGoal (IsVariable t) = "isVariable " ++ parensTerm t
-formatGoal (Not g) = "lnot " ++ parensGoal g
 formatGoal (And g1 g2) = parensGoal g1 ++ ".&." ++ parensGoal g2
 formatGoal (Or g1 g2) = parensGoal g1 ++ ".|." ++ parensGoal g2
 formatGoal Top = "true"
 formatGoal Bottom = "false"
+formatGoal (Once g) = "once " ++ parensGoal g
+formatGoal (If c t f) = "ifel " ++ parensGoal c ++ " " ++ parensGoal t ++ " " ++ parensGoal f
 formatGoal (Alternatives n x g xs) =
   maybe "findAll" (("findN " ++) . show) n ++ " " ++
   parensTerm x ++ " " ++ parensGoal g ++ " " ++ parensTerm xs

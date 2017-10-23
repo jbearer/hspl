@@ -65,9 +65,11 @@ module Control.Hspl (
   , lnot
   , (.&.)
   , (.|.)
+  , (.||.)
   , true
   , false
   , forAll
+  , ifel
   -- ** Conditional blocks
   , cond
   , (->>)
@@ -219,6 +221,7 @@ infixl PREC .&.
 #define PREC 2
 
 infixl PREC .|.
+infixl PREC .||.
 
 #undef PREC
 #define PREC 0
@@ -437,7 +440,7 @@ bagOfN n x g xs = findN n x g xs .&. xs .=. __ .:. __
 -- succeeds at all, then the goal @once g@ succeeds exactly once, and the result is the first
 -- solution of @g@. If @g@ fails, then @once g@ also fails.
 once :: Goal -> Goal
-once gw = cutFrame (gw .&. cut)
+once = tell . Ast.Once . astGoal
 
 -- | Discard all choicepoints created since entering the current predicate.
 cut :: Goal
@@ -502,11 +505,9 @@ isnt t1 t2 = lnot $ t1 `is` t2
 --    x .>. 0 ->> ifPositive? x
 --    true    ->> ifNegative? x
 -- @
---
--- Note that 'cond' introduces a new cut frame.
 cond :: CondBody -> Goal
-cond body = cutFrame $ foldr (.|.) false $ map branchGoal $ execCond body
-  where branchGoal (Branch c action) = c .&. cut .&. action
+cond body = foldr (.||.) false $ map branchGoal $ execCond body
+  where branchGoal (Branch c action) = c.&.action
 
 -- | Define a branch of a conditional block (see 'cond'). The left-hand side is the condition goal;
 -- the right-hand side is the goal to be executed if the condition succeeds.
@@ -516,9 +517,7 @@ c ->> ifTrue = tell [Branch c ifTrue]
 -- | Logical negation. @lnot p@ is a predicate which is true if and only if the predicate @p@ is
 -- false. @lnot@ does not create any new bindings.
 lnot :: Goal -> Goal
-lnot p =
-  let g = astGoal p
-  in tell $ Ast.Not g
+lnot g = ifel (once g) false true
 
 -- | Logical disjunction. @p.|.q@ is a predicate which is true if either @p@ is true or @q@ is
 -- true. @.|.@ will backtrack over alternatives, so if both @p@ and @q@ are true, it will produce
@@ -528,6 +527,11 @@ gw1 .|. gw2 =
   let g1 = astGoal gw1
       g2 = astGoal gw2
   in tell $ Ast.Or g1 g2
+
+-- | Short-circuiting disjunction. If @p@ succeeds, then @p.||.q@ succeeds once for each result of
+-- @p@, and @q@ is never executed. If @p@ fails, then @p.||.q@ reduces to @q@.
+(.||.) :: Goal -> Goal -> Goal
+g1.||.g2 = ifel g1 true g2
 
 -- | Logical conjunction.  @p.&.q@ is a predicate which is true only if both @p@ is true, and then
 -- @q@ is true. Note the "and then": variable bindings made while proving @p@ will apply when
@@ -552,6 +556,11 @@ false = tell Ast.Bottom
 -- This negative formulation of the predicate implies that no new variable bindings are created.
 forAll :: Goal -> Goal -> Goal
 forAll c action = lnot (c .&. lnot action)
+
+-- | Conditional execution. If @c@ succeeds at all, then @ifel c t f@ behaves as if it were replaced
+-- by @c.&.t@. If @c@ fails, then the whole expression reduces to @f@.
+ifel :: Goal -> Goal -> Goal -> Goal
+ifel c t f = tell $ Ast.If (astGoal c) (astGoal t) (astGoal f)
 
 -- | Simplify a term and test for equality. The right-hand side is evaluated, and the resulting
 -- constant is then unified with the left-hand side. Note that '.==.' will cause a run-time error if

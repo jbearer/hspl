@@ -334,18 +334,6 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
     let isVariableTrace = traceCall isVariableGoal >> traceExit isVariableGoal
     let isVariableFailGoal = IsVariable $ Sum (toTerm (Var "x" :: Var Int)) (toTerm (0 :: Int))
     let isVariableFailTrace = traceCall isVariableFailGoal >> traceFail isVariableFailGoal
-    let notGoal = Not Bottom
-    let notTrace = do
-          traceCall notGoal
-          traceCall Bottom
-          traceFail Bottom
-          traceExit notGoal
-    let notFailGoal = Not Top
-    let notFailTrace = do
-          traceCall notFailGoal
-          traceCall Top
-          traceExit Top
-          traceFail notFailGoal
     let andGoal = And (CanUnify (toTerm "foo") (toTerm $ Var "x"))
                       (Identical (toTerm "foo") (toTerm $ Var "x"))
     let andTrace = do
@@ -405,6 +393,52 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
           traceCall Bottom
           traceFail Bottom
           traceFail orFailGoal
+    let onceGoal = Once (Or Top Top)
+    let onceTrace = do
+          traceCall onceGoal
+          traceCall $ Or Top Top
+          traceCall Top
+          traceExit Top
+          traceExit $ Or Top Top
+          traceExit onceGoal
+    let onceFailGoal = Once Bottom
+    let onceFailTrace = do
+          traceCall onceFailGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceFail onceFailGoal
+    let ifTrueGoal = If Top Top Bottom
+    let ifTrueTrace = do
+          traceCall ifTrueGoal
+          traceCall Top
+          traceExit Top
+          traceCall Top
+          traceExit Top
+          traceExit ifTrueGoal
+    let ifFalseGoal = If Bottom Bottom Top
+    let ifFalseTrace = do
+          traceCall ifFalseGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceCall Top
+          traceExit Top
+          traceExit ifFalseGoal
+    let ifTrueFailGoal = If Top Bottom Top
+    let ifTrueFailTrace = do
+          traceCall ifTrueFailGoal
+          traceCall Top
+          traceExit Top
+          traceCall Bottom
+          traceFail Bottom
+          traceFail ifTrueFailGoal
+    let ifFalseFailGoal = If Bottom Top Bottom
+    let ifFalseFailTrace = do
+          traceCall ifFalseFailGoal
+          traceCall Bottom
+          traceFail Bottom
+          traceCall Bottom
+          traceFail Bottom
+          traceFail ifFalseFailGoal
     let alternativesOrGoal = Or (CanUnify (toTerm $ Var "x") (toTerm 'a'))
                                 (CanUnify (toTerm $ Var "x") (toTerm 'b'))
     let alternativesGoal = Alternatives Nothing (toTerm (Var "x" :: Var Char)) alternativesOrGoal (toTerm $ Var "xs")
@@ -500,8 +534,6 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run isUnifiedFailGoal isUnifiedFailTrace
       run isVariableGoal isVariableTrace
       run isVariableFailGoal isVariableFailTrace
-      run notGoal notTrace
-      run notFailGoal notFailTrace
       run andGoal andTrace
       run andFailLeftGoal andFailLeftTrace
       run andFailRightGoal andFailRightTrace
@@ -511,6 +543,12 @@ test = describeModule "Control.Hspl.Internal.Debugger" $ do
       run orFailGoal orFailTrace
       run Top $ traceCall Top >> traceExit Top
       run Bottom $ traceCall Bottom >> traceFail Bottom
+      run onceGoal onceTrace
+      run onceFailGoal onceFailTrace
+      run ifTrueGoal ifTrueTrace
+      run ifFalseGoal ifFalseTrace
+      run ifTrueFailGoal ifTrueFailTrace
+      run ifFalseFailGoal ifFalseFailTrace
       run alternativesGoal alternativesTrace
       run alternativesFailInnerGoal alternativesFailInnerTrace
       run alternativesFailGoal alternativesFailTrace
