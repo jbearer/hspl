@@ -81,6 +81,7 @@ import Control.Monad
 import Control.Monad.State
 import Data.CallStack
 import Data.Data
+import Data.List (intercalate)
 import qualified Data.Map as M
 import Data.Maybe
 import Data.Monoid (Monoid (..))
@@ -806,7 +807,36 @@ data Goal =
             -- | Indicates that the inner 'Goal' should be recorded for future inspection if it is
             -- proven. 'Track' succeeds whenever the inner 'Goal' does.
           | Track Goal
-deriving instance Show Goal
+
+instance Show Goal where
+  show g = case g of
+    PredGoal p cs -> "y (\\recurse -> PredGoal (" ++ show p ++ ") ["
+                      ++ intercalate "," (map (showClause' $ Just g) cs) ++ "])"
+    _             -> show' Nothing g
+    where
+      show' mr g'@(PredGoal p' cs') = case mr of
+        Just r | g' == r -> "recurse"
+        _ -> "y (\\recurse -> PredGoal (" ++ show p' ++ ") [" ++
+              intercalate "," (map (showClause' mr) cs') ++ "])"
+      show' _ (CanUnify t1 t2) = "CanUnify (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+      show' _ (Identical t1 t2) = "Identical (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+      show' _ (Equal t1 t2) = "Equal (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+      show' _ (LessThan t1 t2) = "LessThan (" ++ show t1 ++ ") (" ++ show t2 ++ ")"
+      show' _ (IsUnified t) = "IsUnified (" ++ show t ++ ")"
+      show' _ (IsVariable t) = "IsVariable (" ++ show t ++ ")"
+      show' r (And g1 g2) = "And (" ++ show' r g1 ++ ") (" ++ show' r g2 ++ ")"
+      show' r (Or g1 g2) = "Or (" ++ show' r g1 ++ ") (" ++ show' r g2 ++ ")"
+      show' _ Top = "Top"
+      show' _ Bottom = "Bottom"
+      show' r (Once g') = "Once (" ++ show' r g' ++ ")"
+      show' r (If c t f) = "If (" ++ show' r c ++ ") (" ++ show' r t ++ ") (" ++ show' r f ++ ")"
+      show' r (Alternatives n x g xs) =
+        "Alternatives (" ++ show n ++ ") (" ++ show x ++ ") (" ++ show' r g ++ ") (" ++ show xs ++ ")"
+      show' _ Cut = "Cut"
+      show' r (CutFrame g') = "CutFrame (" ++ show' r g' ++ ")"
+      show' r (Track g') = "Track (" ++ show' r g' ++ ")"
+
+      showClause' r (HornClause p g') = "HornClause (" ++ show p ++ ") (" ++ show' r g' ++ ")"
 
 instance Eq Goal where
   (==) (PredGoal p _) (PredGoal p' _) = p == p'

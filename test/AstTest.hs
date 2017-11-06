@@ -533,6 +533,11 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
 
       let g'' = PredGoal (predicate "bar" 'a') [HornClause (predicate "bar" (Var "x" :: Var Char)) g'']
       g'' `shouldNotEqual` g
+    it "should be showable even when recursive" $ do
+      let p = predicate "foo" (Var "x" :: Var Char)
+      let pGoal = predicate "foo" 'a'
+      let g = PredGoal pGoal [HornClause p g]
+      show g `shouldBe` "y (\\recurse -> PredGoal (" ++ show pGoal ++ ") [HornClause (" ++ show p ++ ") (recurse)])"
   withParams [(IsUnified, IsUnified), (IsVariable, IsVariable)] $ \(char, bool) ->
     describe "unary term goals" $ do
       context "of the same type" $
