@@ -119,126 +119,209 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
               (Var "x" :: Var (Maybe Char)) `shouldBe`
         Partial (adt Just (Var "z" :: Var Char))
   describe "term unification" $ do
+    let getUs :: TermEntry a => Term a -> Term a -> [Unifier]
+        getUs t1 t2 = runUnificationT $ mgu t1 t2
     context "of anonymous variables" $ do
       it "should always succeed" $ do
-        mgu (toTerm Anon) (toTerm 'a') `shouldBe` Just M.empty
-        mgu (toTerm 'a') (toTerm Anon) `shouldBe` Just M.empty
-        mgu (toTerm (Anon :: Var Char)) (toTerm Anon) `shouldBe` Just M.empty
+        getUs (toTerm Anon) (toTerm 'a') `shouldBe` [M.empty]
+        getUs (toTerm 'a') (toTerm Anon) `shouldBe` [M.empty]
+        getUs (toTerm (Anon :: Var Char)) (toTerm Anon) `shouldBe` [M.empty]
       it "should bind multiple anonymous variables to different values" $
-        mgu (toTerm ('a', Anon)) (toTerm (Anon, 'b')) `shouldBe` Just M.empty
+        getUs (toTerm ('a', Anon)) (toTerm (Anon, 'b')) `shouldBe` [M.empty]
     when "both terms are variables" $
       it "should keep user-defined variables over fresh variables where possible" $ do
-        mgu (toTerm (Var "x" :: Var Char)) (toTerm (Fresh 0 :: Var Char)) `shouldBe`
-          Just (toTerm (Var "x" :: Var Char) // Fresh 0)
-        mgu (toTerm (Fresh 0 :: Var Char)) (toTerm (Var "x" :: Var Char)) `shouldBe`
-          Just (toTerm (Var "x" :: Var Char) // Fresh 0)
+        getUs (toTerm (Var "x" :: Var Char)) (toTerm (Fresh 0 :: Var Char)) `shouldBe`
+          [toTerm (Var "x" :: Var Char) // Fresh 0]
+        getUs (toTerm (Fresh 0 :: Var Char)) (toTerm (Var "x" :: Var Char)) `shouldBe`
+          [toTerm (Var "x" :: Var Char) // Fresh 0]
     when "one term is a variable" $ do
       it "should unify with any term" $ do
-        mgu (toTerm $ Var "x") (toTerm True) `shouldBe` Just (toTerm True // Var "x")
-        mgu (toTerm True) (toTerm $ Var "x") `shouldBe` Just (toTerm True // Var "x")
-        mgu (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldBe`
-          Just (toTerm (Var "y" :: Var Char) // Var "x")
-        mgu (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char)) `shouldBe` Just M.empty
+        getUs (toTerm $ Var "x") (toTerm True) `shouldBe` [toTerm True // Var "x"]
+        getUs (toTerm True) (toTerm $ Var "x") `shouldBe` [toTerm True // Var "x"]
+        getUs (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldBe`
+          [toTerm (Var "y" :: Var Char) // Var "x"]
+        getUs (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char)) `shouldBe` [M.empty]
           -- ^ This should NOT fail the occurs check!
       it "should fail when the term being substituted contains the variable (occurs check)" $ do
-        mgu (toTerm (Var "x" :: Var [Bool]))
-            (List $ VarCons (toTerm True) (Var "x")) `shouldBe` Nothing
-        mgu (toTerm (Var "x" :: Var RecursiveType))
-            (adt Rec (Var "x" :: Var RecursiveType)) `shouldBe` Nothing
+        getUs (toTerm (Var "xs" :: Var [Bool]))
+            (List $ Cons (toTerm True) (toTerm $ Var "xs")) `shouldBe` []
+        getUs (toTerm (Var "x" :: Var RecursiveType))
+            (adt Rec (Var "x" :: Var RecursiveType)) `shouldBe` []
       it "should match the tail of a list" $ do
-        mgu (toTerm "foo") (List $ VarCons (toTerm 'f') (Var "xs")) `shouldBe` Just (toTerm "oo" // Var "xs")
-        mgu (List $ VarCons (toTerm 'f') (Var "xs")) (toTerm "foo") `shouldBe` Just (toTerm "oo" // Var "xs")
+        getUs (toTerm "foo") (List $ Cons (toTerm 'f') (toTerm $ Var "xs")) `shouldBe` [toTerm "oo" // Var "xs"]
+        getUs (List $ Cons (toTerm 'f') (toTerm $ Var "xs")) (toTerm "foo") `shouldBe` [toTerm "oo" // Var "xs"]
 
-        mgu (toTerm "foo") (List $ VarCons (toTerm 'f') Anon) `shouldBe` Just M.empty
-        mgu (List $ VarCons (toTerm 'f') Anon) (toTerm "foo") `shouldBe` Just M.empty
+        getUs (toTerm "foo") (List $ Cons (toTerm 'f') (toTerm Anon)) `shouldBe` [M.empty]
+        getUs (List $ Cons (toTerm 'f') (toTerm Anon)) (toTerm "foo") `shouldBe` [M.empty]
     when "both elements are constants" $ do
       it "should unify equal constants" $ do
-        mgu (toTerm True) (toTerm True) `shouldBe` Just M.empty
-        mgu (toTerm 'a') (toTerm 'a') `shouldBe` Just M.empty
+        getUs (toTerm True) (toTerm True) `shouldBe` [M.empty]
+        getUs (toTerm 'a') (toTerm 'a') `shouldBe` [M.empty]
       it "should fail to unify unequal constants" $ do
-        mgu (toTerm True) (toTerm False) `shouldBe` Nothing
-        mgu (toTerm 'a') (toTerm 'b') `shouldBe` Nothing
+        getUs (toTerm True) (toTerm False) `shouldBe` []
+        getUs (toTerm 'a') (toTerm 'b') `shouldBe` []
     when "both terms are tuples" $ do
       it "should unify the elements in sequence" $
-        mgu (toTerm ('a', Var "x" :: Var Bool)) (toTerm (Var "y" :: Var Char, True)) `shouldBe`
-          Just (toTerm 'a' // Var "y" <> toTerm True // Var "x")
+        getUs (toTerm ('a', Var "x" :: Var Bool)) (toTerm (Var "y" :: Var Char, True)) `shouldBe`
+          [toTerm 'a' // Var "y" <> toTerm True // Var "x"]
       it "should fail to unify if any element fails" $ do
-        mgu (toTerm ('a', Var "x" :: Var Char)) (toTerm ('b', 'c')) `shouldBe` Nothing
-        mgu (toTerm (Var "x" :: Var Char, 'a')) (toTerm ('b', 'c')) `shouldBe` Nothing
+        getUs (toTerm ('a', Var "x" :: Var Char)) (toTerm ('b', 'c')) `shouldBe` []
+        getUs (toTerm (Var "x" :: Var Char, 'a')) (toTerm ('b', 'c')) `shouldBe` []
       it "should apply each intermediate unifier to the remaining terms before unifying them" $
-        mgu (toTerm ('a', Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char, Var "y" :: Var Char)) `shouldBe`
-          Just (toTerm 'a' // Var "x" <> toTerm 'a' // Var "y")
+        getUs (toTerm ('a', Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char, Var "y" :: Var Char)) `shouldBe`
+          [toTerm 'a' // Var "x" <> toTerm 'a' // Var "y"]
       it "should fail to unify tuples of different lengths" $
 #if __GLASGOW_HASKELL__ >= 800
-        shouldNotTypecheck $ mgu (toTerm ('a', 'b')) (toTerm ('a', 'b', Var "x" :: Var Char))
+        shouldNotTypecheck $ getUs (toTerm ('a', 'b')) (toTerm ('a', 'b', Var "x" :: Var Char))
 #else
         pendingWith "ShouldNotTypecheck tests require GHC >= 8.0"
 #endif
     when "both terms are lists" $ do
       it "should unify the elements in sequence" $
-        mgu (toTerm [toTerm 'a', toTerm (Var "x" :: Var Char)])
-            (toTerm [toTerm (Var "y" :: Var Char), toTerm 'b']) `shouldBe`
-          Just (toTerm 'a' // Var "y" <> toTerm 'b' // Var "x")
+        getUs (toTerm [toTerm 'a', toTerm (Var "x" :: Var Char)])
+              (toTerm [toTerm (Var "y" :: Var Char), toTerm 'b']) `shouldBe`
+          [toTerm 'a' // Var "y" <> toTerm 'b' // Var "x"]
       it "should unify a variable with the tail of a list" $
-        mgu (toTerm "abc") (List $ VarCons (toTerm 'a') (Var "xs")) `shouldBe`
-          Just (toTerm "bc" // Var "xs")
+        getUs (toTerm "abc") (List $ Cons (toTerm 'a') (toTerm $ Var "xs")) `shouldBe`
+          [toTerm "bc" // Var "xs"]
       it "should fail to unify if any element fails" $ do
-        mgu (toTerm [toTerm 'a', toTerm (Var "x" :: Var Char)]) (toTerm ['b', 'c']) `shouldBe` Nothing
-        mgu (toTerm [toTerm (Var "x" :: Var Char), toTerm 'a']) (toTerm ['b', 'c']) `shouldBe` Nothing
+        getUs (toTerm [toTerm 'a', toTerm (Var "x" :: Var Char)]) (toTerm ['b', 'c']) `shouldBe` []
+        getUs (toTerm [toTerm (Var "x" :: Var Char), toTerm 'a']) (toTerm ['b', 'c']) `shouldBe` []
       it "should apply each intermediate unifier to the remaining terms before unifying them" $
-        mgu (toTerm [toTerm 'a', toTerm (Var "x" :: Var Char)])
-            (toTerm [toTerm (Var "x" :: Var Char), toTerm (Var "y" :: Var Char)]) `shouldBe`
-          Just (toTerm 'a' // Var "x" <> toTerm 'a' // Var "y")
+        getUs (toTerm [toTerm 'a', toTerm (Var "x" :: Var Char)])
+              (toTerm [toTerm (Var "x" :: Var Char), toTerm (Var "y" :: Var Char)]) `shouldBe`
+          [toTerm 'a' // Var "x" <> toTerm 'a' // Var "y"]
       it "should fail to unify lists of different lengths" $
-        mgu (toTerm ['a', 'b']) (toTerm [toTerm 'a', toTerm 'b', toTerm (Var "x" :: Var Char)]) `shouldBe`
-          Nothing
+        getUs (toTerm ['a', 'b']) (toTerm [toTerm 'a', toTerm 'b', toTerm (Var "x" :: Var Char)]) `shouldBe`
+          []
+      it "should match a variable-appended list with a constant-appended list" $ do
+        let us = getUs (List $ Append (Var "xs") (toTerm $ Var "ys"))
+                       (List $ Append (Var "zs") (toTerm "foo"))
+        length us `shouldBe` 5
+
+        -- xs, zs same length
+        findVar (us !! 0) (Var "xs" :: Var String) `shouldBe` Partial (toTerm $ Var "zs")
+        findVar (us !! 0) (Var "ys") `shouldBe` Unified "foo"
+        findVar (us !! 0) (Var "zs" :: Var String) `shouldBe` Ununified
+
+        -- xs longer than zs
+        findVar (us !! 1) (Var "xs") `shouldBe` Partial (List $ Append (Var "zs") (toTerm "foo"))
+        findVar (us !! 1) (Var "ys") `shouldBe` Unified ""
+        findVar (us !! 1) (Var "zs" :: Var String) `shouldBe` Ununified
+
+        findVar (us !! 2) (Var "xs") `shouldBe` Partial (List $ Append (Var "zs") (toTerm "fo"))
+        findVar (us !! 2) (Var "ys") `shouldBe` Unified "o"
+        findVar (us !! 2) (Var "zs" :: Var String) `shouldBe` Ununified
+
+        findVar (us !! 3) (Var "xs") `shouldBe` Partial (List $ Append (Var "zs") (toTerm "f"))
+        findVar (us !! 3) (Var "ys") `shouldBe` Unified "oo"
+        findVar (us !! 3) (Var "zs" :: Var String) `shouldBe` Ununified
+
+        -- zs longer than xs
+        findVar (us !! 4) (Var "zs" :: Var String) `shouldBe`
+          Partial (List $ Append (Var "xs") (toTerm $ Fresh 0))
+        findVar (us !! 4) (Var "ys" :: Var String) `shouldBe`
+          Partial (List $ Append (Fresh 0) (toTerm "foo"))
+        findVar (us !! 4) (Var "xs" :: Var String) `shouldBe` Ununified
+      it "should match two variable-appended lists" $ do
+        let us = getUs (List $ Append (Var "xs" :: Var String) (toTerm $ Var "ys"))
+                       (List $ Append (Var "as") (toTerm $ Var "bs"))
+        length us `shouldBe` 3
+
+        -- xs, as same length
+        findVar (us !! 0) (Var "xs" :: Var String) `shouldBe` Partial (toTerm $ Var "as")
+        findVar (us !! 0) (Var "ys" :: Var String) `shouldBe` Partial (toTerm $ Var "bs")
+        findVar (us !! 0) (Var "as" :: Var String) `shouldBe` Ununified
+        findVar (us !! 0) (Var "bs" :: Var String) `shouldBe` Ununified
+
+        -- xs longer than as
+        findVar (us !! 1) (Var "xs" :: Var String) `shouldBe`
+          Partial (List $ Append (Var "as") (toTerm $ Fresh 0))
+        findVar (us !! 1) (Var "ys" :: Var String) `shouldBe` Ununified
+        findVar (us !! 1) (Var "as" :: Var String) `shouldBe` Ununified
+        findVar (us !! 1) (Var "bs" :: Var String) `shouldBe`
+          Partial (List $ Append (Fresh 0) (toTerm $ Var "ys"))
+
+        -- as longer than xs
+        findVar (us !! 2) (Var "as" :: Var String) `shouldBe`
+          Partial (List $ Append (Var "xs") (toTerm $ Fresh 0))
+        findVar (us !! 2) (Var "bs" :: Var String) `shouldBe` Ununified
+        findVar (us !! 2) (Var "xs" :: Var String) `shouldBe` Ununified
+        findVar (us !! 2) (Var "ys" :: Var String) `shouldBe`
+          Partial (List $ Append (Fresh 0) (toTerm $ Var "bs"))
+      withParams [getUs, flip getUs] $ \go -> do
+        it "should match an appended list with a concrete list" $ do
+          let us = go (toTerm "foo") (List $ Append (Var "xs") (toTerm "o"))
+          length us `shouldBe` 1
+          findVar (head us) (Var "xs") `shouldBe` Unified "fo"
+
+        it "should match an appended list with a partial list" $ do
+          let us = go (List $ Cons (toTerm 'f') (toTerm $ Var "tail"))
+                      (List $ Append (Var "xs" :: Var String) (toTerm $ Var "ys"))
+          length us `shouldBe` 2
+
+          findVar (head us) (Var "xs") `shouldBe` Partial (List $ Cons (toTerm 'f') (toTerm $ Fresh 0))
+          findVar (head us) (Var "ys" :: Var String) `shouldBe` Ununified
+          findVar (head us) (Var "tail") `shouldBe`
+            Partial (List $ Append (Fresh 0 :: Var String) (toTerm $ Var "ys"))
+
+          findVar (last us) (Var "xs") `shouldBe` Unified ""
+          findVar (last us) (Var "ys") `shouldBe` Partial (List $ Cons (toTerm 'f') (toTerm $ Var "tail"))
+          findVar (last us) (Var "tail" :: Var String) `shouldBe` Ununified
+
+        it "should match an appended list with an empty list" $
+          go (List $ Append (Var "xs" :: Var String) (toTerm $ Var "ys")) (List Nil) `shouldBe`
+            [(List Nil :: Term String) // Var "xs" <> (List Nil :: Term String) // Var "ys"]
+        it "should match an appended list nondeterministically" $ do
+          let us = go (List $ Append (Var "xs" :: Var String) (toTerm $ Var "ys")) (toTerm "a")
+          length us `shouldBe` 2
+          findVar (head us) (Var "xs") `shouldBe` Unified "a"
+          findVar (head us) (Var "ys") `shouldBe` Unified ""
+          findVar (last us) (Var "xs") `shouldBe` Unified ""
+          findVar (last us) (Var "ys") `shouldBe` Unified "a"
     when "both terms are ADTs" $ do
       it "should unify terms with matching constructors by unifying the arguments" $ do
-        mgu (adt Just 'a') (adt Just (Var "x")) `shouldBe`
-          Just (toTerm 'a' // Var "x")
-        mgu (adt Just (Var "x")) (adt Just 'a') `shouldBe`
-          Just (toTerm 'a' // Var "x")
+        getUs (adt Just 'a') (adt Just (Var "x")) `shouldBe` [toTerm 'a' // Var "x"]
+        getUs (adt Just (Var "x")) (adt Just 'a') `shouldBe` [toTerm 'a' // Var "x"]
       it "should apply the unifier of respective arguments to subsequent arguments before unifying them" $
-        mgu (adt TwoChars ('a', Var "x" :: Var Char))
-            (adt TwoChars (Var "x" :: Var Char, Var "y" :: Var Char)) `shouldBe`
-          Just (toTerm 'a' // Var "x" <> toTerm 'a' // Var "y")
+        getUs (adt TwoChars ('a', Var "x" :: Var Char))
+              (adt TwoChars (Var "x" :: Var Char, Var "y" :: Var Char)) `shouldBe`
+          [toTerm 'a' // Var "x" <> toTerm 'a' // Var "y"]
       it "should fail to unify terms with different constructors" $ do
-        mgu (adt Left 'a') (adt Right 'a') `shouldBe` Nothing
-        mgu (adt Left 'a') (adt Right True) `shouldBe` Nothing
-        mgu (adt Left (Var "x" :: Var Char))
-            (adt Right (Var "y" :: Var Char)) `shouldBe`
-          Nothing
+        getUs (adt Left 'a') (adt Right 'a') `shouldBe` []
+        getUs (adt Left 'a') (adt Right True) `shouldBe` []
+        getUs (adt Left (Var "x" :: Var Char)) (adt Right (Var "y" :: Var Char)) `shouldBe` []
     when "both terms are arithmetic expressions" $ do
       it "should unify terms of the same type of expression by unifying the operands" $ do
-        mgu (Sum (toTerm $ Var "x") (toTerm (1 :: Int)))
-            (Sum (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
-          Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
-        mgu (Difference (toTerm $ Var "x") (toTerm (1 :: Int)))
-            (Difference (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
-          Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
-        mgu (Product (toTerm $ Var "x") (toTerm (1 :: Int)))
-            (Product (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
-          Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
-        mgu (Quotient (toTerm $ Var "x") (toTerm (1.0 :: Double)))
-            (Quotient (toTerm (2.0 :: Double)) (toTerm $ Var "y")) `shouldBe`
-          Just (toTerm (1.0 :: Double) // Var "y" <> toTerm (2.0 :: Double) // Var "x")
-        mgu (IntQuotient (toTerm $ Var "x") (toTerm (1 :: Int)))
-            (IntQuotient (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
-          Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
-        mgu (Modulus (toTerm $ Var "x") (toTerm (1 :: Int)))
-            (Modulus (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
-          Just (toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x")
+        getUs (Sum (toTerm $ Var "x") (toTerm (1 :: Int)))
+              (Sum (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
+          [toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x"]
+        getUs (Difference (toTerm $ Var "x") (toTerm (1 :: Int)))
+              (Difference (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
+          [toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x"]
+        getUs (Product (toTerm $ Var "x") (toTerm (1 :: Int)))
+              (Product (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
+          [toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x"]
+        getUs (Quotient (toTerm $ Var "x") (toTerm (1.0 :: Double)))
+              (Quotient (toTerm (2.0 :: Double)) (toTerm $ Var "y")) `shouldBe`
+          [toTerm (1.0 :: Double) // Var "y" <> toTerm (2.0 :: Double) // Var "x"]
+        getUs (IntQuotient (toTerm $ Var "x") (toTerm (1 :: Int)))
+              (IntQuotient (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
+          [toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x"]
+        getUs (Modulus (toTerm $ Var "x") (toTerm (1 :: Int)))
+              (Modulus (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe`
+          [toTerm (1 :: Int) // Var "y" <> toTerm (2 :: Int) // Var "x"]
       it "should fail to unify different types of expressions" $ do
-        mgu (Sum (toTerm $ Var "x") (toTerm (1 :: Int)))
-            (Difference (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe` Nothing
-        mgu (Quotient (toTerm $ Var "x") (toTerm (1.0 :: Double)))
-            (Product (toTerm $ Var "x") (toTerm (1.0 :: Double))) `shouldBe` Nothing
+        getUs (Sum (toTerm $ Var "x") (toTerm (1 :: Int)))
+              (Difference (toTerm (2 :: Int)) (toTerm $ Var "y")) `shouldBe` []
+        getUs (Quotient (toTerm $ Var "x") (toTerm (1.0 :: Double)))
+              (Product (toTerm $ Var "x") (toTerm (1.0 :: Double))) `shouldBe` []
     it "should prohibit unification of terms of different types" $ do
 #if __GLASGOW_HASKELL__ >= 800
       -- This should work
-      evaluate $ mgu (toTerm True) (toTerm True)
+      evaluate $ getUs (toTerm True) (toTerm True)
       -- but not this
-      shouldNotTypecheck $ mgu (toTerm True) (toTerm 'a')
+      shouldNotTypecheck $ getUs (toTerm True) (toTerm 'a')
 #else
       pendingWith "ShouldNotTypecheck tests require GHC >= 8.0"
 #endif
@@ -285,13 +368,22 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           toTerm [Fresh 1 :: Var Char, Fresh 4 :: Var Char]
       it "should rename a variable in the tail of the list" $ do
         let r = M.singleton (Var "xs" :: Var String) (Fresh 0)
-        renameWithContext r 1 (List $ VarCons (toTerm 'a') (Var "xs")) `shouldBe`
-          List (VarCons (toTerm 'a') (Fresh 0))
+        renameWithContext r 1 (List $ Cons (toTerm 'a') (toTerm $ Var "xs")) `shouldBe`
+          List (Cons (toTerm 'a') (toTerm $ Fresh 0))
+      it "should rename the front and back of an appended list" $ do
+        let r = M.fromList [ M.Entry (Var "xs" :: Var String) (Fresh 0)
+                           , M.Entry (Var "ys" :: Var String) (Fresh 1)
+                           ]
+        renameWithContext r 2 (List $ Append (Var "xs" :: Var String) (toTerm $ Var "ys")) `shouldBe`
+          List (Append (Fresh 0 :: Var String) (toTerm $ Fresh 1))
       it "should rename the same variable with the same replacement" $ do
         rename (toTerm [Var "x" :: Var Bool, Var "x" :: Var Bool]) `shouldBe`
           toTerm [Fresh 0 :: Var Bool, Fresh 0 :: Var Bool]
         rename (toTerm [Var "q" :: Var Char, Var "q" :: Var Char]) `shouldBe`
           toTerm [Fresh 4 :: Var Char, Fresh 4 :: Var Char]
+        let r = M.singleton (Var "xs" :: Var String) (Fresh 0)
+        renameWithContext r 1 (List $ Append (Var "xs" :: Var String) (toTerm $ Var "xs")) `shouldBe`
+          List (Append (Fresh 0 :: Var String) (toTerm $ Fresh 0))
     context "of an ADT constructor" $ do
       it "should recursively rename variables in the argument" $ do
         rename (adt Just (Var "x" :: Var Char)) `shouldBe`
@@ -443,20 +535,24 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
     context "to a tuple" $
       it "should recursively apply the unifier to each element" $ do
         unify (toTerm 'a' // Var "x" <> toTerm True // Var "y")
-                  (toTerm ("foo", Var "y" :: Var Bool, Var "x" :: Var Bool, Var "x" :: Var Char)) `shouldBe`
+              (toTerm ("foo", Var "y" :: Var Bool, Var "x" :: Var Bool, Var "x" :: Var Char)) `shouldBe`
           toTerm ("foo", True, Var "x" :: Var Bool, 'a')
         unify (toTerm 'a' // Var "x" <> toTerm True // Var "y")
-                  (toTerm (Var "x" :: Var Char, ('z', Var "y" :: Var Bool))) `shouldBe`
+              (toTerm (Var "x" :: Var Char, ('z', Var "y" :: Var Bool))) `shouldBe`
           toTerm ('a', ('z', True))
     context "to a list" $ do
       it "should recursively apply the unifier to each element" $
         unify (toTerm 'a' // Var "x")
-                  (toTerm [toTerm $ Var "x", toTerm 'b', toTerm $ Var "y"]) `shouldBe`
+              (toTerm [toTerm $ Var "x", toTerm 'b', toTerm $ Var "y"]) `shouldBe`
           toTerm [toTerm 'a', toTerm 'b', toTerm $ Var "y"]
       it "should apply the unifier to the tail of a list" $
         unify (toTerm "xyz" // Var "xs")
-                  (List $ VarCons (toTerm (Var "x" :: Var Char)) (Var "xs")) `shouldBe`
+              (List $ Cons (toTerm (Var "x" :: Var Char)) (toTerm $ Var "xs")) `shouldBe`
           toTerm [toTerm $ Var "x", toTerm 'x', toTerm 'y', toTerm 'z']
+      it "should apply the unifier to both parts of an appended list" $
+        unify (toTerm "xyz" // Var "xs" <> toTerm "abc" // Var "ys")
+              (List $ Append (Var "xs" :: Var String) (toTerm $ Var "ys")) `shouldBe`
+                toTerm "xyzabc"
     context "to an ADT constructor" $
       it "should recursively apply the unifier to the argument" $ do
         unify (toTerm 'a' // Var "x")
@@ -490,7 +586,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
             (toTerm (True, Var "x" :: Var (Maybe Char)))
         `shouldBe` toTerm (True, Just 'a')
       unify ((Var "ys" :: Var String) // Var "xs" <> "foo" // Var "ys")
-            (List $ VarCons (toTerm 'a') (Var "xs"))
+            (List $ Cons (toTerm 'a') (toTerm $ Var "xs"))
         `shouldBe` toTerm "afoo"
   describe "predicate unifier application" $ do
     it "should unify the argument when the unifier applies" $

@@ -240,10 +240,11 @@ genPrologTerm term@(List list) =
     Just str -> prologAtomCase str
     Nothing -> "[" ++ joinList list ++ "]"
   where joinList Nil = ""
-        joinList (Cons t Nil) = genPrologTerm t
-        joinList (Cons t ts) = genPrologTerm t ++ "," ++ joinList ts
-        joinList (VarCons t (Var xs)) = genPrologTerm t ++ "|" ++ prologAtomCase xs
-        joinList (VarCons t (Fresh n)) = genPrologTerm t ++ "|" ++ prologAtomCase ("Fresh" ++ show n)
+        joinList (Cons t (List Nil)) = genPrologTerm t
+        joinList (Cons t ts) = case Ast.getListTerm ts of
+          Left x -> genPrologTerm t ++ "|" ++ genPrologTerm (Variable x)
+          Right l -> genPrologTerm t ++ "," ++ joinList l
+        joinList (Append _ _) = error "No Prolog analog for Append"
 
 genPrologTerm (Sum t1 t2) = "(" ++ genPrologTerm t1 ++ ") + (" ++ genPrologTerm t2 ++ ")"
 genPrologTerm (Difference t1 t2) = "(" ++ genPrologTerm t1 ++ ") - (" ++ genPrologTerm t2 ++ ")"

@@ -197,10 +197,18 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
                          Tuple2 (Constant ())
                                 (Constant 'b')))))
     it "can be constructed from lists" $ do
-      toTerm "foo" `shouldBe` List (Cons (Constant 'f') (Cons (Constant 'o') (Cons (Constant 'o') Nil)))
+      toTerm "foo" `shouldBe` List (Cons (Constant 'f') (List $ Cons
+                                         (Constant 'o') (List $ Cons
+                                         (Constant 'o')
+                                         $ List Nil)))
       toTerm ("foo", [True, False]) `shouldBe`
-        Tup (Tuple2 (List $ Cons (Constant 'f') (Cons (Constant 'o') (Cons (Constant 'o') Nil)))
-                    (List $ Cons (Constant True) (Cons (Constant False) Nil)))
+        Tup (Tuple2 (List $ Cons (Constant 'f') (List $ Cons
+                                 (Constant 'o') (List $ Cons
+                                 (Constant 'o')
+                                 $ List Nil)))
+                    (List $ Cons (Constant True) (List $ Cons
+                                 (Constant False)
+                                 $ List Nil)))
     it "can be constructed from ADTs" $ do
       toTerm (Tree 'a' (Leaf 'b') (Leaf 'c')) `shouldBe` adt Tree ('a', Leaf 'b', Leaf 'c')
       toTerm (Leaf True) `shouldBe` adt Leaf True
@@ -265,9 +273,9 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       toTerm (True, (Var "x" :: Var Bool, False)) `shouldBe`
         Tup (Tuple2 (Constant True) (Tup $ Tuple2 (Variable $ Var "x") (Constant False)))
       toTerm [Var "x" :: Var Char, Var "y" :: Var Char] `shouldBe`
-        List (Cons (toTerm (Var "x" :: Var Char)) (
+        List (Cons (toTerm (Var "x" :: Var Char)) (List $
               Cons (toTerm (Var "y" :: Var Char))
-              Nil))
+              $ List Nil))
     it "should have type corresponding to the enclosed value" $ do
       termType (toTerm True) `shouldBe` typeOf True
       termType (toTerm ('a', True, ())) `shouldBe` typeOf ('a', True, ())
@@ -281,6 +289,7 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         fromTerm (toTerm 'a') `shouldBe` Just 'a'
         fromTerm (toTerm (42 :: Int)) `shouldBe` Just (42 :: Int)
         fromTerm (toTerm (True, 'a')) `shouldBe` Just (True, 'a')
+        fromTerm (List Nil :: Term [Int]) `shouldBe` Just []
         fromTerm (toTerm "foo") `shouldBe` Just "foo"
         fromTerm (toTerm $ Tree 'a' (Leaf 'b') (Leaf 'c')) `shouldBe`
           Just (Tree 'a' (Leaf 'b') (Leaf 'c'))
@@ -319,6 +328,9 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       it "fromTerm should return Nothing" $ do
         fromTerm (toTerm (Var "x" :: Var ())) `shouldBe` (Nothing :: Maybe ())
         fromTerm (toTerm (True, Var "x" :: Var Bool)) `shouldBe` (Nothing :: Maybe (Bool, Bool))
+        fromTerm (List $ Cons (toTerm $ Var "x") (toTerm "foo")) `shouldBe` Nothing
+        fromTerm (List $ Cons (toTerm 'a') (toTerm $ Var "xs")) `shouldBe` Nothing
+        fromTerm (List $ Append (Var "xs") $ toTerm "foo") `shouldBe` Nothing
         fromTerm (adt Leaf (Var "x" :: Var Char)) `shouldBe` Nothing
         fromTerm (adt Tree ('a', Leaf 'b', Var "x" :: Var (Tree Char))) `shouldBe` Nothing
         fromTerm (adt Tree ('a', Leaf 'b', adt Leaf (Var "x" :: Var Char))) `shouldBe` Nothing
@@ -433,11 +445,17 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
           toTerm ([Var "y", Var "x"] :: [Var Char])
         toTerm ([Var "x", Var "x"] :: [Var Char]) `shouldBeAlphaEquivalentTo`
           toTerm ([Var "a", Var "a"] :: [Var Char])
+        List (Append (Var "xs") $ toTerm "foo") `shouldBeAlphaEquivalentTo`
+          List (Append (Var "ys") $ toTerm "foo")
+        List (Append (Var "xs" :: Var String) $ toTerm $ Var "ys") `shouldBeAlphaEquivalentTo`
+          List (Append (Var "ys" :: Var String) $ toTerm $ Var "xs")
       it "should fail when the lists can be unified but are not alpha-equivalent" $ do
         toTerm [Var "x" :: Var Char, Var "y" :: Var Char] `shouldNotSatisfy`
           alphaEquivalent (toTerm [Var "a" :: Var Char, Var "a" :: Var Char])
         toTerm [Var "x" :: Var Char, Var "x" :: Var Char] `shouldNotSatisfy`
           alphaEquivalent (toTerm [Var "a" :: Var Char, Var "b" :: Var Char])
+        toTerm "abcd" `shouldNotSatisfy`
+          alphaEquivalent (List $ Append (Var "xs") $ toTerm "cd")
       it "should fail when the lists are not of the same form" $
         toTerm ['a', 'b'] `shouldNotSatisfy` alphaEquivalent (toTerm ['b', 'c'])
     context "of adts" $ do
@@ -478,11 +496,21 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
   describe "getListTerm" $ do
     it "should return the ListTerm for a term with a List constructor" $ do
       getListTerm (List Nil :: Term [Int]) `shouldBe` Right Nil
-      getListTerm (List $ Cons (toTerm 'a') Nil) `shouldBe` Right (Cons (toTerm 'a') Nil)
-      getListTerm (List $ VarCons (toTerm 'a') (Var "xs")) `shouldBe`
-        Right (VarCons (toTerm 'a') (Var "xs"))
+      getListTerm (List $ Cons (toTerm 'a') $ List Nil) `shouldBe` Right (Cons (toTerm 'a') $ List Nil)
     it "should return a variable when the term has a Variable constructor" $
       getListTerm (toTerm (Var "xs" :: Var [Int])) `shouldBe` Left (Var "xs")
+  describe "appendTerm" $ do
+    it "should prepend a variable" $
+      appendTerm (toTerm $ Var "prefix") (toTerm "foo") `shouldBe`
+        List (Append (Var "prefix") (toTerm "foo"))
+    it "should ignore a preceding Nil" $
+      appendTerm (List Nil) (toTerm "foo") `shouldBe` toTerm "foo"
+    it "should prepend a cons'ed list" $
+      appendTerm (List $ Cons (toTerm $ Var "x") (toTerm "oo")) (toTerm "bar") `shouldBe`
+        List (Cons (toTerm $ Var "x") (toTerm "oobar"))
+    it "should prened an appended list" $
+      appendTerm (List $ Append (Var "xs") (toTerm "bar")) (toTerm "baz") `shouldBe`
+        List (Append (Var "xs") (toTerm "barbaz"))
   describe "predicates" $ do
     it "should have type corresponding to the type of the argument" $ do
       predType (predicate "foo" ()) `shouldBe` termType (toTerm ())

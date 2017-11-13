@@ -98,60 +98,59 @@ queryTheorem :: ProofResult -> Goal -> [Goal]
 queryTheorem ProofResult {..} target = do
   g <- trackedTheorems
   let g' = unify unifiedVars g
-  let mg = matchGoal g' target
+  let mg = runUnificationT $ matchGoal g' target
   guard $ isJust mg
   return $ fromJust mg
   where
     -- Unify a goal with the query goal and return the unified goal, or Nothing
+    matchGoal :: MonadUnification m => Goal -> Goal -> m Goal
     matchGoal (PredGoal prd@(Predicate loc scope name arg) _)
               (PredGoal (Predicate loc' scope' name' arg') _)
-      | loc == loc' && scope == scope' && name == name' = case cast arg' >>= mgu arg of
-          Just u -> Just $ PredGoal (unify u prd) []
-          Nothing -> Nothing
-      | otherwise = Nothing
+      | loc == loc' && scope == scope' && name == name' =
+          do u <- liftMaybe (cast arg') >>= mgu arg
+             return $ PredGoal (unify u prd) []
+      | otherwise = mzero
     matchGoal (CanUnify t1 t2) (CanUnify t1' t2') = matchBinary CanUnify (t1, t2) (t1', t2')
     matchGoal (Identical t1 t2) (Identical t1' t2') = matchBinary Identical (t1, t2) (t1', t2')
     matchGoal (Equal t1 t2) (Equal t1' t2') = matchBinary Equal (t1, t2) (t1', t2')
     matchGoal (LessThan t1 t2) (LessThan t1' t2') =
       matchBinary LessThan (toTerm t1, toTerm t2) (toTerm t1', toTerm t2')
-    matchGoal g@(IsUnified t) (IsUnified t') = cast t' >>= mgu t >>= \u -> return $ unify u g
-    matchGoal g@(IsVariable t) (IsVariable t') = cast t' >>= mgu t >>= \u -> return $ unify u g
+    matchGoal g@(IsUnified t) (IsUnified t') = liftMaybe (cast t') >>= mgu t >>= \u -> return $ unify u g
+    matchGoal g@(IsVariable t) (IsVariable t') = liftMaybe (cast t') >>= mgu t >>= \u -> return $ unify u g
     matchGoal (And g1 g2) (And g1' g2') = do g1'' <- matchGoal g1 g1'
                                              g2'' <- matchGoal g2 g2'
                                              return $ And g1'' g2''
     matchGoal (Or g1 g2) (Or g1' g2') = do g1'' <- matchGoal g1 g1'
                                            g2'' <- matchGoal g2 g2'
                                            return $ Or g1'' g2''
-    matchGoal Top Top = Just Top
-    matchGoal Bottom Bottom = Just Bottom
-    matchGoal (Once g) (Once g') = Once `fmap` matchGoal g g'
+    matchGoal Top Top = return Top
+    matchGoal Bottom Bottom = return Bottom
+    matchGoal (Once g) (Once g') = Once `liftM` matchGoal g g'
     matchGoal (If c t f) (If c' t' f') = liftM3 If (matchGoal c c') (matchGoal t t') (matchGoal f f')
     matchGoal (Alternatives n x g xs) (Alternatives n' x' g' xs')
-      | n /= n' = Nothing
+      | n /= n' = mzero
       | otherwise =
         let t = toTerm (x, xs)
             t' = toTerm (x', xs')
-        in case cast t' >>= mgu t of
-          Just u -> do
-            g'' <- matchGoal g g'
-            return $ Alternatives n (unify u x) g'' (unify u xs)
-          Nothing -> Nothing
+        in do u <- liftMaybe (cast t') >>= mgu t
+              g'' <- matchGoal g g'
+              return $ Alternatives n (unify u x) g'' (unify u xs)
 
-    matchGoal Cut Cut = Just Cut
-    matchGoal (CutFrame g) (CutFrame g') = CutFrame `fmap` matchGoal g g'
+    matchGoal Cut Cut = return Cut
+    matchGoal (CutFrame g) (CutFrame g') = CutFrame `liftM` matchGoal g g'
 
-    matchGoal (Track g) (Track g') = Track `fmap` matchGoal g g'
+    matchGoal (Track g) (Track g') = Track `liftM` matchGoal g g'
 
-    matchGoal _ _ = Nothing
+    matchGoal _ _ = mzero
 
-    matchBinary :: (TermEntry a, TermEntry b, TermEntry c, TermEntry d) =>
-                   (Term a -> Term b -> Goal) -> (Term a, Term b) -> (Term c, Term d) -> Maybe Goal
+    matchBinary :: (MonadUnification m, TermEntry a, TermEntry b, TermEntry c, TermEntry d) =>
+                   (Term a -> Term b -> Goal) -> (Term a, Term b) -> (Term c, Term d) -> m Goal
     matchBinary constr (t1, t2) (t1', t2') =
       let t = toTerm (t1, t2)
           t' = toTerm (t1', t2')
-      in case cast t' >>= mgu t of
-        Just u -> Just $ unify u $ constr t1 t2
-        Nothing -> Nothing
+      in do
+        u <- liftMaybe (cast t') >>= mgu t
+        return $ unify u $ constr t1 t2
 
 -- | Get the theorem which follows from a 'Proof'; i.e., the root of a proof tree.
 getTheorem :: ProofResult -> Goal
@@ -421,9 +420,7 @@ provePredicate p c = do
 
 -- | Zero-overhead version of 'tryUnifiable'.
 proveUnifiable :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m Theorem
-proveUnifiable t1 t2 = case mgu t1 t2 of
-  Just u -> addUnifier u >> return (CanUnify t1 t2)
-  Nothing -> mzero
+proveUnifiable t1 t2 = mgu t1 t2 >>= addUnifier >> return (CanUnify t1 t2)
 
 -- | Zero-overhead version of 'tryIdentical'.
 proveIdentical :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m Theorem
@@ -435,9 +432,9 @@ proveIdentical t1 t2
 proveEqual :: (TermEntry a, MonadSolver m) => Term a -> Term a -> m Theorem
 proveEqual lhs rhs = do
   rhs' <- eval rhs
-  case mgu lhs rhs' of
-    Just u -> addUnifier u >> return (Equal lhs rhs')
-    Nothing -> mzero
+  u <- mgu lhs rhs'
+  addUnifier u
+  return $ Equal lhs rhs'
   where eval t = case fromTerm t of
           Just t' -> return $ toTerm t'
           Nothing -> errorUninstantiatedVariables
@@ -496,9 +493,8 @@ proveAlternatives maybeN x g xs = do
   let (thms, us) = unzip [(map (unify localU) ts, localU) | (ts, localU) <- results]
   forM_ (concat thms) recordThm
   let alternatives = toTerm $ map (`unify` x) us
-  let mu = mgu xs alternatives
-  guard $ isJust mu
-  addUnifier $ fromJust mu
+  u <- mgu xs alternatives
+  addUnifier u
   return $ Alternatives maybeN x g xs
   where getAlternatives mn m =
           let m' = m >> liftM2 (,) getRecordedThms getUnifier

@@ -105,8 +105,11 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
       format [True] `shouldBe` "[True]"
       format [True, False] `shouldBe` "[True, False]"
       format [[True, False], [False, True]] `shouldBe` "[[True, False], [False, True]]"
-      format (['a'] .++. [v"x"]) `shouldBe` "['a', x :: Char]"
-      format ('a' .:. v"xs") `shouldBe` "['a'].++.(xs :: [Char])"
+      format (['a'].++.[v"x"]) `shouldBe` "['a', x :: Char]"
+      format (v"xs".++."foo") `shouldBe` "(xs :: [Char]).++.\"foo\""
+      format (string "xs" .++. string "ys") `shouldBe` "(xs :: [Char]).++.(ys :: [Char])"
+      format ('a'.:.v"xs") `shouldBe` "['a'].++.(xs :: [Char])"
+      format ('a'.:.v"xs".++."foo") `shouldBe` "['a'].++.(xs :: [Char]).++.\"foo\""
 
     it "should produce a somewhat readable representation of a tuple" $ do
       format (True, False) `shouldBe` "(True, False)"

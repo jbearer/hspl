@@ -87,6 +87,8 @@ formatTerm term@(List list)
 
   where formatList :: ListTerm a -> String
         formatList Nil = "[]"
+        formatList (Append xs (Variable ys)) = parensVariable xs ++ ".++." ++ parensVariable ys
+        formatList (Append xs ys) = parensVariable xs ++ ".++." ++ formatTerm ys
         formatList l = case joinList l of
           (prefix, Nothing) -> "[" ++ prefix ++ "]"
           (prefix, Just rest) -> "[" ++ prefix ++ "].++." ++ rest
@@ -96,11 +98,14 @@ formatTerm term@(List list)
         -- which must be appended to the list with .++.. Otherwise, it will be Nothing.
         joinList :: ListTerm a -> (String, Maybe String)
         joinList Nil = ("", Nothing)
-        joinList (Cons t Nil) = (formatTerm t, Nothing)
-        joinList (Cons t ts) =
-          let (prefix, rest) = joinList ts
-          in (formatTerm t ++ ", " ++ prefix, rest)
-        joinList (VarCons t x) = (formatTerm t, Just $ parensVariable x)
+        joinList (Append _ _) = error "joining partial list"
+        joinList (Cons t (List l@(Append _ _))) = (formatTerm t, Just $ formatList l)
+        joinList (Cons t (List Nil)) = (formatTerm t, Nothing)
+        joinList (Cons t ts) = case getListTerm ts of
+          Left x -> (formatTerm t, Just $ parensVariable x)
+          Right lts ->
+            let (prefix, rest) = joinList lts
+            in (formatTerm t ++ ", " ++ prefix, rest)
 
 formatTerm (Sum t1 t2) = parensTerm t1 ++ ".+." ++ parensTerm t2
 formatTerm (Difference t1 t2) = parensTerm t1 ++ ".-." ++ parensTerm t2

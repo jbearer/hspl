@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
@@ -32,6 +33,9 @@ module Control.Hspl.Internal.Unification (
   , VarGenerator
   , runVarGenerator
   , MonadUnification (..)
+  , UnificationT
+  , runUnificationT
+  , liftMaybe
   , modifyUnifier
   , addUnifier
   , munify
@@ -53,6 +57,7 @@ module Control.Hspl.Internal.Unification (
   , renameClause
   ) where
 
+import Control.Applicative
 import Control.Exception
 import Control.Monad.Identity
 import Control.Monad.State
@@ -108,6 +113,23 @@ class (MonadVarGenerator m, MonadPlus m) => MonadUnification m where
 
   {-# MINIMAL (stateUnifier | getUnifier, putUnifier) #-}
 
+-- | A monad trasnformer which adds to an existing monad the necessary state and behavior to create
+-- an instance of 'MonadUnification'.
+newtype UnificationT m a = UnificationT (VarGeneratorT (StateT Unifier m) a)
+  deriving (Functor, Applicative, Alternative, Monad, MonadPlus, MonadVarGenerator)
+
+instance MonadTrans UnificationT where
+  lift = UnificationT . lift . lift
+
+instance MonadPlus m => MonadUnification (UnificationT m) where
+  stateUnifier = UnificationT . lift . state
+
+-- | Run a computation in the 'UnificationT' monad, producing a computation in the underlying monad.
+runUnificationT :: Monad m => UnificationT m a -> m a
+runUnificationT (UnificationT m) =
+  let st = runVarGeneratorT m
+  in evalStateT st M.empty
+
 -- | Update the current 'Unifier' based on a supplied transformation function.
 modifyUnifier :: MonadUnification m => (Unifier -> Unifier) -> m ()
 modifyUnifier f = (f `liftM` getUnifier) >>= putUnifier
@@ -159,8 +181,8 @@ freeIn var (Tup tup) = freeInTuple var tup
         freeInTuple x (TupleN t ts) = freeIn x t || freeInTuple x ts
 freeIn var (List l) = freeInList var l
   where freeInList :: (TermEntry a, TermEntry b) => Var a -> ListTerm b -> Bool
-        freeInList x (Cons t ts) = freeIn x t || freeInList x ts
-        freeInList x (VarCons t y) = freeIn x t || freeIn x (Variable y)
+        freeInList x (Cons t ts) = freeIn x t || freeIn x ts
+        freeInList x (Append xs ys) = freeIn x (Variable xs) || freeIn x ys
         freeInList _ Nil = False
 freeIn x (Sum t1 t2) = freeIn x t1 || freeIn x t2
 freeIn x (Difference t1 t2) = freeIn x t1 || freeIn x t2
@@ -169,64 +191,125 @@ freeIn x (Quotient t1 t2) = freeIn x t1 || freeIn x t2
 freeIn x (IntQuotient t1 t2) = freeIn x t1 || freeIn x t2
 freeIn x (Modulus t1 t2) = freeIn x t1 || freeIn x t2
 
+-- | Lift a 'Maybe' into an arbitrary 'MonadPlus' computation. Obeys the following laws:
+--
+-- prop> liftMaybe . Just = return
+--
+-- prop> liftMaybe Nothing = mzero
+liftMaybe :: MonadPlus m => Maybe a -> m a
+liftMaybe (Just a) = return a
+liftMaybe Nothing = mzero
+
 -- | Compute the most general unifier for two 'Term's. A "most general unifier" is a 'Unifier' that
 -- cannot be created by composing (@<>@) two smaller unifiers. This function will fail with
 -- 'Nothing' if the two terms cannot be unified.
-mgu :: Term a -> Term a -> Maybe Unifier
-mgu (Variable Anon) _ = Just M.empty
-mgu _ (Variable Anon) = Just M.empty
+mgu :: MonadUnification m => Term a -> Term a -> m Unifier
+mgu (Variable Anon) _ = return M.empty
+mgu _ (Variable Anon) = return M.empty
 mgu (Variable x) (Variable y)
-  | x == y = Just M.empty -- no occurs check if we're unifying two variables
+  | x == y = return M.empty -- no occurs check if we're unifying two variables
   | otherwise = case y of
     -- When one variable is a program-generated 'Fresh' variable, prefer to replace it with the
     -- other, thereby keeping user-defined variables in play as long as possible. Semantically it
     -- makes no difference, but user-defined variables mean something to the client whereas 'Fresh'
     -- variables do not; therefore, keeping the user-defined variables may make HSPL programs easier
     -- to inspect, debug, and reason about.
-    Fresh _ -> Just $ toTerm x // y
-    _ -> Just $ toTerm y // x
+    Fresh _ -> return $ toTerm x // y
+    _ -> return $ toTerm y // x
 mgu (Variable x) t
-  | freeIn x t = Nothing -- occurs check
-  | otherwise = Just $ t // x
+  | freeIn x t = mzero -- occurs check
+  | otherwise = return $ t // x
 mgu t (Variable x)
-  | freeIn x t = Nothing -- occurs check
-  | otherwise = Just $ t // x
+  | freeIn x t = mzero -- occurs check
+  | otherwise = return $ t // x
 
 mgu (Constant c) (Constant c')
-  | c == c' = Just M.empty
-  | otherwise = Nothing
+  | c == c' = return M.empty
+  | otherwise = mzero
 
 mgu (Constructor c arg) (Constructor c' arg')
   | c == c' = mguETermList arg arg'
-  | otherwise = Nothing
-  where mguETermList :: [ErasedTerm] -> [ErasedTerm] -> Maybe Unifier
-        mguETermList [] [] = Just M.empty
-        mguETermList [] _ = Nothing
-        mguETermList _ [] = Nothing
-        mguETermList (ETerm t : ts) (ETerm t' : ts') = do u <- cast t' >>= mgu t
+  | otherwise = mzero
+  where mguETermList :: MonadUnification m => [ErasedTerm] -> [ErasedTerm] -> m Unifier
+        mguETermList [] [] = return M.empty
+        mguETermList [] _ = mzero
+        mguETermList _ [] = mzero
+        mguETermList (ETerm t : ts) (ETerm t' : ts') = do u <- liftMaybe (cast t') >>= mgu t
                                                           let uts = map (termMap $ ETerm . unify u) ts
                                                           let uts' = map (termMap $ ETerm . unify u) ts'
                                                           u' <- mguETermList uts uts'
                                                           return $ u `compose` u'
 
 mgu (Tup tup) (Tup tup') = mguTup tup tup'
-  where mguTup :: TermEntry a => TupleTerm a -> TupleTerm a -> Maybe Unifier
+  where mguTup :: (MonadUnification m, TermEntry a) => TupleTerm a -> TupleTerm a -> m Unifier
         mguTup (Tuple2 t1 t2) (Tuple2 t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
         mguTup (TupleN t ts) (TupleN t' ts') = do u <- mgu t t'
                                                   let uts = unify u ts
                                                   let uts' = unify u ts'
                                                   u' <- mguTup uts uts'
                                                   return $ u `compose` u'
-        mguTup _ _ = Nothing
+        mguTup _ _ = mzero
 
 mgu (List l) (List l') = mguList l l'
-  where mguList :: ListTerm a -> ListTerm a -> Maybe Unifier
-        mguList Nil Nil = Just M.empty
-        mguList (Cons t ts) (Cons t' ts') = mguBinaryTerm (t, List ts) (t', List ts')
-        mguList (VarCons t x) (VarCons t' x') = mguBinaryTerm (t, Variable x) (t', Variable x')
-        mguList (VarCons t x) (Cons t' ts) = mguBinaryTerm (t, Variable x) (t', List ts)
-        mguList (Cons t ts) (VarCons t' x) = mguBinaryTerm (t, List ts) (t', Variable x)
-        mguList _ _ = Nothing
+  where mguList :: (TermEntry a, MonadUnification m) => ListTerm a -> ListTerm a -> m Unifier
+        mguList Nil Nil = return M.empty
+
+        mguList (Cons t ts) (Cons t' ts') = mguBinaryTerm (t, ts) (t', ts')
+
+        mguList (Append lFront lBack) (Append rFront rBack) =
+          -- lFront and rFront are the same length
+          mguBinaryTerm (Variable lFront, lBack) (Variable rFront, rBack) `mplus`
+          -- lFront is longer than rFront
+          mguAppend (lFront, lBack) (rFront, rBack) `mplus`
+          -- lFront is shorter than rFront
+          mguAppend (rFront, rBack) (lFront, lBack)
+
+        mguList Nil (Append xs ys) = mguBinaryTerm (List Nil, List Nil) (Variable xs, ys)
+        mguList (Append xs ys) Nil = mguBinaryTerm (Variable xs, ys) (List Nil, List Nil)
+        mguList lc@(Cons t ts) (Append xs ys) = do xs' <- fresh
+                                                   u <- mgu (List $ Cons t (Variable xs')) (Variable xs)
+                                                   let Variable xs'' = unify u $ Variable xs'
+                                                   let ys' = unify u ys
+                                                   let ts' = unify u ts
+                                                   u' <- mgu ts' (List $ Append xs'' ys')
+                                                   return $ u `compose` u'
+                                               `mplus`
+                                               mguBinaryTerm (List Nil, List lc) (Variable xs, ys)
+        mguList l1@(Append _ _) l2@(Cons _ _) = mguList l2 l1
+
+        mguList Nil (Cons _ _) = mzero
+        mguList (Cons _ _) Nil = mzero
+
+        -- Try to unify two appended lists, assuming the front of the first list is longer than the
+        -- front of the second
+        mguAppend :: (TermEntry a, MonadUnification m) =>
+                     (Var [a], Term [a]) -> (Var [a], Term [a]) -> m Unifier
+        mguAppend (lFront, lBack) (rFront, rBack) =
+          do
+             -- Split rBack into two pieces, one which we will append to rFront and match with
+             -- lFront, and one which we will match with lBack
+             rBackFront <- fresh
+             rBackBack <- fresh
+             uR <- mgu rBack (List $ Append rBackFront (Variable rBackBack))
+
+             -- Unify lFront with rFront ++ rBackFront
+             let lFront' = unify uR (Variable lFront)
+             let rFront' = unify uR (Variable rFront)
+             let rBackFront' = unify uR (Variable rBackFront)
+             uLFront <- mgu lFront' (appendTerm rFront' rBackFront')
+
+             let uRuLFront = uR `compose` uLFront
+
+             -- Unify lBack with rBackBack
+             let lBack' = unify uRuLFront lBack
+             let rBackBack' = unify uRuLFront (Variable rBackBack)
+             uLBack <- mgu lBack' rBackBack'
+
+             let u = uRuLFront `compose` uLBack
+             -- If rBackFront is empty, lFront is not really longer than rFront
+             guard $ findVar u rBackFront /= Unified []
+
+             return u
 
 mgu (Sum t1 t2) (Sum t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 mgu (Difference t1 t2) (Difference t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
@@ -235,10 +318,11 @@ mgu (Quotient t1 t2) (Quotient t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 mgu (IntQuotient t1 t2) (IntQuotient t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 mgu (Modulus t1 t2) (Modulus t1' t2') = mguBinaryTerm (t1, t2) (t1', t2')
 
-mgu _ _ = Nothing
+mgu _ _ = mzero
 
 -- | Helper function for computing the 'mgu' of a 'Term' with two subterms.
-mguBinaryTerm :: (TermEntry a, TermEntry b) => (Term a, Term b) -> (Term a, Term b) -> Maybe Unifier
+mguBinaryTerm :: (MonadUnification m, TermEntry a, TermEntry b) =>
+                 (Term a, Term b) -> (Term a, Term b) -> m Unifier
 mguBinaryTerm (t1, t2) (t1', t2') = do
   -- Unify the subterms in sequence, applying each intermediate unifier to the remaining terms
   mgu1 <- mgu t1 t1'
@@ -258,14 +342,11 @@ instance TermEntry a => Unifiable (Term a) where
   unify _ c@(Constant _) = c
   unify u (Constructor c ts) = Constructor c $ map (termMap $ ETerm . unify u) ts
   unify u (Tup t) = Tup $ unify u t
-  unify unifier (List l) = List $ unifyList unifier l
-    where unifyList :: Unifier -> ListTerm a -> ListTerm a
-          unifyList u (Cons t ts) = Cons (unify u t) (unifyList u ts)
-          unifyList u (VarCons t x) =
-            case getListTerm $ unify u $ Variable x of
-              Left ux -> VarCons (unify u t) ux
-              Right xs -> Cons (unify u t) xs
-          unifyList _ Nil = Nil
+  unify unifier (List l) = unifyList unifier l
+    where unifyList :: TermEntry a => Unifier -> ListTerm a -> Term [a]
+          unifyList u (Cons t ts) = List $ Cons (unify u t) (unify u ts)
+          unifyList u (Append xs ys) = appendTerm (unify u $ Variable xs) (unify u ys)
+          unifyList _ Nil = List Nil
   unify u (Sum t1 t2) = Sum (unify u t1) (unify u t2)
   unify u (Difference t1 t2) = Difference (unify u t1) (unify u t2)
   unify u (Product t1 t2) = Product (unify u t1) (unify u t2)
@@ -306,9 +387,9 @@ resolve :: MonadUnification m => Predicate -> HornClause -> m Goal
 resolve (Predicate loc scope name arg) c@(HornClause (Predicate loc' scope' name' _) _) =
   assert (loc == loc' && scope == scope' && name == name') $ do
     HornClause (Predicate _ _ _ arg') neg <- renameClause c
-    case cast arg' >>= mgu arg of
-      Nothing -> mzero
-      Just u -> addUnifier u >> munify neg
+    u <- liftMaybe (cast arg') >>= mgu arg
+    addUnifier u
+    munify neg
 
 -- | The status of a variable in a given 'Unifier'. At any given time, a variable occupies a state
 -- represented by one of the constructors.
@@ -367,24 +448,12 @@ renameTerm (Variable x) = liftM Variable $ renameVar x
 renameTerm (Constant c) = return $ Constant c
 renameTerm (Tup tup) = liftM Tup $ renameTuple tup
   where renameTuple :: MonadVarGenerator m => TupleTerm a -> RenamedT m (TupleTerm a)
-        renameTuple (Tuple2 t1 t2) = do
-          t1' <- renameTerm t1
-          t2' <- renameTerm t2
-          return $ Tuple2 t1' t2'
-        renameTuple (TupleN t ts) = do
-          t' <- renameTerm t
-          ts' <- renameTuple ts
-          return $ TupleN t' ts'
+        renameTuple (Tuple2 t1 t2) = liftM2 Tuple2 (renameTerm t1) (renameTerm t2)
+        renameTuple (TupleN t ts) = liftM2 TupleN (renameTerm t) (renameTuple ts)
 renameTerm (List l) = liftM List $ renameList l
   where renameList :: MonadVarGenerator m => ListTerm a -> RenamedT m (ListTerm a)
-        renameList (Cons t ts) = do
-          t' <- renameTerm t
-          ts' <- renameList ts
-          return $ Cons t' ts'
-        renameList (VarCons t x) = do
-          t' <- renameTerm t
-          x' <- renameVar x
-          return $ VarCons t' x'
+        renameList (Cons t ts) = liftM2 Cons (renameTerm t) (renameTerm ts)
+        renameList (Append xs ys) = liftM2 Append (renameVar xs) (renameTerm ys)
         renameList Nil = return Nil
 renameTerm (Constructor c arg) = liftM (Constructor c) $ renameETermList arg
   where renameETermList :: MonadVarGenerator m => [ErasedTerm] -> RenamedT m [ErasedTerm]

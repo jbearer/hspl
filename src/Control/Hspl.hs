@@ -1,8 +1,12 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-} -- For equational constraints
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -920,20 +924,26 @@ some higher-level predicates for working with lists (such as 'Control.Hspl.List.
 -- >>> 'a' .:. auto "x"
 -- 'a', x :: [Char]
 (.:.) :: (TermData a, TermData as, [HSPLType a] ~ HSPLType as) => a -> as -> Term (HSPLType as)
-t .:. ts = Ast.List $ case Ast.getListTerm $ toTerm ts of
-  Left x -> Ast.VarCons (toTerm t) x
-  Right xs -> Ast.Cons (toTerm t) xs
+t .:. ts = Ast.List $ Ast.Cons (toTerm t) (toTerm ts)
 
 -- | Append a list of terms to another list. This may be necessary (and '++' insufficient) when one
 -- list contains term constants and another contains variables. For example,
 --
 -- >>> [char "x", char "y"] .++. "foo"
--- x :: Char, y :: Char, 'f', 'o', 'o'
+-- [x :: Char, y :: Char, 'f', 'o', 'o']
 --
--- >>> [v"x", v"y"] .++. v"zs"
-(.++.) :: (TermData a, TermData b, [HSPLType a] ~ HSPLType b) => [a] -> b -> Term [HSPLType a]
-[] .++. ts = toTerm ts
-(t:ts) .++. ts' = t .:. (ts .++. ts')
+-- >>> [v"x", v"y"] .++. string "zs"
+-- [x :: Char, y :: Char].++.(zs :: [Char])
+--
+-- >>> string "prefix" .++. "bar"
+-- (prefix :: [Char]).++."bar"
+(.++.) :: forall a b c. (TermEntry c, TermData a, TermData b, HSPLType a ~ HSPLType b, HSPLType a ~ [c]) => a -> b -> Term (HSPLType a)
+xs.++.ys = case Ast.getListTerm (toTerm xs :: Term [c]) of
+  Left vxs -> Ast.List $ Ast.Append vxs (toTerm ys)
+  Right Ast.Nil -> toTerm ys
+  Right (Ast.Cons t ts) -> Ast.List $ Ast.Cons t (ts.++.ys)
+  Right (Ast.Append vxs txs) -> Ast.List $ Ast.Append vxs (txs.++.ys)
+
 
 -- | A term representing an empty list. Note that for most lists which do not contain variables, the
 -- list itself can be used as a term, e.g. @member? (char "c", ['a', 'b', 'c'])@. However, for empty

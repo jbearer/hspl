@@ -322,37 +322,39 @@ test = describeModule "Control.Hspl" $ do
   describe "list term construction" $ do
     context "via cons" $ do
       it "should prepend a value to a list variable" $
-        'a' .:. Var "x" `shouldBe` Ast.List (Ast.VarCons (toTerm 'a') (Var "x"))
+        'a' .:. Var "x" `shouldBe` Ast.List (Ast.Cons (toTerm 'a') (toTerm $ Var "x"))
       it "should prepend a variable to a list" $
-        char "x" .:. "foo" `shouldBe` Ast.List (Ast.Cons (toTerm $ Var "x") (Ast.Cons
-                                                         (toTerm 'f') (Ast.Cons
-                                                         (toTerm 'o') (Ast.Cons
-                                                         (toTerm 'o') Ast.Nil))))
+        char "x" .:. "foo" `shouldBe` Ast.List (Ast.Cons (toTerm $ Var "x") (Ast.List $ Ast.Cons
+                                                         (toTerm 'f') (Ast.List $ Ast.Cons
+                                                         (toTerm 'o') (Ast.List $ Ast.Cons
+                                                         (toTerm 'o') $ Ast.List Ast.Nil))))
       it "should be right associative" $
         char "x" .:. char "y" .:. "foo" `shouldBe` char "x" .:. (char "y" .:. "foo")
       it "should prepend a variable to a list variable" $
         char "x" .:. string "xs" `shouldBe`
-          Ast.List (Ast.VarCons (toTerm (Var "x" :: Var Char)) (Var "xs"))
+          Ast.List (Ast.Cons (toTerm (Var "x" :: Var Char)) (toTerm $ Var "xs"))
     context "via concatenation" $ do
       it "should append a list of variables" $
         "ab".++.[char "x", char "y"] `shouldBe`
-          Ast.List (Ast.Cons (toTerm 'a') (Ast.Cons
-                             (toTerm 'b') (Ast.Cons
-                             (toTerm $ Var "x") (Ast.Cons
+          Ast.List (Ast.Cons (toTerm 'a') (Ast.List $ Ast.Cons
+                             (toTerm 'b') (Ast.List $ Ast.Cons
+                             (toTerm $ Var "x") (Ast.List $ Ast.Cons
                              (toTerm $ Var "y")
-                             Ast.Nil))))
+                             $ Ast.List Ast.Nil))))
       it "should prepend a list of variables" $
         [char "x", char "y"].++."ab" `shouldBe`
-          Ast.List (Ast.Cons (toTerm $ Var "x") (Ast.Cons
-                   (toTerm $ Var "y") (Ast.Cons
-                   (toTerm 'a') (Ast.Cons
+          Ast.List (Ast.Cons (toTerm $ Var "x") (Ast.List $ Ast.Cons
+                   (toTerm $ Var "y") (Ast.List $ Ast.Cons
+                   (toTerm 'a') (Ast.List $ Ast.Cons
                    (toTerm 'b')
-                   Ast.Nil))))
+                   $ Ast.List Ast.Nil))))
       it "should prepend a list to a variable" $
         ['a', 'b'].++.v"xs" `shouldBe`
-          Ast.List (Ast.Cons (toTerm 'a') (Ast.VarCons
+          Ast.List (Ast.Cons (toTerm 'a') (Ast.List $ Ast.Cons
                              (toTerm 'b')
-                             (string "xs")))
+                             (toTerm $ string "xs")))
+      it "should prepend a list variable" $
+        string "prefix" .++. "bar" `shouldBe` Ast.List (Ast.Append (Var "prefix") (toTerm "bar"))
       it "should parse correctly with cons" $
         'a'.:."b".++."c" `shouldBe` toTerm "abc"
     context "via nil" $

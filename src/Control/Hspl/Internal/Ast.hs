@@ -53,6 +53,7 @@ module Control.Hspl.Internal.Ast (
   , fromTerm
   , alphaEquivalent
   , getListTerm
+  , appendTerm
   -- *** ADT helpers
   , AdtConstructor (..)
   , AdtArgument (..)
@@ -241,7 +242,7 @@ instance (TermData a, TermData b, TermData c, TermData d, TermData e, TermData f
 instance TermData a => Termable [a] where
   toTerm = List . toListTerm
     where toListTerm [] = Nil
-          toListTerm (x:xs) = Cons (toTerm x) (toListTerm xs)
+          toListTerm (x:xs) = Cons (toTerm x) (toTerm xs)
 
 -- Standard ADTs
 instance (NoVariables a, TermData a) => Termable (Maybe a)
@@ -295,10 +296,9 @@ varType _ = typeOf (undefined :: a)
 -- | Inductive representation of lists.
 data ListTerm a where
   -- | A list composed of a single-element head and a smaller list.
-  Cons :: TermEntry a => Term a -> ListTerm a -> ListTerm a
-  -- | A partial list. Here, the tail of the list is represented by a single variable. This list
-  -- will unify with any list of at least one element so long as the first elements unify.
-  VarCons :: TermEntry a => Term a -> Var [a] -> ListTerm a
+  Cons :: TermEntry a => Term a -> Term [a] -> ListTerm a
+  -- | A list composed of a variable-length prefix prepended to a tail.
+  Append :: TermEntry a => Var [a] -> Term [a] -> ListTerm a
   -- | An empty list.
   Nil :: ListTerm a
 deriving instance Show a => Show (ListTerm a)
@@ -442,6 +442,14 @@ getListTerm (List xs) = Right xs
 getListTerm t = error $ "Unexpected term " ++ show t ++ " of type " ++ show (termType t) ++
                         ". This is most likely an HSPL bug."
 
+-- | Create a term which is the canonical representation of the appending of two lists.
+appendTerm :: TermEntry a => Term [a] -> Term [a] -> Term [a]
+appendTerm xs ys = case getListTerm xs of
+  Left v -> List $ Append v ys
+  Right Nil -> ys
+  Right (Cons t ts) -> List $ Cons t (appendTerm ts ys)
+  Right (Append v t) -> List $ Append v (appendTerm t ys)
+
 -- | Determine if two 'Term's are alpha-equivalent. Terms are alpha-equivalent if there exists an
 -- injective renaming of variables in one term which makes it equal to the other term. For example,
 --
@@ -516,8 +524,8 @@ alphaEquivalent term1 term2 = isJust $ evalStateT (alpha term1 term2) (M.empty, 
 
         alphaList :: TermEntry a => ListTerm a -> ListTerm a ->
                      StateT (M.Map ErasedVar ErasedVar, M.Map ErasedVar ErasedVar) Maybe ()
-        alphaList (Cons t ts) (Cons t' ts') = alpha t t' >> alphaList ts ts'
-        alphaList (VarCons t x) (VarCons t' x') = alpha t t' >> alphaVar x x'
+        alphaList (Cons t ts) (Cons t' ts') = alpha t t' >> alpha ts ts'
+        alphaList (Append xs ys) (Append xs' ys') = alphaVar xs xs' >> alpha ys ys'
         alphaList Nil Nil = return ()
         alphaList _ _ = mzero
 
@@ -701,24 +709,16 @@ fromTerm term = case term of
   Quotient t1 t2 -> fromBinOp (/) t1 t2
   IntQuotient t1 t2 -> fromBinOp div t1 t2
   Modulus t1 t2 -> fromBinOp mod t1 t2
-  where fromBinOp f t1 t2 = do ut1 <- fromTerm t1
-                               ut2 <- fromTerm t2
-                               return $ f ut1 ut2
+  where fromBinOp f t1 t2 = liftM2 f (fromTerm t1) (fromTerm t2)
 
         fromTuple :: TupleTerm a -> Maybe a
-        fromTuple (Tuple2 t1 t2) = do ut1 <- fromTerm t1
-                                      ut2 <- fromTerm t2
-                                      return (ut1, ut2)
-        fromTuple (TupleN t ts) = do ut <- fromTerm t
-                                     uts <- fromTuple ts
-                                     return $ tcons ut uts
+        fromTuple (Tuple2 t1 t2) = liftM2 (,) (fromTerm t1) (fromTerm t2)
+        fromTuple (TupleN t ts) = liftM2 tcons (fromTerm t) (fromTuple ts)
 
         fromList :: ListTerm a -> Maybe [a]
-        fromList (Cons t ts) = do ut <- fromTerm t
-                                  uts <- fromList ts
-                                  return $ ut:uts
+        fromList (Cons t ts) = liftM2 (:) (fromTerm t) (fromTerm ts)
         fromList Nil = Just []
-        fromList _ = Nothing
+        fromList (Append _ _) = Nothing
 
 -- | Determine the HSPL type of a term.
 termType :: forall a. Typeable a => Term a -> TypeRep
@@ -830,8 +830,8 @@ instance Show Goal where
       show' _ Bottom = "Bottom"
       show' r (Once g') = "Once (" ++ show' r g' ++ ")"
       show' r (If c t f) = "If (" ++ show' r c ++ ") (" ++ show' r t ++ ") (" ++ show' r f ++ ")"
-      show' r (Alternatives n x g xs) =
-        "Alternatives (" ++ show n ++ ") (" ++ show x ++ ") (" ++ show' r g ++ ") (" ++ show xs ++ ")"
+      show' r (Alternatives n x g' xs) =
+        "Alternatives (" ++ show n ++ ") (" ++ show x ++ ") (" ++ show' r g' ++ ") (" ++ show xs ++ ")"
       show' _ Cut = "Cut"
       show' r (CutFrame g') = "CutFrame (" ++ show' r g' ++ ")"
       show' r (Track g') = "Track (" ++ show' r g' ++ ")"

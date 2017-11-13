@@ -29,14 +29,14 @@ instance NFData Unifier where
 member = [
           -- x is a member of x:xs
           HornClause (predicate "member" ( Var "x" :: Var Int
-                                         , List $ VarCons (toTerm (Var "x" :: Var Int))
-                                                          (Var "_")
+                                         , List $ Cons (toTerm (Var "x" :: Var Int))
+                                                       (toTerm Anon)
                                          ))
                       Top
           -- x is a member of _:xs if x is a member of xs
          , HornClause (predicate "member" ( Var "x" :: Var Int
-                                          , List $ VarCons (toTerm (Var "_" :: Var Int))
-                                                           (Var "xs")
+                                          , List $ Cons (toTerm (Anon :: Var Int))
+                                                        (toTerm $ Var "xs")
                                           ))
                       (PredGoal (predicate "member" (Var "x" :: Var Int, Var "xs" :: Var [Int])) member)
          ]
@@ -158,7 +158,7 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should fail for partially instantiated terms" $ do
       let runTest t = observeResults (proveIsUnified $ toTerm t) `shouldBe` []
       runTest $ adt Just (Var "x" :: Var Char)
-      runTest $ List $ VarCons (toTerm 'a') (Var "xs")
+      runTest $ List $ Cons (toTerm 'a') (toTerm $ Var "xs")
       runTest ('a', Var "x" :: Var Char)
       runTest $ Sum (toTerm (0 :: Int)) (toTerm $ Var "x")
   describe "proveIsVariable" $ do
@@ -178,7 +178,7 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
     it "should fail for partially instantiated terms" $ do
       let runTest t = observeResults (proveIsVariable $ toTerm t) `shouldBe` []
       runTest $ adt Just (Var "x" :: Var Char)
-      runTest $ List $ VarCons (toTerm 'a') (Var "xs")
+      runTest $ List $ Cons (toTerm 'a') (toTerm $ Var "xs")
       runTest ('a', Var "x" :: Var Char)
       runTest $ Sum (toTerm (0 :: Int)) (toTerm $ Var "x")
   describe "proveAnd" $ do
@@ -386,7 +386,7 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       queryVar (head results) (Var "xs" :: Var String) `shouldBe` Unified []
     it "should fail if the output term does not unify with the alternatives" $ do
       runTest x xIsAOrB (toTerm [Var "y" :: Var Char]) `shouldBe` []
-      runTest x Bottom (List $ VarCons (toTerm (Var "y" :: Var Char)) (Var "ys")) `shouldBe` []
+      runTest x Bottom (List $ Cons (toTerm (Var "y" :: Var Char)) (toTerm $ Var "ys")) `shouldBe` []
     it "should handle complex templates" $ do
       let results = runTest (adt Just x) xIsAOrB (toTerm (Var "xs" :: Var [Maybe Char]))
       length results `shouldBe` 1
