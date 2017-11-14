@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 #if __GLASGOW_HASKELL__ >= 800
@@ -44,6 +45,17 @@ instance MonadVarGenerator MockUnification where
 
 instance MonadUnification MockUnification where
   stateUnifier = lift . state
+
+newtype IntFrac = IntFrac { toDouble :: Double }
+  deriving (Num, Fractional, Real, Ord, Enum, Typeable, Data, Show, Eq)
+instance Termable IntFrac where
+  toTerm = Constant
+
+-- This is weird and, well, bad, but it makes parameterizing the tests for numerical operators a lot
+-- easier. Obviously we'll never want to depend on these operations actually behaving nicely.
+instance Integral IntFrac where
+  quotRem (IntFrac d1) (IntFrac d2) = quotRem (floor d1) (floor d2)
+  toInteger (IntFrac d) = floor d
 
 runMockUnification :: MockUnification a -> Maybe (a, Unifier)
 runMockUnification m =
@@ -118,6 +130,27 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       findVar ((Var "y" :: Var (Maybe Char)) // Var "x" <> adt Just (Var "z" :: Var Char) // Var "y")
               (Var "x" :: Var (Maybe Char)) `shouldBe`
         Partial (adt Just (Var "z" :: Var Char))
+  describe "freeIn" $ do
+    it "should accurately detect free variables" $ do
+      freeIn (Var "x" :: Var Char) (toTerm (Var "x" :: Var Char)) `shouldBe` True
+      freeIn (Var "x" :: Var Char) (toTerm (Var "y" :: Var Char)) `shouldBe` False
+    it "should determine that there are no variables in a constant" $
+      freeIn (Var "x" :: Var Char) (toTerm 'a') `shouldBe` False
+    it "should recurse over the arguments of an ADT constructor" $
+      freeIn (Var "x" :: Var Char) (adt Just (Var "x" :: Var Char)) `shouldBe` True
+    it "should recurse over elements of a tuple" $
+      freeIn (Var "x" :: Var Char) (toTerm (True, 'a', Var "x" :: Var Char)) `shouldBe` True
+    it "should recurse over elements of a list" $ do
+      freeIn (Var "x" :: Var Char) (toTerm "") `shouldBe` False
+      freeIn (Var "x" :: Var Char) (List $ Cons (toTerm $ Var "x") (toTerm "foo")) `shouldBe` True
+    it "should identify variables in an appended list" $ do
+      freeIn (Var "xs" :: Var String) (List $ Append (Var "xs") (toTerm "foo")) `shouldBe` True
+      freeIn (Var "ys" :: Var String)
+             (List $ Append (Var "xs" :: Var String) (toTerm $ Var "ys")) `shouldBe` True
+    withParams [Sum, Difference, Product, Quotient, IntQuotient, Modulus] $ \op ->
+      it "should recurse over operands of a binary operator" $ do
+        freeIn (Var "x" :: Var IntFrac) (toTerm (Var "x") `op` toTerm (IntFrac 0)) `shouldBe` True
+        freeIn (Var "x" :: Var IntFrac) (toTerm (IntFrac 0) `op` toTerm (Var "x")) `shouldBe` True
   describe "term unification" $ do
     let getUs :: TermEntry a => Term a -> Term a -> [Unifier]
         getUs t1 t2 = runUnificationT $ mgu t1 t2
