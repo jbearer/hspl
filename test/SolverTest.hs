@@ -365,6 +365,14 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       getAllTheorems (runTest $ Or Top Top) `shouldBe` replicate 2 (CutFrame $ Or Top Top)
     it "should save choicepoints" $
       length (getAllTheorems $ observeResults $ prove $ Or (CutFrame $ Or Cut Top) Top) `shouldBe` 2
+  describe "proveToggleDebug" $
+    it "should wrap a proof of the inner goal" $
+      getAllTheorems (observeResults $ proveToggleDebug True Top) `shouldBe` [ToggleDebug True Top]
+  describe "proveLabel" $
+    it "should wrap a proof of the inner goal" $
+      getAllTheorems (observeResults $
+        proveLabel [LabelString "foo", LabelSubGoal 0, LabelParensGoal 1] Top)
+          `shouldBe` [Label [LabelString "foo", LabelSubGoal 0, LabelParensGoal 1] Top]
   describe "an Alternatives proof" $ do
     let runTest x g xs = observeResults $ proveAlternatives Nothing x g xs
     let xIsAOrB = Or (Track $ CanUnify (toTerm $ Var "x") (toTerm 'a'))
@@ -535,6 +543,26 @@ test = describeModule "Control.Hspl.Internal.Solver" $ do
       context "for a unitary goal" $
         it "should match" $
           g `shouldMatch` g
+    context "for a ToggleDebug goal" $ do
+      it "should match when the arguments match" $
+        ToggleDebug True Top `shouldMatch` ToggleDebug True Top
+      it "should not match when the toggle flag doesn't match" $
+        ToggleDebug True Top `shouldNotMatch` ToggleDebug False Top
+      it "should not match when the inner goal does not match" $
+        ToggleDebug True Top `shouldNotMatch` ToggleDebug True Bottom
+    context "for a Label goal" $ do
+      it "should match when the arguments match" $ do
+        Label [] Top `shouldMatch` Label [] Top
+        Label [LabelString "foo", LabelSubGoal 0, LabelParensGoal 1] Top `shouldMatch`
+          Label [LabelString "foo", LabelSubGoal 0, LabelParensGoal 1] Top
+      it "should not match when the name doesn't match" $ do
+        Label [LabelString "foo"] Top `shouldNotMatch` Label [LabelString "bar"] Top
+        Label [LabelSubGoal 0] Bottom `shouldNotMatch` Label [LabelSubGoal 1] Bottom
+        Label [LabelParensGoal 0] Bottom `shouldNotMatch` Label [LabelParensGoal 1] Bottom
+        Label [LabelString "foo", LabelSubGoal 0] Bottom `shouldNotMatch`
+          Label [LabelSubGoal 0, LabelString "foo"] Bottom
+      it "should not match when the inner goal doesn't match" $
+        Label [] Top `shouldNotMatch` Label [] Bottom
     context "for an alternatives goal" $ do
       withParams [Nothing, Just 42] $ \n ->
         it "should match when the arguments match" $

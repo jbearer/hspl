@@ -63,6 +63,9 @@ module Control.Hspl.Internal.Solver (
   , proveCut
   , proveCutFrame
   , proveTrack
+  , proveToggleDebug
+  , proveLabel
+  , proveHole
   , prove
   ) where
 
@@ -117,16 +120,6 @@ queryTheorem ProofResult {..} target = do
       matchBinary LessThan (toTerm t1, toTerm t2) (toTerm t1', toTerm t2')
     matchGoal g@(IsUnified t) (IsUnified t') = liftMaybe (cast t') >>= mgu t >>= \u -> return $ unify u g
     matchGoal g@(IsVariable t) (IsVariable t') = liftMaybe (cast t') >>= mgu t >>= \u -> return $ unify u g
-    matchGoal (And g1 g2) (And g1' g2') = do g1'' <- matchGoal g1 g1'
-                                             g2'' <- matchGoal g2 g2'
-                                             return $ And g1'' g2''
-    matchGoal (Or g1 g2) (Or g1' g2') = do g1'' <- matchGoal g1 g1'
-                                           g2'' <- matchGoal g2 g2'
-                                           return $ Or g1'' g2''
-    matchGoal Top Top = return Top
-    matchGoal Bottom Bottom = return Bottom
-    matchGoal (Once g) (Once g') = Once `liftM` matchGoal g g'
-    matchGoal (If c t f) (If c' t' f') = liftM3 If (matchGoal c c') (matchGoal t t') (matchGoal f f')
     matchGoal (Alternatives n x g xs) (Alternatives n' x' g' xs')
       | n /= n' = mzero
       | otherwise =
@@ -135,13 +128,7 @@ queryTheorem ProofResult {..} target = do
         in do u <- liftMaybe (cast t') >>= mgu t
               g'' <- matchGoal g g'
               return $ Alternatives n (unify u x) g'' (unify u xs)
-
-    matchGoal Cut Cut = return Cut
-    matchGoal (CutFrame g) (CutFrame g') = CutFrame `liftM` matchGoal g g'
-
-    matchGoal (Track g) (Track g') = Track `liftM` matchGoal g g'
-
-    matchGoal _ _ = mzero
+    matchGoal g1 g2 = mapGoalM2 matchGoal g1 g2
 
     matchBinary :: (MonadUnification m, TermEntry a, TermEntry b, TermEntry c, TermEntry d) =>
                    (Term a -> Term b -> Goal) -> (Term a, Term b) -> (Term c, Term d) -> m Goal
@@ -372,6 +359,19 @@ class (MonadUnification m, MonadLogicCut m) => MonadSolver m where
   -- as the inner goal itself. The inner goal should be at the head of the list. The zero-overhead
   -- version is 'proveTrack'.
   tryTrack :: Goal -> m Theorem
+  -- | Attempt to prove a 'ToggleDebug' goal. If the first argument is 'True', interactive
+  -- debugging, if applicable, should be turned on during the proof of the goal and all of its
+  -- subgoals, until a @'ToggleDebug' False@ goal is encountered. If the first argument is 'False',
+  -- interactive debugging should be turned off. Modulo side-effects in the debugger, this
+  -- computation should have the same semantics as 'prove', ignoreing the first argument. The zero-
+  -- overhead version is 'proveToggleDebug'.
+  tryToggleDebug :: Bool -> Goal -> m Theorem
+  -- | Attempt to prove a labelled goal. If the given goal is to be displayed to the user, it should
+  -- be replaced by the given string. Otherwise, the semantics of this computation should be
+  -- identical to those of 'prove', ignoring the first argument. The zero-overhead version is
+  -- 'proveLabel'.
+  tryLabel :: [LabelPart] -> Goal -> m Theorem
+  tryHole :: Int -> Goal -> m Theorem
   -- | Computation to be invoked when a goal fails because there are no matching clauses. This
   -- computation should result in 'mzero', but may perform effects in the underlying monad first.
   failUnknownPred :: Predicate -> m Theorem
@@ -401,6 +401,9 @@ instance (SplittableState s, Monad m) => MonadSolver (SolverT s m) where
   tryCut = proveCut
   tryCutFrame = proveCutFrame
   tryTrack = proveTrack
+  tryToggleDebug = proveToggleDebug
+  tryLabel = proveLabel
+  tryHole = proveHole
   failUnknownPred = const mzero
   errorUninstantiatedVariables = error "Variables are not sufficiently instantiated."
 
@@ -525,6 +528,17 @@ proveTrack g = do
   recordThm thm
   return $ Track thm
 
+-- | Zero-overhead version of 'tryToggleDebug'.
+proveToggleDebug :: MonadSolver m => Bool -> Goal -> m Theorem
+proveToggleDebug t g = ToggleDebug t `liftM` prove g
+
+-- | Zero-overhead version of 'tryLabel'.
+proveLabel :: MonadSolver m => [LabelPart] -> Goal -> m Theorem
+proveLabel l g = Label l `liftM` prove g
+
+proveHole :: MonadSolver m => Int -> Goal -> m Theorem
+proveHole i g = Hole i `liftM` prove g
+
 -- | Produce a proof of the goal. This function will either fail, or backtrack over all possible
 -- proofs. It will invoke the appropriate continuations in the given 'SolverCont' whenever a
 -- relevant event occurs during the course of the proof.
@@ -548,3 +562,6 @@ prove g = case g of
   Cut -> tryCut
   CutFrame g' -> tryCutFrame g'
   Track g' -> tryTrack g'
+  ToggleDebug t g' -> tryToggleDebug t g'
+  Label l g' -> tryLabel l g'
+  Hole i g' -> tryHole i g'

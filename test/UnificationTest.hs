@@ -487,7 +487,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           rename (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "x" :: Var Char))) `shouldBe`
             constr (toTerm (Fresh 0 :: Var Char)) (toTerm (Fresh 0 :: Var Char))
     context "of unary outer goals" $
-      withParams [CutFrame, Track, Once] $ \constr ->
+      withParams [CutFrame, Track, Once, ToggleDebug True, ToggleDebug False, Label []] $ \constr ->
         it "should rename variables in the inner goal" $
           rename (constr $ PredGoal (predicate "foo" (Var "x" :: Var Bool)) []) `shouldBe`
             constr (PredGoal (predicate "foo" (Fresh 0 :: Var Bool)) [])
@@ -523,6 +523,7 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
       withParams [Top, Bottom, Cut] $ \constr ->
         it "should be a noop" $
           rename constr `shouldBe` constr
+
     withParams [Nothing, Just 42] $ \n ->
       context "of Alternatives goals" $ do
         let go x g xs = rename $ Alternatives n (toTerm x) g (toTerm xs)
@@ -662,7 +663,9 @@ test = describeModule "Control.Hspl.Internal.Unification" $ do
           unify u (constr (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char))) `shouldBe`
             constr (toTerm 'a') (toTerm (Var "y" :: Var Char))
     context "to a unary outer goal" $
-      withParams [CutFrame, Track, Once] $ \constr ->
+      withParams [ CutFrame, Track, Once, ToggleDebug True, ToggleDebug False, Label []
+                 , Label [LabelString "foo"], Label [LabelSubGoal 0], Label [LabelParensGoal 1]
+                 ] $ \constr ->
         it "should unify the inner goal" $
           unify (toTerm 'a' // Var "x")
                     (constr $ PredGoal (predicate "foo" (Var "x" :: Var Char)) []) `shouldBe`

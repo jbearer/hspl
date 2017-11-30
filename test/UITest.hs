@@ -208,6 +208,15 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
     withParams [(Top, "true"), (Bottom, "false"), (Cut, "cut")] $ \(g, sg) ->
       it "should format unitary goals" $
         formatGoal g `shouldBe` sg
+    it "should format a ToggleDebug goal" $ do
+      formatGoal (astGoal $ debugOn true) `shouldBe` "debugOn " ++ formatGoal (astGoal true)
+      formatGoal (astGoal $ debugOff true) `shouldBe` "debugOff " ++ formatGoal (astGoal true)
+    it "should format a Label goal" $ do
+      formatGoal (astGoal $ debugLabel "foo" true) `shouldBe` "foo"
+      formatGoal (astGoal $ debugLabel "foo {0}" $ subGoal 0 true) `shouldBe`
+        "foo " ++ formatGoal (astGoal true)
+      formatGoal (astGoal $ debugLabel "goal (0)" $ subGoal 0 true) `shouldBe`
+        "goal " ++ parensGoal (astGoal true)
     withParams [toTerm $ v"x", Just $$ char "x"] $ \x ->
       withParams [Top, Once Top] $ \g ->
         withParams [toTerm $ v"xs", nil] $ \xs -> do
@@ -230,6 +239,11 @@ test = describeModule "Control.Hspl.Internal.UI" $ do
                , Alternatives Nothing (toTerm $ char "x") Top (toTerm $ string "xs")
                , Alternatives (Just 42) (toTerm $ char "x") Top (toTerm $ string "xs")
                , CutFrame Top
+               , ToggleDebug True Top
+               , ToggleDebug False Top
+               , Label [LabelString "foo bar"] Top
+               , Label [LabelSubGoal 0] (Hole 0 Top)
+               , Label [LabelParensGoal 0] (Hole 0 Top)
                ] $ \g ->
       it "should add parentheses where necessary" $
         parensGoal g `shouldBe` ("(" ++ formatGoal g ++ ")")

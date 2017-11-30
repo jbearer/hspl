@@ -620,6 +620,34 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
         constr Top Bottom Cut `shouldNotEqual` constr Bottom Bottom Cut
         constr Top Bottom Cut `shouldNotEqual` constr Top Top Cut
         constr Top Bottom Cut `shouldNotEqual` constr Top Bottom Top
+  describe "ToggleDebug goals" $ do
+    it "should compare by the toggle" $ do
+      ToggleDebug True Top `shouldEqual` ToggleDebug True Top
+      ToggleDebug True Top `shouldNotEqual` ToggleDebug False Top
+    it "should compare by the inner goal" $ do
+      ToggleDebug True Top `shouldEqual` ToggleDebug True Top
+      ToggleDebug True Top `shouldNotEqual` ToggleDebug True Bottom
+  describe "Label goals" $ do
+    it "should compare by the label" $ do
+      Label [] Top `shouldEqual` Label [] Top
+      Label [LabelString "foo"] Top `shouldEqual` Label [LabelString "foo"] Top
+      Label [LabelSubGoal 0] Top `shouldEqual` Label [LabelSubGoal 0] Top
+      Label [LabelParensGoal 0] Top `shouldEqual` Label [LabelParensGoal 0] Top
+      Label [LabelString "foo", LabelSubGoal 0, LabelParensGoal 1] Top `shouldEqual`
+        Label [LabelString "foo", LabelSubGoal 0, LabelParensGoal 1] Top
+
+      Label [] Top `shouldNotEqual` Label [LabelString "foo"] Top
+      Label [LabelSubGoal 0] Top `shouldNotEqual` Label [] Top
+      Label [LabelString "foo"] Top `shouldNotEqual` Label [LabelString "bar"] Top
+      Label [LabelString "foo"] Top `shouldNotEqual` Label [LabelSubGoal 0] Top
+      Label [LabelString "foo", LabelSubGoal 0] Top `shouldNotEqual`
+        Label [LabelSubGoal 0, LabelString "foo"] Top
+      Label [LabelSubGoal 0] Top `shouldNotEqual` Label [LabelSubGoal 1] Top
+      Label [LabelParensGoal 0] Top `shouldNotEqual` Label [LabelParensGoal 1] Top
+      Label [LabelParensGoal 0] Top `shouldNotEqual` Label [LabelSubGoal 0] Top
+    it "should compare by the inner goal" $ do
+      Label [] Top `shouldEqual` Label [] Top
+      Label [] Top `shouldNotEqual` Label [] Bottom
   describe "unitary goals" $ do
     let ugoals = [Top, Bottom, Cut]
     withParams ugoals $ \constr -> do

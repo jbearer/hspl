@@ -1,7 +1,12 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+#if __GLASGOW_HASKELL__ < 710
+{-# LANGUAGE OverlappingInstances #-}
+#endif
 {-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_HADDOCK show-extensions #-}
 
 {-|
@@ -24,6 +29,8 @@ module Control.Hspl.Internal.Syntax (
   , Goal
   , Theorem
   , astGoal
+  -- ** Goal Labels
+  , GoalLabel (..)
   -- * Clauses
   , ClauseWriter (..)
   , PredicateBody
@@ -37,6 +44,7 @@ module Control.Hspl.Internal.Syntax (
   ) where
 
 import qualified Control.Hspl.Internal.Ast as Ast
+import Control.Hspl.Internal.Tuple
 import Control.Hspl.Internal.UI
 
 #if __GLASGOW_HASKELL__ < 710
@@ -98,3 +106,22 @@ type CondBody = CondWriter ()
 -- | Retrieve the list of branches from a conditional block.
 execCond :: CondWriter a -> [CondBranch]
 execCond = execWriter . unCondWriter
+
+class GoalLabel a where
+  mkLabel :: a -> [Either String Ast.Goal]
+
+instance {-# OVERLAPPING #-} GoalLabel [Either String Ast.Goal] where
+  mkLabel = id
+
+instance {-# OVERLAPPING #-} GoalLabel String where
+  mkLabel s = [Left s]
+
+instance {-# OVERLAPPING #-} GoalLabel Goal where
+  mkLabel g = [Right $ astGoal g]
+
+instance {-# OVERLAPPING #-} (GoalLabel a, GoalLabel b) => GoalLabel (a, b) where
+  mkLabel (a, b) = mkLabel a ++ mkLabel b
+
+instance {-# OVERLAPPABLE #-} (TupleCons t, GoalLabel (Head t), GoalLabel (Tail t)) =>
+          GoalLabel t where
+  mkLabel t = mkLabel (thead t) ++ mkLabel (ttail t)

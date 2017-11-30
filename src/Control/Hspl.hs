@@ -77,6 +77,12 @@ module Control.Hspl (
   -- ** Conditional blocks
   , cond
   , (->>)
+  -- ** Defining new primitives
+  , debugOn
+  , debugOff
+  , debugLabel
+  , newPrimitive
+  , subGoal
   -- * Running HSPL programs
   , runHspl
   , runHspl1
@@ -147,7 +153,7 @@ module Control.Hspl (
 import Control.Exception (assert)
 import Control.Monad.Writer
 import Data.CallStack
-import Data.List (sort)
+import Data.List (intercalate, sort)
 
 import qualified Control.Hspl.Internal.Ast as Ast
 import           Control.Hspl.Internal.Ast ( Var (Var)
@@ -159,6 +165,7 @@ import           Control.Hspl.Internal.Ast ( Var (Var)
                                            , NoVariables
                                            , HSPLType
                                            , AdtTerm (..)
+                                           , parseLabel
                                            )
 import qualified Control.Hspl.Internal.Solver as Solver
 import           Control.Hspl.Internal.Solver ( ProofResult
@@ -414,6 +421,21 @@ p |- gs =
                        in assert (ogGoal == Ast.Top) $ Ast.HornClause prd goal
   in tell [addGoal]
 
+debugOff :: Goal -> Goal
+debugOff = tell . Ast.ToggleDebug False . astGoal
+
+debugOn :: Goal -> Goal
+debugOn = tell . Ast.ToggleDebug True . astGoal
+
+debugLabel :: String -> Goal -> Goal
+debugLabel l = tell . Ast.Label (parseLabel l) . astGoal
+
+newPrimitive :: String -> Goal -> Goal
+newPrimitive l = debugLabel l . debugOff
+
+subGoal :: Int -> Goal -> Goal
+subGoal i g = tell $ Ast.Hole i (astGoal g)
+
 -- | Unify a list with all the alternatives of a given template. @findAll template goal list@ works
 -- as follows:
 --
@@ -510,8 +532,11 @@ isnt t1 t2 = lnot $ t1 `is` t2
 --    true    ->> ifNegative? x
 -- @
 cond :: CondBody -> Goal
-cond body = foldr (.||.) false $ map branchGoal $ execCond body
-  where branchGoal (Branch c action) = c.&.action
+cond body = newPrimitive ("cond $ do {{ " ++ intercalate "; " bodyLabel ++ " }}") $
+  foldr (.||.) false $ [branchGoal b i |  (b,i) <- zip (execCond body) [0..]]
+  where branchGoal (Branch c action) i = subGoal (2*i) c .&. subGoal (2*(i+1)) action
+        bodyLabel = [branchLabel i | i <- [0..length $ execCond body]]
+        branchLabel i = "{" ++ show (2*i) ++ "} ->> {" ++ show (2*(i+1)) ++ "}"
 
 -- | Define a branch of a conditional block (see 'cond'). The left-hand side is the condition goal;
 -- the right-hand side is the goal to be executed if the condition succeeds.
@@ -521,7 +546,7 @@ c ->> ifTrue = tell [Branch c ifTrue]
 -- | Logical negation. @lnot p@ is a predicate which is true if and only if the predicate @p@ is
 -- false. @lnot@ does not create any new bindings.
 lnot :: Goal -> Goal
-lnot g = ifel (once g) false true
+lnot g = newPrimitive "lnot $ {0}" $ ifel (once $ subGoal 0 g) false true
 
 -- | Logical disjunction. @p.|.q@ is a predicate which is true if either @p@ is true or @q@ is
 -- true. @.|.@ will backtrack over alternatives, so if both @p@ and @q@ are true, it will produce
@@ -535,7 +560,7 @@ gw1 .|. gw2 =
 -- | Short-circuiting disjunction. If @p@ succeeds, then @p.||.q@ succeeds once for each result of
 -- @p@, and @q@ is never executed. If @p@ fails, then @p.||.q@ reduces to @q@.
 (.||.) :: Goal -> Goal -> Goal
-g1.||.g2 = ifel g1 true g2
+g1.||.g2 = newPrimitive "{0}.||.{1}" $ ifel (subGoal 0 g1) true (subGoal 1 g2)
 
 -- | Logical conjunction.  @p.&.q@ is a predicate which is true only if both @p@ is true, and then
 -- @q@ is true. Note the "and then": variable bindings made while proving @p@ will apply when
@@ -559,7 +584,7 @@ false = tell Ast.Bottom
 --
 -- This negative formulation of the predicate implies that no new variable bindings are created.
 forAll :: Goal -> Goal -> Goal
-forAll c action = lnot (c .&. lnot action)
+forAll c action = newPrimitive "forAll (0) (1)" $ lnot (subGoal 0 c .&. lnot (subGoal 1 action))
 
 -- | Conditional execution. If @c@ succeeds at all, then @ifel c t f@ behaves as if it were replaced
 -- by @c.&.t@. If @c@ fails, then the whole expression reduces to @f@.

@@ -27,6 +27,7 @@ module Control.Hspl.Internal.UI (
   , formatClause
   ) where
 
+import qualified Data.Map as M
 import Data.List
 import Data.Typeable
 
@@ -155,6 +156,21 @@ formatGoal (Alternatives n x g xs) =
 formatGoal Cut = "cut"
 formatGoal (CutFrame g) = "cutFrame " ++ parensGoal g
 formatGoal (Track g) = "track " ++ parensGoal g
+formatGoal (ToggleDebug True g) = "debugOn " ++ parensGoal g
+formatGoal (ToggleDebug False g) = "debugOff " ++ parensGoal g
+formatGoal (Label l g) = evalLabel l (getHoles g)
+  where evalLabel [] _ = ""
+        evalLabel (LabelString s:parts) m = s ++ evalLabel parts m
+        evalLabel (LabelSubGoal idx:parts) m = formatGoal (findSubGoal idx m) ++ evalLabel parts m
+        evalLabel (LabelParensGoal idx:parts) m = parensGoal (findSubGoal idx m) ++ evalLabel parts m
+
+        findSubGoal idx = M.findWithDefault (error $ "no subgoal with index " ++ show idx) idx
+
+        getHoles (Hole idx g') =
+          let m = getHoles g'
+          in M.insert idx g' m
+        getHoles g' = foldGoal (\subg m -> M.union (getHoles subg) m) M.empty g'
+formatGoal (Hole i g) = "subGoal " ++ show i ++ " " ++ parensGoal g
 
 -- | Similar to 'formatGoal', but wraps the output in parentheses if it is not a single token.
 parensGoal :: Goal -> String

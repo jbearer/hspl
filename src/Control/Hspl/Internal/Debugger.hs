@@ -208,13 +208,20 @@ data SolverState = Solver {
                      -- @goalStack !! 1@ is the parent of that goal, and so on, so that
                      -- @last goalStack@ is the top-level goal we are ultimately trying to prove.
                      goalStack :: [Goal]
+                     -- | Whether interactive debugging is enabled.
+                   , debugEnabled :: Bool
                    }
 
 instance SplittableState SolverState where
-  type BacktrackingState SolverState = [Goal]
+  type BacktrackingState SolverState = ([Goal], Bool)
   type GlobalState SolverState = ()
-  splitState s = (goalStack s, ())
-  combineState gs () = Solver { goalStack = gs }
+  splitState s = ((goalStack s, debugEnabled s), ())
+  combineState (gs, enabled) () = Solver { goalStack = gs, debugEnabled = enabled }
+
+initSolver :: SolverState
+initSolver = Solver { goalStack = []
+                    , debugEnabled = True
+                    }
 
 -- | Monad transformer which, when executed using 'observeAllSolverT' or 'observeManySolverT',
 -- yields a 'SolverCoroutine'.
@@ -224,14 +231,18 @@ newtype DebugSolverT m a = DebugSolverT { unDebugSolverT :: SolverT SolverState 
 -- | Same as callWith, but for unitary provers.
 callWith :: Monad m => MsgType -> DebugSolverT m Theorem -> DebugSolverT m Theorem
 callWith m cont = do
-  s <- gets goalStack
-  let dc = DC { stack = s, status = m, msg = formatGoal (head s) }
-  yield dc
-  ifte cont
-    (\thm -> do thm' <- munify thm
-                yield dc { status = Exit, msg = formatGoal thm' }
-                return thm)
-    (yield dc { status = Fail } >> mzero)
+  Solver { goalStack = s, debugEnabled = enabled } <- get
+  if enabled
+    then do
+      let dc = DC { stack = s, status = m, msg = formatGoal (head s) }
+      yield dc
+      ifte cont
+        (\thm -> do thm' <- munify thm
+                    yield dc { status = Exit, msg = formatGoal thm' }
+                    return thm)
+        (yield dc { status = Fail } >> mzero)
+    else
+      cont
 
 -- | Attempt to prove a subgoal and log 'Call', 'Exit', and 'Fail' messages as appropriate.
 call :: Monad m => DebugSolverT m Theorem -> DebugSolverT m Theorem
@@ -276,6 +287,13 @@ instance Monad m => MonadSolver (DebugSolverT m) where
   tryCut = goalFrame Cut (call proveCut)
   tryCutFrame g = goalFrame (CutFrame g) (call $ proveCutFrame g)
   tryTrack g = goalFrame (Track g) (call $ proveTrack g)
+  tryToggleDebug t g = do
+    oldT <- gets debugEnabled
+    modify $ \st -> st { debugEnabled = t }
+    thm <- goalFrame g $ call (prove g)
+    modify $ \st -> st { debugEnabled = oldT }
+    return thm
+  tryLabel l g = goalFrame (Label l g) (call $ prove g)
 
   failUnknownPred p@(Predicate _ _ name _) = do
     s <- gets $ (PredGoal p [] :) . goalStack
@@ -527,7 +545,7 @@ solverCoroutine g =
   let solverT = do r <- prove g >>= getResult
                    DebugSolverT $ lift $ CR.yield $ Right r
                    return r
-  in observeAllSolverT (unDebugSolverT solverT) Solver { goalStack = [] }
+  in observeAllSolverT (unDebugSolverT solverT) initSolver
 
 -- | A coroutine which controls the interactive debugger terminal, periodically yielding control to
 -- the solver.

@@ -73,12 +73,19 @@ module Control.Hspl.Internal.Ast (
   , predType
   -- ** Goals
   , Goal (..)
+  , foldGoal
+  , mapGoal
+  , mapGoalM
+  , mapGoalM2
+  , LabelPart (..)
+  , parseLabel
   -- ** Clauses
   , HornClause (..)
   , clauseType
   ) where
 
 import Control.Monad
+import Control.Monad.Identity
 import Control.Monad.State
 import Data.CallStack
 import Data.Data
@@ -90,6 +97,7 @@ import GHC.Generics
 #if __GLASGOW_HASKELL__ < 800
   hiding (Arity)
 #endif
+import Text.Parsec hiding (State, label)
 
 import Control.Hspl.Internal.Tuple
 
@@ -807,6 +815,11 @@ data Goal =
             -- | Indicates that the inner 'Goal' should be recorded for future inspection if it is
             -- proven. 'Track' succeeds whenever the inner 'Goal' does.
           | Track Goal
+            -- | Turn on or off debug tracing in the proof of the given goal and its children.
+          | ToggleDebug Bool Goal
+            -- | Override how a particular goal is displayed in the debugger.
+          | Label [LabelPart] Goal
+          | Hole Int Goal
 
 instance Show Goal where
   show g = case g of
@@ -835,46 +848,127 @@ instance Show Goal where
       show' _ Cut = "Cut"
       show' r (CutFrame g') = "CutFrame (" ++ show' r g' ++ ")"
       show' r (Track g') = "Track (" ++ show' r g' ++ ")"
+      show' r (ToggleDebug t g') = "ToggleDebug " ++ show t ++ "(" ++ show' r g' ++ ")"
+      show' r (Label l g') = "Label " ++ show l ++ " (" ++ show' r g' ++ ")"
+      show' r (Hole i g') = "Hole " ++ show i ++ "(" ++ show' r g' ++ ")"
 
       showClause' r (HornClause p g') = "HornClause (" ++ show p ++ ") (" ++ show' r g' ++ ")"
 
 instance Eq Goal where
-  (==) (PredGoal p _) (PredGoal p' _) = p == p'
-
-  (==) (CanUnify t1 t2) (CanUnify t1' t2') = case cast (t1', t2') of
-    Just t' -> (t1, t2) == t'
-    Nothing -> False
-  (==) (Identical t1 t2) (Identical t1' t2') = case cast (t1', t2') of
-    Just t' -> (t1, t2) == t'
-    Nothing -> False
-  (==) (Equal t1 t2) (Equal t1' t2') = case cast (t1', t2') of
-    Just t' -> (t1, t2) == t'
-    Nothing -> False
-  (==) (LessThan t1 t2) (LessThan t1' t2') = case cast (t1', t2') of
-    Just t' -> (t1, t2) == t'
-    Nothing -> False
-  (==) (IsUnified t) (IsUnified t') = maybe False (==t) $ cast t'
-  (==) (IsVariable t) (IsVariable t') = maybe False (==t) $ cast t'
-  (==) (And g1 g2) (And g1' g2') = g1 == g1' && g2 == g2'
-  (==) (Or g1 g2) (Or g1' g2') = g1 == g1' && g2 == g2'
-  (==) Top Top = True
-  (==) Bottom Bottom = True
-  (==) (Once g) (Once g') = g == g'
-  (==) (If c t f) (If c' t' f') = c == c' && t == t' && f == f'
-  (==) (Alternatives n1 x g xs) (Alternatives n2 x' g' xs') = matchN n1 n2 && case cast (x', xs') of
-    Just t' -> (x, xs) == t' && g == g'
-    Nothing -> False
-    where matchN Nothing Nothing = True
-          matchN (Just n) (Just n') = n == n'
-          matchN _ _ = False
-  (==) Cut Cut = True
-  (==) (CutFrame g) (CutFrame g') = g == g'
-  (==) (Track g) (Track g') = g == g'
-  (==) _ _ = False
+  g1 == g2 = isJust $ mapGoalM2 comp g1 g2
+    where comp g g'
+            | g == g' = Just g
+            | otherwise = Nothing
 
 instance Monoid Goal where
   mappend = And
   mempty = Top
+
+mapGoalM2 :: MonadPlus m => (Goal -> Goal -> m Goal) -> Goal -> Goal -> m Goal
+mapGoalM2 _ g@(PredGoal p _) (PredGoal p' _)
+  | p == p' = return g
+  | otherwise = mzero
+
+mapGoalM2 _ g@(CanUnify t1 t2) (CanUnify t1' t2') = case cast (t1', t2') of
+  Just t' | (t1, t2) == t' -> return g
+  _ -> mzero
+mapGoalM2 _ g@(Identical t1 t2) (Identical t1' t2') = case cast (t1', t2') of
+  Just t' | (t1, t2) == t' -> return g
+  _ -> mzero
+mapGoalM2 _ g@(Equal t1 t2) (Equal t1' t2') = case cast (t1', t2') of
+  Just t' | (t1, t2) == t' -> return g
+  _ -> mzero
+mapGoalM2 _ g@(LessThan t1 t2) (LessThan t1' t2') = case cast (t1', t2') of
+  Just t' | (t1, t2) == t' -> return g
+  _ -> mzero
+mapGoalM2 _ g@(IsUnified t) (IsUnified t') = case cast t' of
+  Just t'' | t == t'' -> return g
+  _ -> mzero
+mapGoalM2 _ g@(IsVariable t) (IsVariable t') = case cast t' of
+  Just t'' | t == t'' -> return g
+  _ -> mzero
+mapGoalM2 f (And g1 g2) (And g1' g2') = liftM2 And (f g1 g1') (f g2 g2')
+mapGoalM2 f (Or g1 g2) (Or g1' g2') = liftM2 Or (f g1 g1') (f g2 g2')
+mapGoalM2 _ Top Top = return Top
+mapGoalM2 _ Bottom Bottom = return Bottom
+mapGoalM2 f (Once g) (Once g') = Once `liftM` f g g'
+mapGoalM2 f (If c tr fa) (If c' tr' fa') = liftM3 If (f c c') (f tr tr') (f fa fa')
+mapGoalM2 f (Alternatives n1 x g xs) (Alternatives n2 x' g' xs')
+  | matchN n1 n2 = case cast (x', xs') of
+    Just t' | (x, xs) == t' -> f g g' >>= \g'' -> return $ Alternatives n1 x g'' xs
+    _ -> mzero
+  where matchN Nothing Nothing = True
+        matchN (Just n) (Just n') = n == n'
+        matchN _ _ = False
+mapGoalM2 _ Cut Cut = return Cut
+mapGoalM2 f (CutFrame g) (CutFrame g') = CutFrame `liftM` f g g'
+mapGoalM2 f (Track g) (Track g') = Track `liftM` f g g'
+mapGoalM2 f (ToggleDebug t g) (ToggleDebug t' g')
+  | t == t' = ToggleDebug t `liftM` f g g'
+mapGoalM2 f (Label l g) (Label l' g')
+  | l == l' = Label l `liftM` f g g'
+mapGoalM2 f (Hole i g) (Hole i' g')
+  | i == i' = Hole i `liftM` f g g'
+mapGoalM2 _ _ _ = mzero
+
+mapGoalM :: Monad m => (Goal -> m Goal) -> Goal -> m Goal
+mapGoalM _ g@(PredGoal _ _) = return g
+mapGoalM _ g@(CanUnify _ _) = return g
+mapGoalM _ g@(Identical _ _) = return g
+mapGoalM _ g@(Equal _ _) = return g
+mapGoalM _ g@(LessThan _ _) = return g
+mapGoalM _ g@(IsUnified _) = return g
+mapGoalM _ g@(IsVariable _) = return g
+mapGoalM f (And g1 g2) = liftM2 And (f g1) (f g2)
+mapGoalM f (Or g1 g2) = liftM2 Or (f g1) (f g2)
+mapGoalM _ Top = return Top
+mapGoalM _ Bottom = return Bottom
+mapGoalM f (Once g) = Once `liftM` f g
+mapGoalM f (If c tr fa) = liftM3 If (f c) (f tr) (f fa)
+mapGoalM f (Alternatives n x g xs) = f g >>= \g' -> return $ Alternatives n x g' xs
+mapGoalM _ Cut = return Cut
+mapGoalM f (CutFrame g) = CutFrame `liftM` f g
+mapGoalM f (Track g) = Track `liftM` f g
+mapGoalM f (ToggleDebug t g) = ToggleDebug t `liftM` f g
+mapGoalM f (Label l g) = Label l `liftM` f g
+mapGoalM f (Hole i g) = Hole i `liftM` f g
+
+mapGoal :: (Goal -> Goal) -> Goal -> Goal
+mapGoal f = runIdentity . mapGoalM (return.f)
+
+foldGoal :: (Goal -> a -> a) -> a -> Goal -> a
+foldGoal combine empty g = execState (mapGoalM m g) empty
+  where m subg = modify (combine subg) >> return subg
+
+data LabelPart = LabelString String
+               | LabelSubGoal Int
+               | LabelParensGoal Int
+  deriving (Show, Eq)
+
+parseLabel :: String -> [LabelPart]
+parseLabel s =
+  case parse label "" s of
+    Left e -> error $ "parse error in label string " ++ show s ++ ": " ++ show e
+    Right l -> l
+  where label = many labelPart <* eof
+
+        labelPart = labelSubGoal
+                 <|> labelParensGoal
+                 <|> labelString
+                 <|> labelLBrace
+                 <|> labelRBrace
+                 <|> labelLParen
+                 <|> labelRParen
+
+        labelSubGoal =  LabelSubGoal `fmap` try (char '{' *> index <* char '}')
+        labelParensGoal = LabelParensGoal `fmap` try (char '(' *> index <* char ')')
+        labelString = LabelString `fmap` many1 (noneOf "{}()")
+        labelLBrace = string "{{" >> return (LabelString "{")
+        labelRBrace = string "}}" >> return (LabelString "}")
+        labelLParen = string "((" >> return (LabelString "(")
+        labelRParen = string "))" >> return (LabelString ")")
+
+        index = read `fmap` many1 digit
 
 -- | A 'HornClause' is the logical disjunction of a single positive literal (a 'Predicate') and 0 or
 -- or more negated literals. In this implementation, the negative /literal/ is a single 'Goal',
