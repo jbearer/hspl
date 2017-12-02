@@ -544,166 +544,157 @@ test = describeModule "Control.Hspl.Internal.Ast" $ do
       it "should compare unequal" $
         Predicate Nothing (Just "scope1") "foo" (toTerm ()) `shouldNotEqual`
           Predicate Nothing (Just "scope2") "foo" (toTerm ())
-  describe "Predicate goals" $ do
-    it "should compare based on the predicate" $ do
-      PredGoal (predicate "foo" ()) [] `shouldEqual` PredGoal (predicate "foo" ()) []
-      PredGoal (predicate "foo" ()) [] `shouldNotEqual` PredGoal (predicate "bar" ()) []
-      PredGoal (predicate "foo" True) [] `shouldNotEqual` PredGoal (predicate "foo" ()) []
-      PredGoal (predicate "foo" True) [] `shouldNotEqual` PredGoal (predicate "foo" False) []
-      PredGoal (Predicate (Just srcLoc) Nothing "foo" $ toTerm True) [] `shouldNotEqual`
-        PredGoal (Predicate (Just srcLoc { srcLocStartLine = __LINE__ }) Nothing "foo" $ toTerm True) []
-    it "should compare successfully even when recursive" $ do
-      let g = PredGoal (predicate "foo" 'a') [HornClause (predicate "foo" (Var "x" :: Var Char)) g]
-      g `shouldEqual` g
+  describe "mapGoalM2" $ do
+    let shouldMatch g1 g2 = mapGoalM2 (const . Just) g1 g2 `shouldBe` Just g1
+    let shouldNotMatch g1 g2 = mapGoalM2 (const . Just) g1 g2 `shouldBe` Nothing
+    let justAnd g1 g2 = Just $ And g1 g2
+    context "for Predicate goals" $ do
+      it "should match based on the predicate" $ do
+        PredGoal (predicate "foo" ()) [] `shouldMatch` PredGoal (predicate "foo" ()) []
+        PredGoal (predicate "foo" ()) [] `shouldNotMatch` PredGoal (predicate "bar" ()) []
+        PredGoal (predicate "foo" True) [] `shouldNotMatch` PredGoal (predicate "foo" ()) []
+        PredGoal (predicate "foo" True) [] `shouldNotMatch` PredGoal (predicate "foo" False) []
+        PredGoal (Predicate (Just srcLoc) Nothing "foo" $ toTerm True) [] `shouldNotMatch`
+          PredGoal (Predicate (Just srcLoc { srcLocStartLine = __LINE__ }) Nothing "foo" $ toTerm True) []
+      it "should compare successfully even when recursive" $ do
+        let g = PredGoal (predicate "foo" 'a') [HornClause (predicate "foo" (Var "x" :: Var Char)) g]
+        g `shouldMatch` g
 
-      let g' = PredGoal (predicate "foo" 'b') [HornClause (predicate "foo" (Var "x" :: Var Char)) g']
-      g' `shouldNotEqual` g
+        let g' = PredGoal (predicate "foo" 'b') [HornClause (predicate "foo" (Var "x" :: Var Char)) g']
+        g' `shouldNotMatch` g
 
-      let g'' = PredGoal (predicate "bar" 'a') [HornClause (predicate "bar" (Var "x" :: Var Char)) g'']
-      g'' `shouldNotEqual` g
-    it "should be showable even when recursive" $ do
-      let p = predicate "foo" (Var "x" :: Var Char)
-      let pGoal = predicate "foo" 'a'
-      let g = PredGoal pGoal [HornClause p g]
-      show g `shouldBe` "y (\\recurse -> PredGoal (" ++ show pGoal ++ ") [HornClause (" ++ show p ++ ") (recurse)])"
-  withParams [(IsUnified, IsUnified), (IsVariable, IsVariable)] $ \(char, bool) ->
-    describe "unary term goals" $ do
-      context "of the same type" $
-        it "should compare according to the arguments" $ do
-          char (toTerm 'a') `shouldEqual` char (toTerm 'a')
-          char (toTerm $ Var "x") `shouldEqual` char (toTerm $ Var "x")
-          char (toTerm 'a') `shouldNotEqual` char (toTerm 'b')
-          char (toTerm $ Var "x") `shouldNotEqual` char (toTerm $ Var "y")
-      context "of different types" $
-        it "should compare unequal" $ do
-          char (toTerm 'a') `shouldNotEqual` bool (toTerm True)
-          char (toTerm $ Var "x") `shouldNotEqual` bool (toTerm $ Var "x")
-  describe "binary term goals" $ do
-    let constrs :: [(Term Char -> Term Char -> Goal, Term Bool -> Term Bool -> Goal)]
-        constrs = [(CanUnify, CanUnify), (Identical, Identical), (Equal, Equal), (LessThan, LessThan)]
-    context "of the same type" $
-      withParams constrs $ \(char, _) ->
+        let g'' = PredGoal (predicate "bar" 'a') [HornClause (predicate "bar" (Var "x" :: Var Char)) g'']
+        g'' `shouldNotMatch` g
+    withParams [(IsUnified, IsUnified), (IsVariable, IsVariable)] $ \(char, bool) ->
+      context "for unary term goals" $ do
         context "of the same type" $
           it "should compare according to the arguments" $ do
-            char (toTerm 'a') (toTerm 'b') `shouldEqual` char (toTerm 'a') (toTerm 'b')
-            char (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldEqual`
-              char (toTerm (Var "x" :: Var Char)) (toTerm 'b')
-            char (toTerm 'a') (toTerm 'b') `shouldNotEqual` char (toTerm 'a') (toTerm 'a')
-            char (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldNotEqual`
-              char (toTerm (Var "y" :: Var Char)) (toTerm 'b')
-    context "of different types" $
-      withParams constrs $ \(char, bool) ->
-        it "should compare unequal" $ do
-          char (toTerm 'a') (toTerm 'b') `shouldNotEqual` bool (toTerm True) (toTerm False)
-          char (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotEqual`
-            bool (toTerm (Var "x" :: Var Bool)) (toTerm (Var "y" :: Var Bool))
-  describe "unary outer goals" $
-    withParams [CutFrame, Track, Once] $ \constr ->
-      it "should compare according to the inner goal" $ do
-        constr (PredGoal (predicate "foo" ()) []) `shouldEqual`
-          constr (PredGoal (predicate "foo" ()) [])
-        constr (PredGoal (predicate "foo" ()) []) `shouldNotEqual`
-          constr (PredGoal (predicate "bar" ()) [])
-  describe "binary outer goals" $
-    withParams [And, Or] $ \constr ->
-      it "should compare according to the subgoals" $ do
-        constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldEqual`
-          constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) [])
-        constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
-          constr (PredGoal (predicate "foo'" ()) []) (PredGoal (predicate "bar" ()) [])
-        constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar" ()) []) `shouldNotEqual`
-          constr (PredGoal (predicate "foo" ()) []) (PredGoal (predicate "bar'" ()) [])
-  describe "ternary outer goals" $
-    withParams [If] $ \constr ->
-      it "should compare according to the subgoals" $ do
-        constr Top Bottom Cut `shouldEqual` constr Top Bottom Cut
-        constr Top Bottom Cut `shouldNotEqual` constr Bottom Bottom Cut
-        constr Top Bottom Cut `shouldNotEqual` constr Top Top Cut
-        constr Top Bottom Cut `shouldNotEqual` constr Top Bottom Top
-  describe "ToggleDebug goals" $ do
-    it "should compare by the toggle" $ do
-      ToggleDebug True Top `shouldEqual` ToggleDebug True Top
-      ToggleDebug True Top `shouldNotEqual` ToggleDebug False Top
-    it "should compare by the inner goal" $ do
-      ToggleDebug True Top `shouldEqual` ToggleDebug True Top
-      ToggleDebug True Top `shouldNotEqual` ToggleDebug True Bottom
-  describe "Label goals" $ do
-    it "should compare by the label" $ do
-      Label [] Top `shouldEqual` Label [] Top
-      Label [LabelString "foo"] Top `shouldEqual` Label [LabelString "foo"] Top
-      Label [LabelSubGoal 0] Top `shouldEqual` Label [LabelSubGoal 0] Top
-      Label [LabelParensGoal 0] Top `shouldEqual` Label [LabelParensGoal 0] Top
-      Label [LabelString "foo", LabelSubGoal 0, LabelParensGoal 1] Top `shouldEqual`
-        Label [LabelString "foo", LabelSubGoal 0, LabelParensGoal 1] Top
-
-      Label [] Top `shouldNotEqual` Label [LabelString "foo"] Top
-      Label [LabelSubGoal 0] Top `shouldNotEqual` Label [] Top
-      Label [LabelString "foo"] Top `shouldNotEqual` Label [LabelString "bar"] Top
-      Label [LabelString "foo"] Top `shouldNotEqual` Label [LabelSubGoal 0] Top
-      Label [LabelString "foo", LabelSubGoal 0] Top `shouldNotEqual`
-        Label [LabelSubGoal 0, LabelString "foo"] Top
-      Label [LabelSubGoal 0] Top `shouldNotEqual` Label [LabelSubGoal 1] Top
-      Label [LabelParensGoal 0] Top `shouldNotEqual` Label [LabelParensGoal 1] Top
-      Label [LabelParensGoal 0] Top `shouldNotEqual` Label [LabelSubGoal 0] Top
-    it "should compare by the inner goal" $ do
-      Label [] Top `shouldEqual` Label [] Top
-      Label [] Top `shouldNotEqual` Label [] Bottom
-  describe "unitary goals" $ do
-    let ugoals = [Top, Bottom, Cut]
-    withParams ugoals $ \constr -> do
-      it "should equal itself" $
-        constr `shouldEqual` constr
-      it "should not equal any other goal" $
-        constr `shouldNotEqual` And constr constr
-  describe "Alternatives goals" $ do
-    withParams [Nothing, Just 42] $ \n ->
-      context "with the same limit" $ do
-        context "of the same type" $
-          it "should compare according to the subcomponents" $ do
-            let g = Alternatives n (toTerm (Var "x" :: Var Char))
-                                   (Equal (toTerm 'a') (toTerm 'b'))
-                                   (toTerm $ Var "xs")
-            g `shouldEqual` g
-
-            Alternatives n (toTerm (Var "x" :: Var Char))
-                           (Equal (toTerm 'a') (toTerm 'b'))
-                           (toTerm $ Var "xs") `shouldNotEqual`
-              Alternatives n (toTerm (Var "y" :: Var Char))
-                             (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm $ Var "xs")
-
-            Alternatives n (toTerm (Var "x" :: Var Char))
-                           (Equal (toTerm 'a') (toTerm 'b'))
-                           (toTerm $ Var "xs") `shouldNotEqual`
-              Alternatives n (toTerm (Var "x" :: Var Char))
-                             (Equal (toTerm 'b') (toTerm 'a'))
-                             (toTerm $ Var "xs")
-
-            Alternatives n (toTerm (Var "x" :: Var Char))
-                           (Equal (toTerm 'a') (toTerm 'b'))
-                           (toTerm $ Var "xs") `shouldNotEqual`
-              Alternatives n (toTerm (Var "x" :: Var Char))
-                             (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm $ Var "ys")
+            char (toTerm 'a') `shouldMatch` char (toTerm 'a')
+            char (toTerm $ Var "x") `shouldMatch` char (toTerm $ Var "x")
+            char (toTerm 'a') `shouldNotMatch` char (toTerm 'b')
+            char (toTerm $ Var "x") `shouldNotMatch` char (toTerm $ Var "y")
         context "of different types" $
-          it "should compare unequal" $
-            Alternatives n (toTerm (Var "x" :: Var Char))
-                           (Equal (toTerm 'a') (toTerm 'b'))
-                           (toTerm $ Var "xs") `shouldNotEqual`
-              Alternatives n (toTerm (Var "x" :: Var Bool))
-                             (Equal (toTerm 'a') (toTerm 'b'))
-                             (toTerm $ Var "xs")
-    context "with different limits" $
-      it "should compare unequal" $ do
-        let runTest n1 n2 =
-              let g n = Alternatives n (toTerm (Var "x" :: Var Char)) Top (toTerm $ Var "xs")
-              in do g n1 `shouldNotEqual` g n2
-                    g n2 `shouldNotEqual` g n1
+          it "should compare unequal" $ do
+            char (toTerm 'a') `shouldNotMatch` bool (toTerm True)
+            char (toTerm $ Var "x") `shouldNotMatch` bool (toTerm $ Var "x")
+    context "for binary term goals" $ do
+      let constrs :: [(Term Char -> Term Char -> Goal, Term Bool -> Term Bool -> Goal)]
+          constrs = [(CanUnify, CanUnify), (Identical, Identical), (Equal, Equal), (LessThan, LessThan)]
+      context "of the same type" $
+        withParams constrs $ \(char, _) ->
+          context "of the same type" $
+            it "should compare according to the arguments" $ do
+              char (toTerm 'a') (toTerm 'b') `shouldMatch` char (toTerm 'a') (toTerm 'b')
+              char (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldMatch`
+                char (toTerm (Var "x" :: Var Char)) (toTerm 'b')
+              char (toTerm 'a') (toTerm 'b') `shouldNotMatch` char (toTerm 'a') (toTerm 'a')
+              char (toTerm (Var "x" :: Var Char)) (toTerm 'b') `shouldNotMatch`
+                char (toTerm (Var "y" :: Var Char)) (toTerm 'b')
+      context "of different types" $
+        withParams constrs $ \(char, bool) ->
+          it "should compare unequal" $ do
+            char (toTerm 'a') (toTerm 'b') `shouldNotMatch` bool (toTerm True) (toTerm False)
+            char (toTerm (Var "x" :: Var Char)) (toTerm (Var "y" :: Var Char)) `shouldNotMatch`
+              bool (toTerm (Var "x" :: Var Bool)) (toTerm (Var "y" :: Var Bool))
+    context "for unary outer goals" $
+      withParams [CutFrame, Track, Once] $ \constr ->
+        it "should transform the inner goal" $
+          mapGoalM2 justAnd (constr Top) (constr Bottom) `shouldBe`
+            Just (constr $ And Top Bottom)
+    context "for binary outer goals" $
+      withParams [And, Or] $ \constr ->
+        it "should transform each subgoal" $
+          mapGoalM2 justAnd (constr Top Bottom) (constr Bottom Cut) `shouldBe`
+            Just (constr (And Top Bottom) (And Bottom Cut))
+    context "for ternary outer goals" $
+      withParams [If] $ \constr ->
+        it "should transform each subgoal" $
+          mapGoalM2 justAnd (constr Top Bottom Cut) (constr Cut Top Bottom) `shouldBe`
+            Just (constr (And Top Cut) (And Bottom Top) (And Cut Bottom))
+    context "for ToggleDebug goals" $ do
+      it "should match by the toggle" $ do
+        ToggleDebug True Top `shouldMatch` ToggleDebug True Top
+        ToggleDebug True Top `shouldNotMatch` ToggleDebug False Top
+      it "should transform the inner goal" $
+        mapGoalM2 justAnd (ToggleDebug True Top) (ToggleDebug True Bottom) `shouldBe`
+          Just (ToggleDebug True $ And Top Bottom)
+    context "for Label goals" $ do
+      it "should match by the label" $ do
+        Label [] Top `shouldMatch` Label [] Top
+        Label [LabelString "foo"] Top `shouldMatch` Label [LabelString "foo"] Top
+        Label [LabelSubGoal 0] Top `shouldMatch` Label [LabelSubGoal 0] Top
+        Label [LabelParensGoal 0] Top `shouldMatch` Label [LabelParensGoal 0] Top
+        Label [LabelString "foo", LabelSubGoal 0, LabelParensGoal 1] Top `shouldMatch`
+          Label [LabelString "foo", LabelSubGoal 0, LabelParensGoal 1] Top
 
-        runTest Nothing (Just 42)
-        runTest (Just 42) (Just 43)
-  describe "goals" $
-    it "should form a monoid under conjunction" $ do
+        Label [] Top `shouldNotMatch` Label [LabelString "foo"] Top
+        Label [LabelSubGoal 0] Top `shouldNotMatch` Label [] Top
+        Label [LabelString "foo"] Top `shouldNotMatch` Label [LabelString "bar"] Top
+        Label [LabelString "foo"] Top `shouldNotMatch` Label [LabelSubGoal 0] Top
+        Label [LabelString "foo", LabelSubGoal 0] Top `shouldNotMatch`
+          Label [LabelSubGoal 0, LabelString "foo"] Top
+        Label [LabelSubGoal 0] Top `shouldNotMatch` Label [LabelSubGoal 1] Top
+        Label [LabelParensGoal 0] Top `shouldNotMatch` Label [LabelParensGoal 1] Top
+        Label [LabelParensGoal 0] Top `shouldNotMatch` Label [LabelSubGoal 0] Top
+      it "should transform the inner goal" $
+        mapGoalM2 justAnd (Label [] Top) (Label [] Bottom) `shouldBe`
+          Just (Label [] $ And Top Bottom)
+    context "for Hole goals" $ do
+      it "should match by the index" $ do
+        Hole 0 Top `shouldMatch` Hole 0 Top
+        Hole 0 Top `shouldNotMatch` Hole 1 Top
+      it "should transform the inner goal" $
+        mapGoalM2 justAnd (Hole 0 Top) (Hole 0 Bottom) `shouldBe` Just (Hole 0 $ And Top Bottom)
+    context "for unitary goals" $
+      withParams [Top, Bottom, Cut] $ \constr ->
+        it "should leave the goal alone" $
+          mapGoalM2 justAnd constr constr `shouldBe` Just constr
+    context "for Alternatives goals" $ do
+      withParams [Nothing, Just 42] $ \n ->
+        context "with the same limit" $ do
+          context "of the same type" $ do
+            it "should match according to the subcomponents" $ do
+              let g = Alternatives n (toTerm (Var "x" :: Var Char))
+                                     (Equal (toTerm 'a') (toTerm 'b'))
+                                     (toTerm $ Var "xs")
+              g `shouldMatch` g
+
+              Alternatives n (toTerm (Var "x" :: Var Char))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm $ Var "xs") `shouldNotMatch`
+                Alternatives n (toTerm (Var "y" :: Var Char))
+                               (Equal (toTerm 'a') (toTerm 'b'))
+                               (toTerm $ Var "xs")
+
+              Alternatives n (toTerm (Var "x" :: Var Char))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm $ Var "xs") `shouldNotMatch`
+                Alternatives n (toTerm (Var "x" :: Var Char))
+                               (Equal (toTerm 'a') (toTerm 'b'))
+                               (toTerm $ Var "ys")
+            it "should transform the subgoal" $
+              mapGoalM2 justAnd (Alternatives n (toTerm Anon::Term Char) Top $ toTerm Anon)
+                                (Alternatives n (toTerm Anon::Term Char) Bottom $ toTerm Anon)
+                `shouldBe` Just (Alternatives n (toTerm Anon::Term Char) (And Top Bottom) $ toTerm Anon)
+          context "of different types" $
+            it "should not match" $
+              Alternatives n (toTerm (Var "x" :: Var Char))
+                             (Equal (toTerm 'a') (toTerm 'b'))
+                             (toTerm $ Var "xs") `shouldNotMatch`
+                Alternatives n (toTerm (Var "x" :: Var Bool))
+                               (Equal (toTerm 'a') (toTerm 'b'))
+                               (toTerm $ Var "xs")
+      context "with different limits" $
+        it "should not match" $ do
+          let runTest n1 n2 =
+                let g n = Alternatives n (toTerm (Var "x" :: Var Char)) Top (toTerm $ Var "xs")
+                in do g n1 `shouldNotMatch` g n2
+                      g n2 `shouldNotMatch` g n1
+
+          runTest Nothing (Just 42)
+          runTest (Just 42) (Just 43)
+  describe "the goal Monoid" $
+    it "should correspond to conjunction" $ do
       mempty `shouldBe` Top
       mappend Top Bottom `shouldBe` And Top Bottom
   describe "clauses" $ do
